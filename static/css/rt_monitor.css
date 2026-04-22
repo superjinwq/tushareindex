@@ -1,0 +1,3060 @@
+/* 行情监控页补充样式 */
+
+:root {
+    /* BIAS|MA 两表之间：与首行 quad、并排图统一为 3px 小缝（用户偏好） */
+    --rt-monitor-inline-table-gap: 3px;
+    /* 首行四表：更窄缝，省横向宽度，配合 Grid 四列不换行 */
+    --rt-monitor-quad-gap: 3px;
+    /* 大块图表行之间竖向间距：与 quad-gap 一致（用户偏好「小缝」） */
+    --rt-monitor-section-v-gap: 3px;
+    /* 并排两张图（国证A指/融资）之间横缝：比 BIAS|MA 的 6px 更紧，贴近首行四表 */
+    --rt-monitor-chart-pair-gap: 3px;
+    /* myuiux：区块标题 14px；常规表正文 13px；表单元格行高（与 ui-ux-pro-max 可读性一致） */
+    --rt-monitor-font-title: 14px;
+    --rt-monitor-font-data: 13px;
+    --rt-monitor-line-height-table: 1.5;
+    /* myuiux「底部紧凑型表格」：Top30 等，与通用 median 表区分 */
+    --rt-monitor-font-compact: 12px;
+    /* 备用于其它紧凑表；底部 Top30 格距由 #decline-top-table 等 nth 规则控制 */
+    --rt-monitor-padding-compact: 4px 4px;
+    /* Top30：代码列与名称列之间留白（长代码如 *.SZ 与中文名易贴死，用 8px 与紧凑表横档一致） */
+    --rt-monitor-top-moves-code-name-h-gap: 8px;
+    /* Top30：回落%/回升%（及成交额表最后一项数值列）与申万行业列之间留白，单侧右 padding 避免与申万左叠成双倍 */
+    --rt-monitor-top-moves-metric-industry-h-gap: 8px;
+    /* 涨跌家数：与首块成交额（亿）等 .median-table 同行高（6px10px + line-height-table） */
+    --rt-monitor-padding-limit-stats: 6px 10px;
+    /* 终端浅灰风：页面底 / 卡片面 / 边框 / 阴影 / 焦点环（与 dashboard 紫渐变解耦） */
+    --rt-monitor-bg-page: #e8eaed;
+    --rt-monitor-surface: #ffffff;
+    --rt-monitor-border-subtle: #e1e4e8;
+    --rt-monitor-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+    --rt-monitor-focus-ring: 2px solid #1565c0;
+    --rt-monitor-text-muted: #666;
+    --rt-monitor-text-body: #333;
+    --rt-monitor-row-select-accent: #1976d2;
+}
+
+/* 图表容器无数据占位：与正文同档字号（避免 JS 内联写死 13px） */
+.rt-monitor-chart-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--rt-monitor-text-muted);
+    font-size: var(--rt-monitor-font-data);
+}
+
+/* 顶部：配置/日频/BIAS 已并入 #rt-monitor-first-row 文档流；页面与视口四边留白 */
+body.rt-monitor {
+    padding: 3px;
+    font-size: var(--rt-monitor-font-data);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    background: var(--rt-monitor-bg-page);
+    min-height: 100vh;
+    color: var(--rt-monitor-text-body);
+    -webkit-tap-highlight-color: rgba(21, 101, 192, 0.15);
+}
+/* 键盘焦点：去除裸 outline:none 时需有可见环（选中行另用 inset，见 .ma-signal-row-selected） */
+body.rt-monitor :where(button, a, input:not([type="hidden"]), select, textarea, [role="button"]):focus-visible {
+    outline: var(--rt-monitor-focus-ring);
+    outline-offset: 2px;
+}
+/* 长页：跳转主内容（默认仅键盘可见） */
+.rt-monitor-skip-link {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+.rt-monitor-skip-link:focus-visible {
+    position: fixed;
+    left: 3px;
+    top: 3px;
+    z-index: 10000;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 8px 14px;
+    border-radius: 6px;
+    clip: auto;
+    overflow: visible;
+    white-space: normal;
+    background: var(--rt-monitor-surface);
+    border: 1px solid var(--rt-monitor-border-subtle);
+    box-shadow: var(--rt-monitor-shadow-card);
+    color: var(--rt-monitor-text-body);
+    font-size: var(--rt-monitor-font-data);
+    text-decoration: none;
+    outline: var(--rt-monitor-focus-ring);
+    outline-offset: 2px;
+}
+/* 首行：四表 + 右侧工具列（配置、BIAS），flex 顶对齐 */
+.rt-monitor-first-row {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: var(--rt-monitor-quad-gap);
+    width: max-content;
+    max-width: none;
+    box-sizing: border-box;
+    margin: 0 var(--rt-monitor-quad-gap) var(--rt-monitor-section-v-gap) var(--rt-monitor-quad-gap);
+}
+.rt-monitor-first-row > #median-quad-row {
+    margin: 0 !important;
+    flex: 0 0 auto;
+}
+.rt-monitor-toolbar-col {
+    flex: 0 0 auto;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--rt-monitor-section-v-gap);
+    min-width: 0;
+    align-self: flex-start;
+}
+/* 配置面板锚点：相对定位，面板下拉不占用视口 fixed */
+.rt-monitor-config-wrap {
+    position: relative;
+    z-index: 101;
+}
+/* 监控页主区：不卡 1920，避免“像换行”的错觉（实际为容器内滚动） */
+.rt-monitor .container {
+    max-width: none;
+    width: 100%;
+    box-sizing: border-box;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    touch-action: manipulation;
+}
+
+/* 首块：两行纵排；上行三张表横排；下行成交额|涨跌家数；内层卡片 margin=0 避免与全局 .median-table-wrap{margin:3px}叠成双缝 */
+.median-quad-row {
+    display: flex;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: var(--rt-monitor-quad-gap);
+    width: max-content;
+    min-width: min-content;
+    max-width: none;
+    box-sizing: border-box;
+    overflow-x: visible;
+    overflow-y: visible;
+    margin: 0 3px 3px 3px;
+}
+#median-quad-row .median-table-wrap {
+    margin: 0 !important;
+}
+.median-quad-top-row,
+.median-quad-bottom-row {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: var(--rt-monitor-quad-gap);
+    margin: 0;
+    box-sizing: border-box;
+}
+.median-quad-top-row > .median-table-wrap,
+.median-quad-bottom-row > .median-table-wrap {
+    display: block;
+    width: max-content;
+    max-width: none;
+    box-sizing: border-box;
+}
+/* 首块内卡片 padding 统一；涨跌家数并入 grid 后不再单独 margin */
+.median-quad-row .median-table-wrap {
+    padding: 6px 2px;
+}
+#median-quad-row #limit-stats-section.limit-stats-wrap {
+    margin: 0;
+}
+.median-quad-row .median-table {
+    /* 首行四表：与全页数据表一致 */
+    font-size: var(--rt-monitor-font-data);
+}
+.median-quad-row .median-table th,
+.median-quad-row .median-table td {
+    padding: 6px 10px;
+}
+.median-quad-row .median-table-num {
+    min-width: 40px;
+}
+/* 涨跌幅(%) 在首行首位时左侧无额外缩进（由 quad-row margin 统一） */
+.idx-pct-table-first {
+    margin-left: 0;
+}
+/* 涨跌幅(%) 增区间列后允许横向滚动，避免挤压 */
+.idx-pct-table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+/* 涨跌家数：已并入 #median-quad-row 第二行；旧 #limit-stats-row 包裹已移除 */
+/* BIAS | MA：两表同一行；横缝 --rt-monitor-inline-table-gap（现与 quad 同为 3px） */
+.etf-bias-ma-row {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    gap: var(--rt-monitor-inline-table-gap);
+    margin: 0 var(--rt-monitor-quad-gap) var(--rt-monitor-section-v-gap) var(--rt-monitor-quad-gap);
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: auto;
+    overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
+}
+/* 与首行 #median-quad-row 内卡片内边距一致（6px 2px），避免第二行整块看起来比首行「更胖、字更大」 */
+.etf-bias-ma-row > .median-table-wrap {
+    padding: 6px 2px;
+}
+.etf-bias-ma-row > .bias-table-wrap,
+.etf-bias-ma-row > .ma-signal-table-wrap {
+    margin: 0;
+    flex: 0 0 auto;
+    align-self: flex-start;
+    width: fit-content;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+.ma-signal-table-wrap {
+    width: fit-content;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.ma-signal-table-wrap[data-fetch-state="error"] {
+    box-shadow: inset 0 0 0 1px rgba(231, 76, 60, 0.55);
+    border-radius: 6px;
+}
+
+/* 涨跌家数（不含ST）：字号/行高/格内边距与成交额（亿）等 median 表一致；卡片由外层 .median-table-wrap 承担 */
+.limit-stats-table {
+    font-size: var(--rt-monitor-font-data);
+    font-family: inherit;
+    border-collapse: collapse;
+}
+/* myuiux：分隔线 #f0f0f0；标签行常规字重（不加粗），数值格仍 .limit-stats-num 600 */
+/* 注意：勿对 td 写死 font-weight:500，否则特异性会压过 .limit-stats-num 的 600，数值会显得比首行四表更「细」 */
+.limit-stats-table td {
+    border: 1px solid #f0f0f0;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: middle;
+    line-height: var(--rt-monitor-line-height-table);
+    color: var(--rt-monitor-text-body);
+}
+/* 标签行列头：th 覆盖全局 .median-table th 的 600，统一常规字重；格线四边与 td 网格一致 */
+.median-table.limit-stats-table th {
+    border: 1px solid #f0f0f0;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: middle;
+    line-height: var(--rt-monitor-line-height-table);
+    font-variant-numeric: tabular-nums;
+    font-weight: 400;
+    color: #555;
+}
+.limit-stats-label-row th.limit-stats-cell-muted,
+.limit-stats-label-row td.limit-stats-cell-muted {
+    font-weight: 400;
+    color: #bbb;
+}
+/* 数值格：与全页 .median-table-num 一致（等宽数字 + OpenType tnum，避免与 BIAS/MA 的 .median-table-num 观感不一致） */
+.limit-stats-table td.limit-stats-num {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+}
+/* 可点格下划线：与 BIAS 的 span.bias-cell-clickable 同一条规则（勿在 td 上用 filter:hover，易整格发糊、与侧表不一致） */
+.limit-stats-clickable,
+.bias-cell-clickable,
+.fina-fixed-assets-clickable {
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-thickness: 1px;
+    text-decoration-skip-ink: auto;
+    text-underline-position: from-font;
+}
+.limit-stats-clickable:hover {
+    text-decoration-thickness: 1.5px;
+}
+.fina-fixed-assets-clickable:hover {
+    text-decoration-thickness: 1.5px;
+}
+.limit-stats-cell-muted {
+    color: #999;
+    background: #fcfcfc;
+    font-weight: 400;
+}
+
+.ma-signal-table-title {
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #eee;
+    font-size: var(--rt-monitor-font-title);
+    font-weight: 600;
+    color: #444;
+    line-height: 1.35;
+    text-align: center;
+}
+.ma-signal-table {
+    font-size: var(--rt-monitor-font-data);
+}
+.ma-signal-table th,
+.ma-signal-table td {
+    padding: 6px 10px;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: middle;
+    line-height: var(--rt-monitor-line-height-table);
+}
+/* 左上角表头两行「Ma/Ema / 方向」，需允许换行；仍居中（继承 th） */
+.ma-signal-table th.ma-signal-th-corner {
+    white-space: normal;
+}
+/* AMT：显式居中（.median-table td 在后文默认为右对齐，会盖掉本表通用 th/td 居中） */
+.median-table.ma-signal-table th.ma-signal-amt-col,
+.median-table.ma-signal-table td.ma-signal-amt-cell {
+    text-align: center;
+}
+/* 区间涨跌幅 T-1…T-120：不换行、等宽数字，与 BIAS/基本行情 % 列一致 */
+.ma-signal-table .ma-signal-range-cell {
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+/* MA 表：阻力突破 / 支撑破位 浅底色 */
+.ma-signal-table .ma-sr-cell.ma-sr-breakout {
+    background-color: #ffebee;
+}
+.ma-signal-table .ma-sr-cell.ma-sr-breakdown {
+    background-color: #e8f5e9;
+}
+.ma-signal-table .ma-sr-label {
+    font-weight: 600;
+    color: #333;
+}
+
+/* MA 支撑/阻力：自定义悬停浮层（myuiux：白底、浅边框、圆角、阴影；低于模态 200、高于顶栏/配置 102） */
+#ma-sr-tooltip.ma-sr-tooltip-popover,
+.ma-sr-tooltip-popover {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 150;
+    max-width: min(320px, 92vw);
+    padding: 10px 12px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    font-size: var(--rt-monitor-font-data);
+    line-height: 1.45;
+    color: #333;
+    background: #fff;
+    border: 1px solid #e8ecf0;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+    white-space: pre-line;
+}
+.ma-sr-tooltip-popover[hidden] {
+    display: none !important;
+}
+/* 浮层内百分比：与全站「红涨绿跌」一致（与 .median-cell-value.rise/.fall 同色） */
+.ma-sr-tooltip-popover .rise {
+    color: #e74c3c;
+    font-weight: 600;
+}
+.ma-sr-tooltip-popover .fall {
+    color: #27ae60;
+    font-weight: 600;
+}
+.ma-sr-tooltip-popover .ma-sr-pct-neutral {
+    color: #555;
+    font-weight: 600;
+}
+
+/* 配置面板：MA 支撑阻力矩阵 */
+.config-ma-sr-block {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid #eee;
+}
+.config-ma-sr-title {
+    margin-top: 0;
+}
+.config-ma-sr-hint {
+    font-size: 12px;
+    color: #888;
+    margin: 0 0 8px;
+    line-height: 1.4;
+}
+.config-ma-sr-table-wrap {
+    max-height: 260px;
+    overflow: auto;
+    margin-bottom: 8px;
+    border: 1px solid #eee;
+    border-radius: 6px;
+}
+.config-ma-sr-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.config-ma-sr-table th,
+.config-ma-sr-table td {
+    padding: 4px 8px;
+    border-bottom: 1px solid #f0f0f0;
+    text-align: center;
+}
+/* 四列价位：给足宽度便于输入多位小数 */
+.config-ma-sr-table th:not(:first-child),
+.config-ma-sr-table td:not(:first-child) {
+    min-width: 118px;
+}
+.config-ma-sr-table th {
+    background: #fafafa;
+    color: #555;
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+.config-ma-sr-code {
+    text-align: left;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.config-ma-sr-inp {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    padding: 5px 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 12px;
+    text-align: right;
+    box-sizing: border-box;
+}
+.btn-ma-sr-save {
+    display: block;
+    width: 100%;
+    margin-top: 4px;
+    padding: 6px 0;
+    font-size: var(--rt-monitor-font-data);
+    color: #0d47a1;
+    background: #e3f2fd;
+    border: 1px solid #90caf9;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.btn-ma-sr-save:hover {
+    background: #bbdefb;
+    border-color: #64b5f6;
+}
+.btn-ma-sr-save:active {
+    background: #90caf9;
+    border-color: #42a5f5;
+}
+
+/* 选中行：用 inset 高亮替代裸 outline:none，与按钮 :focus-visible 环分离 */
+.ma-signal-table tbody tr.ma-signal-row-selected {
+    outline: none;
+    box-shadow: inset 3px 0 0 0 var(--rt-monitor-row-select-accent);
+    background: rgba(25, 118, 210, 0.06);
+}
+.ma-signal-arrow {
+    /* 空内容：由 CSS border 画三角形，不改变行高 */
+    display: inline-block;
+    width: 0;
+    height: 0;
+    line-height: 1;
+    vertical-align: middle;
+    font-size: 0; /* 防止空内容仍占用字体度量 */
+    margin: 0;
+}
+.ma-signal-up {
+    color: #e74c3c;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 8px solid currentColor;
+    border-top: 0;
+}
+.ma-signal-down {
+    color: #27ae60;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 8px solid currentColor;
+    border-bottom: 0;
+}
+.ma-signal-none {
+    color: #bdc3c7;
+    font-size: var(--rt-monitor-font-data);
+    line-height: 1;
+}
+.ma-signal-chart-section {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 3px;
+    margin-bottom: 6px;
+}
+.ma-signal-chart-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    margin-bottom: 8px;
+    font-size: var(--rt-monitor-font-data);
+    color: #555;
+}
+.ma-signal-toolbar-label {
+    font-weight: 600;
+}
+.ma-signal-ts-select {
+    padding: 4px 8px;
+    font-size: var(--rt-monitor-font-data);
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    min-width: 120px;
+}
+.ma-signal-freq-btn {
+    padding: 4px 12px;
+    font-size: var(--rt-monitor-font-data);
+    border: 1px solid #ccc;
+    background: #f8f9fa;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-right: 4px;
+}
+.ma-signal-freq-btn.is-active {
+    background: #3498db;
+    color: #fff;
+    border-color: #2980b9;
+}
+.ma-signal-legend-inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    font-size: var(--rt-monitor-font-data);
+    color: #666;
+}
+.ma-signal-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.ma-signal-legend-sym {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+}
+.ma-signal-legend-sym.tri.up {
+    border-bottom: 8px solid #e74c3c;
+    border-top: none;
+}
+.ma-signal-legend-sym.tri.down {
+    border-top: 8px solid #27ae60;
+    border-bottom: none;
+}
+.ma-signal-legend-sym.circ {
+    width: 8px;
+    height: 8px;
+    border: none;
+    border-radius: 50%;
+}
+.ma-signal-legend-sym.circ.up {
+    background: #e74c3c;
+}
+.ma-signal-legend-sym.circ.down {
+    background: #27ae60;
+}
+.ma-signal-chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 320px;
+}
+
+.nav-links {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.nav-links a {
+    color: #3498db;
+    text-decoration: none;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: var(--rt-monitor-font-data);
+}
+
+.nav-links a:hover {
+    background: #ecf0f1;
+}
+
+.nav-links a.active {
+    background: #3498db;
+    color: white;
+}
+
+/* 顶栏右侧：配置 + 刷新日频 横向一排（在 .rt-monitor-config-wrap 内文档流定位） */
+.config-top-bar {
+    position: static;
+    z-index: auto;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    width: max-content;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+/* 主监控顶栏：配置/日频下方「财报」「两融」入口 */
+.rt-monitor-fina-link-wrap {
+    margin: 4px 0 0 0;
+    padding: 0;
+    line-height: 1.2;
+    width: max-content;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+.rt-monitor-fina-link-wrap .rt-monitor-toolbar-link-sep {
+    color: #bbb;
+    font-size: 11px;
+    user-select: none;
+}
+.rt-monitor-fina-link-wrap .rt-monitor-fina-link,
+.rt-monitor-fina-link-wrap .rt-monitor-margin-link {
+    font-size: 12px;
+    color: #1565c0;
+    text-decoration: underline;
+}
+.rt-monitor-fina-link-wrap .rt-monitor-fina-link:hover,
+.rt-monitor-fina-link-wrap .rt-monitor-margin-link:hover {
+    color: #0d47a1;
+}
+/* 主监控已迁出内嵌两融图：顶栏「刷新日频」仅服务两融，隐藏以免无效点击 */
+body.rt-monitor-main #btn-refresh-daily {
+    display: none !important;
+}
+/* 必须压过全局 .config-trigger 的 fixed，否则两钮叠在同一锚点 */
+.config-top-bar .config-trigger {
+    position: static !important;
+    top: auto !important;
+    right: auto !important;
+    left: auto !important;
+    flex: 0 0 auto;
+}
+/* 侧边配置按钮（在 .config-top-bar 内时由父级定位） */
+.config-trigger {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    z-index: 100;
+    padding: 6px 12px;
+    font-size: var(--rt-monitor-font-data);
+    color: #333;
+    background: #fff;
+    border: 1px solid var(--rt-monitor-border-subtle);
+    border-radius: 6px;
+    cursor: pointer;
+    box-shadow: var(--rt-monitor-shadow-card);
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.config-trigger:hover {
+    background: #f0f4f8;
+    border-color: #cfd8dc;
+    color: #111;
+}
+.config-trigger:active {
+    background: #e8ecf0;
+    border-color: #b0bec5;
+}
+
+/* 日频：顶栏内与「配置」同高同档，flex 不收缩避免与「配置」重叠 */
+.config-top-bar .btn-refresh-daily {
+    flex: 0 0 auto;
+    padding: 6px 12px;
+    font-size: var(--rt-monitor-font-data);
+    font-weight: 500;
+}
+.btn-refresh-daily {
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #333;
+    background: #fff;
+    border: 1px solid var(--rt-monitor-border-subtle);
+    border-radius: 6px;
+    cursor: pointer;
+    box-shadow: var(--rt-monitor-shadow-card);
+    white-space: nowrap;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.btn-refresh-daily:hover {
+    background: #f0f4f8;
+    border-color: #cfd8dc;
+    color: #111;
+}
+.btn-refresh-daily:active {
+    background: #e8ecf0;
+    border-color: #b0bec5;
+}
+
+/* 顶栏「刷新日频」完成反馈：右下短显 */
+.daily-refresh-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 12px;
+    top: auto;
+    left: auto;
+    z-index: 102;
+    max-width: min(320px, 92vw);
+    padding: 10px 14px;
+    font-size: var(--rt-monitor-font-data);
+    line-height: 1.45;
+    color: #333;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+.daily-refresh-toast.is-error {
+    border-color: #e57373;
+    color: #b71c1c;
+}
+.daily-refresh-toast[hidden] {
+    display: none !important;
+}
+
+/* 配置面板：相对 .rt-monitor-config-wrap 下缘展开，避免与首行四表 fixed 叠层 */
+.config-panel {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    left: auto;
+    margin-top: 8px;
+    z-index: 102;
+    display: none;
+    /* 含 MA 支撑阻力矩阵时需明显加宽，避免价位输入框过窄 */
+    min-width: min(420px, 96vw);
+    max-width: min(720px, 98vw);
+    max-height: min(88vh, 900px);
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+}
+.config-panel.config-panel-visible {
+    display: block;
+}
+.config-panel-inner {
+    padding: 14px 16px;
+}
+.config-panel-title {
+    font-size: var(--rt-monitor-font-data);
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #eee;
+}
+.config-row {
+    display: block;
+    margin-bottom: 10px;
+    font-size: var(--rt-monitor-font-data);
+    color: #666;
+}
+.config-row span:first-child {
+    margin-right: 6px;
+}
+.config-interval-input {
+    width: 64px;
+    padding: 6px 8px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: var(--rt-monitor-font-data);
+    text-align: right;
+}
+.config-unit {
+    margin-left: 4px;
+    color: #888;
+}
+.config-close {
+    display: block;
+    width: 100%;
+    margin-top: 12px;
+    padding: 6px 0;
+    font-size: var(--rt-monitor-font-data);
+    color: #555;
+    background: #f5f5f5;
+    border: 1px solid #e8e8e8;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.config-close:hover {
+    background: #eceff1;
+    color: #333;
+    border-color: #ddd;
+}
+.config-close:active {
+    background: #e0e0e0;
+}
+
+.header-info {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px;
+}
+
+.refresh-settings {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.checkbox-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: var(--rt-monitor-font-data);
+    color: #666;
+}
+
+.checkbox-wrap input {
+    cursor: pointer;
+}
+
+.interval-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--rt-monitor-font-data);
+    color: #666;
+}
+
+.card-meta {
+    font-size: var(--rt-monitor-font-data);
+    color: #888;
+    margin-top: 8px;
+}
+
+/* 涨跌幅中位数：两行紧凑小方条，内容居中 */
+.median-block {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    background: #fff;
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    width: fit-content;
+}
+.median-block-line1 {
+    font-size: var(--rt-monitor-font-data);
+    color: #666;
+    font-weight: 600;
+}
+.median-block-line2 {
+    font-size: var(--rt-monitor-font-data);
+    white-space: nowrap;
+}
+.median-block-line2 .median-block-value {
+    font-weight: 700;
+    margin-right: 12px;
+}
+.median-block-line2 .median-block-value:last-child {
+    margin-right: 0;
+}
+.median-block-value {
+    font-size: var(--rt-monitor-font-data);
+    font-weight: 700;
+}
+/* 红涨绿跌：中国习惯（与涨跌家数 .limit-stats-num 一致） */
+.median-block-value.rise,
+.median-cell-value.rise,
+.idx-cumsum-latest.rise,
+.limit-stats-num.rise,
+.limit-stats-table td.limit-stats-num.rise {
+    color: #e74c3c;
+}
+.median-block-value.fall,
+.median-cell-value.fall,
+.idx-cumsum-latest.fall,
+.limit-stats-num.fall,
+.limit-stats-table td.limit-stats-num.fall {
+    color: #27ae60;
+}
+
+/* 涨跌幅中位数表格：紧凑型；表之间前后左右间距统一 6px（margin 3px，相邻即 6px） */
+.median-table-wrap {
+    margin: 3px;
+    background: var(--rt-monitor-surface);
+    border: 1px solid var(--rt-monitor-border-subtle);
+    border-radius: 10px;
+    padding: 10px 12px;
+    box-shadow: var(--rt-monitor-shadow-card);
+    overflow-x: auto;
+    touch-action: manipulation;
+    display: inline-block;      /* 卡片宽度随内容收缩，不占满整行 */
+}
+.median-table-title {
+    font-size: var(--rt-monitor-font-title);
+    font-weight: 600;
+    color: #444;
+    line-height: 1.35;
+    text-align: center;              /* 标题居中 */
+    text-wrap: balance;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #eee;
+}
+/* BIAS(Per) 表：与 MA 同行时宽度随内容（由 .etf-bias-ma-row 子项 flex 控制） */
+.bias-table-wrap {
+    width: fit-content;
+    max-width: 100%;
+}
+/* 国证 A 指四张 Chart.js 容器：横向铺满卡片内宽，两侧不留空（与原先 inline width:100% 一致） */
+.rt-monitor-idx-chart {
+    width: 100%;
+    height: 400px;
+    margin-top: 3px;
+    box-sizing: border-box;
+}
+
+/* 国证A指分钟差值图表：并排时外边距由 .idx-charts-pair-row 承担；单独成段时底部仍用统一竖向间距 */
+.idx-minute-diff-wrap {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 0;
+    margin-bottom: var(--rt-monitor-section-v-gap);
+}
+.idx-minute-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    text-align: center;
+}
+.idx-minute-predict {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+/* 今日预测数值：深黄色 */
+.idx-predict-value {
+    color: #b8860b;
+}
+.idx-minute-predict .rise {
+    color: #e74c3c;
+}
+.idx-minute-predict .fall {
+    color: #27ae60;
+}
+.idx-cumsum-wrap {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 0;
+    margin-bottom: var(--rt-monitor-section-v-gap);
+}
+.idx-cumsum-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    text-align: center;
+}
+.idx-cumsum-title-row > span:first-child {
+    flex: 0 0 auto;
+}
+.idx-cumsum-latest {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    color: #555;
+    font-weight: 600;
+}
+.idx-prev5-wrap {
+    margin-top: 0;
+    margin-bottom: var(--rt-monitor-section-v-gap);
+}
+
+/* 国证A指四图 + 融资双图：横缝 --rt-monitor-chart-pair-gap；竖缝 --rt-monitor-section-v-gap */
+.idx-charts-pair-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--rt-monitor-chart-pair-gap);
+    margin: 0 var(--rt-monitor-quad-gap) var(--rt-monitor-section-v-gap) var(--rt-monitor-quad-gap);
+    width: 100%;
+    box-sizing: border-box;
+}
+/* 走势图三块：默认隐藏，仅在 JS 确认 Chart.js 可用后加 .is-ready 显示，避免出现空白大框 */
+.idx-charts-pair-row.rt-trend-row {
+    display: none;
+}
+.idx-charts-pair-row.rt-trend-row.is-ready {
+    display: flex;
+}
+/* 与 gap 配合两列等分；内边距收紧减少白框占位感 */
+.idx-charts-pair-row > .median-table-wrap {
+    margin: 0;
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 6px 6px;
+}
+.idx-charts-pair-row .median-table-title {
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+}
+@media (max-width: 900px) {
+    .idx-charts-pair-row {
+        flex-direction: column;
+        gap: var(--rt-monitor-section-v-gap);
+    }
+    .idx-charts-pair-row > .median-table-wrap {
+        max-width: 100%;
+        width: 100%;
+    }
+}
+
+/* 融资：与 #margin-daily-pair-row 并排时子块 margin 由 .idx-charts-pair-row > .median-table-wrap 清零 */
+.margin-daily-wrap {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0 var(--rt-monitor-quad-gap) var(--rt-monitor-section-v-gap) var(--rt-monitor-quad-gap);
+}
+.idx-charts-pair-row .margin-daily-wrap {
+    margin: 0;
+}
+
+.fina-arturn-wrap {
+    /* 列间浅竖线 vs 大组边界：后者更粗更深，便于扫视分区（调分组仅改变量） */
+    --fina-arturn-vline-col: #e8e8e8;
+    --fina-arturn-vline-group-width: 2px;
+    --fina-arturn-vline-group: #6d7d8b;
+    /* 底 margin 置 0：与下方页面灰底/横滚条区少一道缝 */
+    margin: 0 var(--rt-monitor-quad-gap) 0 var(--rt-monitor-quad-gap);
+    /* 去顶/底内边距：避免卡片面在表格外侧显「第二层」白底（尤其底部与圆角叠出托底感） */
+    padding: 0 6px 0;
+    position: relative;
+    /* 覆盖全局 .median-table-wrap 的 inline-block，避免卡片被表格内容撑宽而失去内部横向滚动 */
+    display: block;
+    width: auto;
+    max-width: 100%;
+}
+
+/* 财报卡片：外层不设 overflow，避免祖先 overflow 切断 thead 相对视口的垂直 sticky；横向仅在 .fina-arturn-table-wrap */
+.median-table-wrap.fina-arturn-wrap {
+    overflow-x: visible;
+    overflow-y: visible;
+}
+
+/* 宽表横向滚到底时减少「链式」传到父级/浏览器的橡皮筋，降低与纵滚抢手势时的抖动感 */
+body.rt-monitor.rt-monitor-fina-page {
+    overscroll-behavior-x: contain;
+}
+
+/* 筛选方案弹窗打开：主表单独 stacking context，减轻开关遮罩时与巨量 sticky 单元格的连锁 style 失效 / 合成层抖动。
+   勿对此外层使用 contain:* —— 会破坏 thead 相对视口的纵向 sticky。 */
+body.rt-monitor.rt-monitor-fina-page.fina-arturn-scheme-modal-open .median-table-wrap.fina-arturn-wrap {
+    isolation: isolate;
+}
+
+/* thead 第一行左侧：配置 + 更新 + 报告期/条数（与分组标题同一行；版式勿改 col/rowspan，见 rt-monitor-fina-arturn-layout.mdc） */
+.fina-arturn-metric-cell {
+    text-align: left;
+    vertical-align: middle;
+    padding: 1px 6px;
+    background: #fafafa;
+    border-bottom: var(--fina-arturn-vline-group-width, 2px) solid var(--fina-arturn-vline-group, #6d7d8b);
+}
+.fina-arturn-metric-cell-inner {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 4px 8px;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* 文字按钮：不设固定块高，第一行可比齿轮方块更矮 */
+.fina-arturn-scheme-gear {
+    position: relative;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    width: auto;
+    min-width: 0;
+    height: auto;
+    padding: 0 5px;
+    border: 1px solid #dcdfe6;
+    border-radius: 4px;
+    background: #fff;
+    color: #555;
+    font-size: var(--rt-monitor-font-compact);
+    line-height: 1.2;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.fina-arturn-scheme-gear:hover {
+    border-color: #1f6feb;
+    color: #1f6feb;
+}
+
+/* 实际宽度见后文 .bias-series-modal.fina-arturn-scheme-modal-shell（需压过基类 1320px） */
+.fina-arturn-scheme-modal-body {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 12px 14px 14px;
+}
+.fina-arturn-scheme-modal-field {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    width: 100%;
+    box-sizing: border-box;
+}
+.fina-arturn-scheme-modal-label {
+    font-size: 12px;
+    color: #555;
+    font-weight: 500;
+}
+.fina-arturn-scheme-modal-msg {
+    font-size: 12px;
+    color: #666;
+    min-height: 1.2em;
+    line-height: 1.4;
+    width: 100%;
+}
+.fina-arturn-scheme-modal-input {
+    width: 100%;
+    box-sizing: border-box;
+    min-width: 0;
+}
+.fina-arturn-scheme-modal-btn {
+    width: auto;
+    min-width: 6.5rem;
+    max-width: 100%;
+    box-sizing: border-box;
+    align-self: flex-start;
+    padding-left: 14px;
+    padding-right: 14px;
+}
+.fina-arturn-scheme-modal-checkline {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #555;
+    user-select: none;
+}
+.fina-arturn-scheme-modal-checkline input[type="checkbox"] {
+    margin: 0;
+}
+.fina-arturn-scheme-stock-scope .fina-arturn-scheme-modal-checkline {
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
+.fina-arturn-scheme-modal-body .btn-refresh {
+    margin-top: 0;
+}
+.fina-arturn-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+}
+.fina-arturn-toolbar label {
+    font-size: 12px;
+    color: #555;
+    white-space: nowrap;
+}
+.fina-arturn-input {
+    height: 28px;
+    border: 1px solid #dcdfe6;
+    border-radius: 4px;
+    padding: 0 8px;
+    font-size: 12px;
+    color: #333;
+    min-width: 160px;
+    background: #fff;
+}
+.fina-arturn-head-updated {
+    flex: 0 1 auto;
+    color: #555;
+    font-weight: 500;
+    font-size: var(--rt-monitor-font-compact);
+    line-height: 1.25;
+    white-space: nowrap;
+}
+.fina-arturn-period-filters .fina-arturn-input {
+    min-width: 220px;
+}
+.fina-arturn-scheme-row .fina-arturn-input {
+    min-width: 190px;
+}
+#fina-arturn-msg.fina-arturn-msg-line {
+    flex: 0 1 auto;
+    min-width: 0;
+    margin: 0;
+    color: #666;
+    font-size: var(--rt-monitor-font-compact);
+    line-height: 1.25;
+    white-space: nowrap;
+}
+.fina-arturn-table-wrap {
+    width: 100%;
+    margin-top: 0;
+    padding-top: 0;
+    /* 不在此层设 overflow-x:auto：会形成滚动祖先，thead 的纵向 position:sticky 无法相对浏览器窗口。
+       横向由视口底部条与滚轮（见 rt_monitor_fina.js initFinaArturnHorizScrollHelpers） */
+    overflow-x: visible;
+    overflow-y: visible;
+    /* 供子表 position:sticky 横向冻结列（left）与纵向（top）共用同一滚动盒——视口 */
+    position: relative;
+}
+/* 按内容定宽，避免 min-width 拉满视口后列间被浏览器「摊宽」出假空白（myuiux：紧凑数据表） */
+.fina-arturn-table {
+    width: max-content;
+    max-width: 100%;
+    box-sizing: border-box;
+    /* 第二行 thead 的 top = 第一行实测高度（JS 写入），用于垂直滚动时双行表头 sticky */
+    --fina-arturn-thead-row1-height: 28px;
+    /* 冻结列宽（与下方 --fina-freeze-l* 一致，保证 left 与列宽对齐） */
+    /* 代码约 9 位+.SZ、名称多为 2～4 字：收紧列宽，过长由名称列 ellipsis */
+    --fina-freeze-c1: 80px;
+    --fina-freeze-c2: 78px;
+    --fina-freeze-c3: 200px;
+    /* 总市值、自由市值（亿）；公告日（原第4冻结列顺延） */
+    --fina-freeze-c4: 72px;
+    --fina-freeze-c5: 72px;
+    --fina-freeze-c6: 78px;
+    --fina-freeze-l1: 0px;
+    --fina-freeze-l2: var(--fina-freeze-c1);
+    --fina-freeze-l3: calc(var(--fina-freeze-c1) + var(--fina-freeze-c2));
+    --fina-freeze-l4: calc(var(--fina-freeze-c1) + var(--fina-freeze-c2) + var(--fina-freeze-c3));
+    --fina-freeze-l5: calc(var(--fina-freeze-l4) + var(--fina-freeze-c4));
+    --fina-freeze-l6: calc(var(--fina-freeze-l5) + var(--fina-freeze-c5));
+}
+.fina-arturn-wrap .fina-arturn-table th,
+.fina-arturn-wrap .fina-arturn-table td {
+    box-sizing: border-box;
+}
+/* sticky 合成层上勿留投影，避免与卡片白底交界像多叠一层 */
+.fina-arturn-wrap #fina-arturn-thead th {
+    box-shadow: none;
+}
+/* ── 垂直滚动：表头两行 sticky（横向仍随 .fina-arturn-table-wrap，与既有 left 冻结叠加） ── */
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group {
+    position: sticky;
+    top: 0;
+    z-index: 12;
+}
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-cols th {
+    top: var(--fina-arturn-thead-row1-height, 40px);
+}
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-cols th:nth-child(n + 7) {
+    position: sticky;
+    z-index: 11;
+    background: #fafafa;
+}
+/* ── 横向冻结左 6 列：代码 / 名称 / 申万 / 总市值 / 自由市值 / 公告日 ── */
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-metric-cell {
+    position: sticky;
+    left: var(--fina-freeze-l1);
+    top: 0;
+    z-index: 22;
+    /* 背景与齿轮区一致，避免滑过时透出下方单元格 */
+    background: #fafafa;
+    min-width: calc(
+        var(--fina-freeze-c1) + var(--fina-freeze-c2) + var(--fina-freeze-c3) + var(--fina-freeze-c4) +
+            var(--fina-freeze-c5)
+    );
+}
+/* 第一行第 2 格：仅对应第二行「公告日」列，右缘与冻结区（左 6 列）一致；勿与「上市日」合并 colspan，否则大组竖线会错到上市日后 */
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(2) {
+    position: sticky;
+    left: var(--fina-freeze-l6);
+    top: 0;
+    z-index: 21;
+    background: #fafafa;
+    min-width: var(--fina-freeze-c6);
+    max-width: var(--fina-freeze-c6);
+    /* 冻结区右缘分组线须画在本格右缘（sticky），勿仅用第 7 列左线（横滚会随上市日移走） */
+    border-right: var(--fina-arturn-vline-group-width, 2px) solid var(--fina-arturn-vline-group, #6d7d8b);
+}
+/* 第一行第 3 格：对应「上市日」，随表体横滚，不横向 sticky */
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(3) {
+    position: sticky;
+    top: 0;
+    z-index: 12;
+    background: #fafafa;
+    min-width: var(--fina-freeze-c6);
+    max-width: var(--fina-freeze-c6);
+}
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-cols th:nth-child(1) {
+    position: sticky;
+    left: var(--fina-freeze-l1);
+    z-index: 18;
+    min-width: var(--fina-freeze-c1);
+    max-width: var(--fina-freeze-c1);
+    background: #fafafa;
+}
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-cols th:nth-child(2) {
+    position: sticky;
+    left: var(--fina-freeze-l2);
+    z-index: 18;
+    min-width: var(--fina-freeze-c2);
+    max-width: var(--fina-freeze-c2);
+    background: #fafafa;
+}
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-cols th:nth-child(3) {
+    position: sticky;
+    left: var(--fina-freeze-l3);
+    z-index: 18;
+    min-width: var(--fina-freeze-c3);
+    max-width: var(--fina-freeze-c3);
+    background: #fafafa;
+}
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-cols th:nth-child(4) {
+    position: sticky;
+    left: var(--fina-freeze-l4);
+    z-index: 18;
+    min-width: var(--fina-freeze-c4);
+    max-width: var(--fina-freeze-c4);
+    background: #fafafa;
+}
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-cols th:nth-child(5) {
+    position: sticky;
+    left: var(--fina-freeze-l5);
+    z-index: 18;
+    min-width: var(--fina-freeze-c5);
+    max-width: var(--fina-freeze-c5);
+    background: #fafafa;
+}
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-cols th:nth-child(6) {
+    position: sticky;
+    left: var(--fina-freeze-l6);
+    z-index: 18;
+    min-width: var(--fina-freeze-c6);
+    max-width: var(--fina-freeze-c6);
+    background: #fafafa;
+    /* 公告日为冻结区最后一列：右缘 2px 分组线随 sticky 固定，横滚时保持在视口内 */
+    border-right: var(--fina-arturn-vline-group-width, 2px) solid var(--fina-arturn-vline-group, #6d7d8b);
+}
+.fina-arturn-wrap .fina-arturn-table tbody td:nth-child(1) {
+    position: sticky;
+    left: var(--fina-freeze-l1);
+    z-index: 2;
+    min-width: var(--fina-freeze-c1);
+    max-width: var(--fina-freeze-c1);
+}
+.fina-arturn-wrap .fina-arturn-table tbody td:nth-child(2) {
+    position: sticky;
+    left: var(--fina-freeze-l2);
+    z-index: 2;
+    min-width: var(--fina-freeze-c2);
+    max-width: var(--fina-freeze-c2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fina-arturn-wrap .fina-arturn-table tbody td:nth-child(3) {
+    position: sticky;
+    left: var(--fina-freeze-l3);
+    z-index: 2;
+    min-width: var(--fina-freeze-c3);
+    max-width: var(--fina-freeze-c3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fina-arturn-wrap .fina-arturn-table tbody td:nth-child(4) {
+    position: sticky;
+    left: var(--fina-freeze-l4);
+    z-index: 2;
+    min-width: var(--fina-freeze-c4);
+    max-width: var(--fina-freeze-c4);
+}
+.fina-arturn-wrap .fina-arturn-table tbody td:nth-child(5) {
+    position: sticky;
+    left: var(--fina-freeze-l5);
+    z-index: 2;
+    min-width: var(--fina-freeze-c5);
+    max-width: var(--fina-freeze-c5);
+}
+.fina-arturn-wrap .fina-arturn-table tbody td:nth-child(6) {
+    position: sticky;
+    left: var(--fina-freeze-l6);
+    z-index: 2;
+    min-width: var(--fina-freeze-c6);
+    max-width: var(--fina-freeze-c6);
+    /* 与 median th 冻结缘一致：用细线代替横向投影，减轻与表头交界「双叠层」观感 */
+    box-shadow: none;
+    border-right: var(--fina-arturn-vline-group-width, 2px) solid var(--fina-arturn-vline-group, #6d7d8b);
+}
+/* 行级虚拟化：视口外的行跳过布局/绘制/sticky 粘附计算。
+   2500+ 行 × 6 个 sticky 冻结列时，overlay 弹窗、滚动、排序等会触发全量重算，
+   Chrome 会出现长时间「未响应」，content-visibility:auto 将其压到视口内约 30~50 行。
+   contain-intrinsic-size: auto 让浏览器用上次渲染的实际高度占位，滚动条不会跳动。 */
+.fina-arturn-wrap .fina-arturn-table tbody tr.median-table-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 32px;
+}
+/* 整行斑马纹：冻结列与右侧数值列同色，避免粗竖线两侧灰白「断层」 */
+.fina-arturn-wrap .fina-arturn-table tbody tr.median-table-zebra td {
+    background-color: #fafafa;
+}
+.fina-arturn-wrap .fina-arturn-table tbody tr:not(.median-table-zebra) td {
+    background-color: #fff;
+}
+/* 财报单页整行悬停高亮：浅冰蓝，便于横向扫描，不压过红/绿数值语义 */
+.fina-arturn-wrap .fina-arturn-table tbody tr:hover td {
+    background: #dfefff;
+}
+.fina-arturn-wrap .fina-arturn-table tbody tr.median-table-zebra:hover td {
+    background: #d7e9ff;
+}
+/* 末行：底边与卡片边框同色，竖线不外溢（separate 模型下略压底边绘制） */
+.fina-arturn-wrap .fina-arturn-table.median-table tbody tr:last-child td {
+    border-bottom: 1px solid var(--rt-monitor-border-subtle);
+    overflow: hidden;
+}
+.fina-arturn-wrap .fina-arturn-table.median-table th,
+.fina-arturn-wrap .fina-arturn-table.median-table td {
+    padding: 4px 4px;
+    font-size: var(--rt-monitor-font-compact);
+    line-height: 1.45;
+    vertical-align: middle;
+}
+/* 股票代码 / 名称 / 申万：与首年列相邻列间隔 1px（仅第二行表头 + 表体；第一行首格为 colspan=5 状态区） */
+.fina-arturn-wrap .fina-arturn-table.median-table tr.fina-arturn-thead-cols th:nth-child(1),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody td:nth-child(1) {
+    padding: 4px 1px 4px 4px;
+}
+.fina-arturn-wrap .fina-arturn-table.median-table tr.fina-arturn-thead-cols th:nth-child(2),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody td:nth-child(2) {
+    padding: 4px 1px 4px 0;
+}
+.fina-arturn-wrap .fina-arturn-table.median-table tr.fina-arturn-thead-cols th:nth-child(3),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody td:nth-child(3) {
+    padding: 4px 1px 4px 0;
+}
+/* 股票代码、股票名称：表头与表体居中；申万二级仍为左对齐 */
+.fina-arturn-wrap .fina-arturn-table.median-table tr.fina-arturn-thead-cols th:nth-child(1),
+.fina-arturn-wrap .fina-arturn-table.median-table tr.fina-arturn-thead-cols th:nth-child(2) {
+    text-align: center;
+}
+.fina-arturn-wrap .fina-arturn-table.median-table tr.fina-arturn-thead-cols th:nth-child(1) .fina-arturn-th-inner,
+.fina-arturn-wrap .fina-arturn-table.median-table tr.fina-arturn-thead-cols th:nth-child(2) .fina-arturn-th-inner {
+    justify-content: center;
+}
+.fina-arturn-wrap .fina-arturn-table.median-table tbody td:nth-child(1),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody td:nth-child(2) {
+    text-align: center;
+}
+.fina-arturn-table th,
+.fina-arturn-table td {
+    white-space: nowrap;
+}
+.fina-arturn-th-inner {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 2px;
+    min-width: 0;
+}
+/* 前三列表头（第二行）：与整表 3px 缝体系一致，略紧于默认 gap */
+.fina-arturn-table tr.fina-arturn-thead-cols th:nth-child(-n + 3) .fina-arturn-th-inner {
+    gap: 1px;
+}
+.fina-sort-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    min-width: 20px;
+    min-height: 20px;
+    margin-right: 1px;
+    padding: 0;
+    border: 1px solid #dcdfe6;
+    border-radius: 2px;
+    background: #fff;
+    color: #666;
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+.fina-sort-btn:hover {
+    border-color: #b0bec5;
+    color: #333;
+}
+.fina-sort-btn.is-asc,
+.fina-sort-btn.is-desc {
+    color: #1f6feb;
+    border-color: #1f6feb;
+    background: #f0f7ff;
+}
+.fina-arturn-th-inner .fina-th-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* 第 4 列起（总市值…至固定资产）：数值与表头控件整体居中，收紧左右内边距 */
+.fina-arturn-wrap .fina-arturn-table.median-table tr.fina-arturn-thead-cols th,
+.fina-arturn-wrap .fina-arturn-table.median-table tbody td:nth-child(n + 4) {
+    padding-left: 0;
+    padding-right: 0;
+}
+/* 分组行：周转天 / 销售毛利率 与下方年份列同表对齐（与左侧状态格同底边）；底横线与分组竖线同 token */
+.fina-arturn-table tr.fina-arturn-thead-group th.fina-arturn-th-group {
+    text-align: center;
+    vertical-align: middle;
+    font-weight: 600;
+    color: #555;
+    padding: 2px 5px;
+    line-height: 1.3;
+    background: #fafafa;
+    border-bottom: var(--fina-arturn-vline-group-width, 2px) solid var(--fina-arturn-vline-group, #6d7d8b);
+}
+/* 第二行表头底边：与表体分界，与分组线风格一致（覆盖全局 .median-table th #f0f0f0） */
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th {
+    border-bottom: var(--fina-arturn-vline-group-width, 2px) solid var(--fina-arturn-vline-group, #6d7d8b);
+}
+/* 明细：除首列外浅竖线。表体用 td 即可。第二行表头须排除分组起列，否则与下段 2px 左线特异性纠缠，粗竖线在中间行被 1px 盖掉。
+   切勿在 tbody 上再叠 :not(:nth-child(7)) 等——会抬高浅线规则特异性，反压过后文「tbody>tr>td:nth-child(8)…」分组粗线，导致全表只剩 1px。 */
+.fina-arturn-wrap .fina-arturn-table.median-table tbody td:nth-child(n+2) {
+    border-left: 1px solid var(--fina-arturn-vline-col, #e8e8e8);
+}
+/* 上市日左缘与公告日右缘 2px 为同一分界，去掉本列 1px 左线避免 separate 模型下双线叠粗 */
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(7) {
+    border-left: none;
+}
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(n+2):not(:nth-child(7)):not(:nth-child(8)):not(:nth-child(11)):not(:nth-child(15)):not(:nth-child(19)):not(:nth-child(23)):not(:nth-child(27)):not(:nth-child(31)):not(:nth-child(41)):not(:nth-child(51)):not(:nth-child(61)):not(:nth-child(71)):not(:nth-child(81)):not(:nth-child(92)):not(:nth-child(101)):not(:nth-child(110)):not(:nth-child(119)):not(:nth-child(128)):not(:nth-child(137)):not(:nth-child(146)):not(:nth-child(158)) {
+    border-left: 1px solid var(--fina-arturn-vline-col, #e8e8e8);
+}
+/* 财务指标之间分组竖线：公告日|冻结区右缘见第 6 列 border-right；TTM 起点(营收)|ROE|…（167 列版；单季经营现金流 cf_high 起 41、oi_high 51、fst_high 71、oco 92、合同 kchg 146、固定 组以 fchg 首列 158——勿用 f0 会右移一列）；2px+深灰与列间 1px 浅线区分层级 */
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(4),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(5),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(6),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(7),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(8),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(9),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(10),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(11),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(12),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(13),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(14),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(15),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(16),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(17),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(18),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(19),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(20),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(21),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(22),
+.fina-arturn-wrap .fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(23),
+/* 以下 thead-cols / tbody 分组粗线须含 .median-table，否则特异性低于上一段「n+2 浅竖线」（公告日分界用第 6 列右线，不再列 th:nth-child(7)） */
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(8),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(11),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(15),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(19),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(23),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(27),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(31),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(41),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(51),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(61),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(71),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(81),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(92),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(101),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(110),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(119),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(128),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(137),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(146),
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(158),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(8),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(11),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(15),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(19),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(23),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(27),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(31),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(41),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(51),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(61),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(71),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(81),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(92),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(101),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(110),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(119),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(128),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(137),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(146),
+.fina-arturn-wrap .fina-arturn-table.median-table tbody > tr > td:nth-child(158) {
+    border-left: var(--fina-arturn-vline-group-width, 2px) solid var(--fina-arturn-vline-group, #6d7d8b);
+}
+.fina-arturn-table tr.fina-arturn-thead-cols th .fina-arturn-th-inner {
+    justify-content: center;
+    gap: 0;
+}
+/* 年份列表头：去掉排序钮右侧余量，四列控件贴紧 */
+.fina-arturn-table tr.fina-arturn-thead-cols th .fina-sort-btn {
+    margin-right: 0;
+}
+.fina-filter-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #dcdfe6;
+    background: #fff;
+    color: #666;
+    border-radius: 3px;
+    font-size: 9px;
+    line-height: 1;
+    width: 16px;
+    height: 16px;
+    min-width: 20px;
+    min-height: 20px;
+    box-sizing: border-box;
+    cursor: pointer;
+    padding: 0;
+    touch-action: manipulation;
+}
+.fina-filter-btn.is-active {
+    color: #1f6feb;
+    border-color: #1f6feb;
+}
+.fina-arturn-table td.median-table-num {
+    text-align: center;
+    min-width: 0;
+}
+/* 财务列负值：绿色（与全站 .fall / 绿跌 #27ae60 一致） */
+.fina-arturn-table td.median-table-num.fina-arturn-neg {
+    color: #27ae60;
+}
+.fina-arturn-filter-popover {
+    /* 实际 left/top 由 openFinaMetricFilterPopover 设为 position:fixed + 视口坐标；此处不设 absolute，避免与 JS 不一致 */
+    position: fixed;
+    z-index: 30;
+    min-width: 260px;
+    max-width: min(300px, calc(100vw - 16px));
+    background: #fff;
+    border: 1px solid #dcdfe6;
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    padding: 8px;
+}
+.fina-filter-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 6px;
+}
+.fina-filter-popover-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+/* 底部 Top30：flex+gap；子卡按表格 max-content 定宽（勿 flex:1 等分，否则前两表版式被拉宽/与旧版两表不一致） */
+.top-moves-row {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: var(--rt-monitor-chart-pair-gap);
+    margin: 0 var(--rt-monitor-quad-gap) var(--rt-monitor-section-v-gap) var(--rt-monitor-quad-gap);
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: auto;
+    overflow-y: visible;
+}
+.top-moves-row > .median-table-wrap.top-moves-wrap {
+    margin: 0;
+    flex: 0 0 auto;
+    min-width: min-content;
+    max-width: none;
+}
+.top-moves-wrap {
+    display: block;
+    width: max-content;
+    max-width: none;
+    box-sizing: border-box;
+    overflow: visible;
+}
+.top-moves-table {
+    width: max-content;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+/* 覆盖通用 .median-table（myuiux 紧凑表）；与应收账款表同思路：max-content + 收紧列距，避免宽屏摊宽假缝 */
+.top-moves-wrap .median-table.top-moves-table {
+    font-size: var(--rt-monitor-font-compact);
+}
+.top-moves-wrap .median-table.top-moves-table th,
+.top-moves-wrap .median-table.top-moves-table td {
+    padding: 4px 4px;
+    white-space: nowrap;
+    line-height: var(--rt-monitor-line-height-table);
+    vertical-align: middle;
+}
+/* 冲高回落 / 大幅回升：5 列；代码|名称 用 token 加宽；其余分界仍 1px 单侧 */
+#decline-top-table th:nth-child(1),
+#decline-top-table td:nth-child(1),
+#recovery-top-table th:nth-child(1),
+#recovery-top-table td:nth-child(1) {
+    padding: 4px var(--rt-monitor-top-moves-code-name-h-gap) 4px 4px;
+}
+#decline-top-table th:nth-child(2),
+#decline-top-table td:nth-child(2),
+#recovery-top-table th:nth-child(2),
+#recovery-top-table td:nth-child(2) {
+    padding: 4px 1px 4px 0;
+}
+#decline-top-table th:nth-child(3),
+#decline-top-table td:nth-child(3),
+#recovery-top-table th:nth-child(3),
+#recovery-top-table td:nth-child(3) {
+    padding: 4px 0 4px 0;
+}
+#decline-top-table th:nth-child(4),
+#decline-top-table td:nth-child(4),
+#recovery-top-table th:nth-child(4),
+#recovery-top-table td:nth-child(4) {
+    padding: 4px var(--rt-monitor-top-moves-metric-industry-h-gap) 4px 0;
+}
+#decline-top-table th:nth-child(5),
+#decline-top-table td:nth-child(5),
+#recovery-top-table th:nth-child(5),
+#recovery-top-table td:nth-child(5) {
+    padding: 4px 4px 4px 0;
+}
+/* 当日成交额 Top30：7 列；代码|名称 同上 */
+#amount-top-table th:nth-child(1),
+#amount-top-table td:nth-child(1) {
+    padding: 4px var(--rt-monitor-top-moves-code-name-h-gap) 4px 4px;
+}
+#amount-top-table th:nth-child(2),
+#amount-top-table td:nth-child(2) {
+    padding: 4px 1px 4px 0;
+}
+#amount-top-table th:nth-child(3),
+#amount-top-table td:nth-child(3),
+#amount-top-table th:nth-child(4),
+#amount-top-table td:nth-child(4),
+#amount-top-table th:nth-child(5),
+#amount-top-table td:nth-child(5) {
+    padding: 4px 0 4px 0;
+}
+#amount-top-table th:nth-child(6),
+#amount-top-table td:nth-child(6) {
+    padding: 4px var(--rt-monitor-top-moves-metric-industry-h-gap) 4px 0;
+}
+#amount-top-table th:nth-child(7),
+#amount-top-table td:nth-child(7) {
+    padding: 4px 4px 4px 0;
+}
+/* 成交额(亿)、回落%/回升% 等：表头与数值居中 */
+.top-moves-table .top-moves-metric-col,
+.top-moves-table td.top-moves-metric-cell {
+    text-align: center;
+    min-width: 0;
+}
+/* 申万行业列：省略过长文案，悬停见全文（tbody 由 JS 写 title） */
+.top-moves-table td:last-child {
+    white-space: nowrap;
+    max-width: 16em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.top-moves-wrap .median-table-title {
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+}
+
+@media (max-width: 900px) {
+    /* BIAS | MA：小屏纵向堆叠，块间距 12px（myuiux） */
+    .etf-bias-ma-row {
+        flex-direction: column;
+        flex-wrap: nowrap;
+        align-items: flex-start;
+        gap: 12px;
+        overflow-x: visible;
+    }
+    .top-moves-row {
+        flex-direction: column;
+        flex-wrap: nowrap;
+        overflow-x: visible;
+        gap: var(--rt-monitor-section-v-gap);
+    }
+    .top-moves-row > .top-moves-wrap.median-table-wrap {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        flex: 0 0 auto;
+    }
+    .top-moves-wrap {
+        width: 100%;
+        max-width: 100%;
+    }
+    .top-moves-table {
+        max-width: 100%;
+    }
+}
+.idx-prev5-dates {
+    font-size: var(--rt-monitor-font-data);
+    color: #666;
+    margin-top: 4px;
+    margin-bottom: 2px;
+}
+.bias-table .bias-th-per {
+    vertical-align: middle;
+    text-align: center;
+}
+.bias-table .bias-th-freq {
+    text-align: center;
+}
+.bias-table .bias-th-col {
+    min-width: 48px;
+}
+.bias-table .bias-cell {
+    font-variant-numeric: tabular-nums;
+}
+.ma-signal-table .bias-cell {
+    font-variant-numeric: tabular-nums;
+}
+/* MA/EMA 方向列（三角形）不参与 2σ/3σ 背景着色 */
+.ma-signal-table .ma-signal-dir-cell {
+    background: transparent !important;
+}
+/* 偏离 2σ：黄色；偏离 3σ：红色（优先级高于 2σ） */
+.bias-table .bias-cell.bias-sigma-2 {
+    background-color: #fff9c4;
+}
+.bias-table .bias-cell.bias-sigma-3 {
+    background-color: #ffcdd2;
+}
+.ma-signal-table .bias-cell.bias-sigma-2 {
+    background-color: #fff9c4;
+}
+.ma-signal-table .bias-cell.bias-sigma-3 {
+    background-color: #ffcdd2;
+}
+.bias-table tbody tr:hover .bias-cell.bias-sigma-2 {
+    background-color: #fff59d;
+}
+.bias-table tbody tr:hover .bias-cell.bias-sigma-3 {
+    background-color: #ef9a9a;
+}
+.ma-signal-table tbody tr:hover .bias-cell.bias-sigma-2 {
+    background-color: #fff59d;
+}
+.ma-signal-table tbody tr:hover .bias-cell.bias-sigma-3 {
+    background-color: #ef9a9a;
+}
+
+/* 涨跌家数：超跌 / 超跌Per 与 BIAS(Per) 同款 2σ/3σ 底色；默认黑色字（不用 rise/fall 红绿字） */
+.limit-stats-table .limit-stats-num.bias-sigma-2 {
+    background-color: #fff9c4;
+    color: #222;
+}
+.limit-stats-table .limit-stats-num.bias-sigma-3 {
+    background-color: #ffcdd2;
+    color: #222;
+}
+.limit-stats-table tbody tr:hover .limit-stats-num.bias-sigma-2 {
+    background-color: #fff59d;
+}
+.limit-stats-table tbody tr:hover .limit-stats-num.bias-sigma-3 {
+    background-color: #ef9a9a;
+}
+
+/* 内容区顶栏条：承载 BIAS 提示（全宽时与 quad 左右 inset 一致） */
+.rt-monitor-bias-strip {
+    display: flex;
+    justify-content: flex-end;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0 var(--rt-monitor-quad-gap) var(--rt-monitor-section-v-gap) var(--rt-monitor-quad-gap);
+}
+/* 右侧工具列内：条宽随列，不再重复左右外边距（由首行 flex gap 承担） */
+.rt-monitor-toolbar-col .rt-monitor-bias-strip {
+    margin: 0;
+    width: 100%;
+}
+
+/* BIAS 标准差：在 .container 顶栏条内，相对定位供详情浮层 absolute */
+.bias-sigma-box {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    padding: 6px 10px;
+    max-width: min(100%, 420px);
+    font-size: var(--rt-monitor-font-data);
+    line-height: 1.35;
+    color: #333;
+    background: #e3f2fd;
+    border: 1px solid #90caf9;
+    border-radius: 6px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.bias-sigma-msg {
+    width: 100%;
+    text-align: right;
+    word-break: break-word;
+}
+.bias-sigma-toggle {
+    padding: 2px 8px;
+    font-size: var(--rt-monitor-font-data);
+    color: #1565c0;
+    background: #fff;
+    border: 1px solid #90caf9;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.bias-sigma-toggle:hover {
+    background: #bbdefb;
+}
+.bias-sigma-popover {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    left: auto;
+    margin-top: 6px;
+    z-index: 50;
+    min-width: 240px;
+    max-width: min(92vw, 480px);
+    max-height: 70vh;
+    overflow: auto;
+    padding: 6px 8px;
+    font-size: var(--rt-monitor-font-data);
+    line-height: 1.25;
+    color: #000;
+    background: #fff;
+    border: 1px solid #90caf9;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.bias-sigma-popover.is-open {
+    display: block;
+}
+.bias-sigma-detail-empty {
+    margin: 0;
+    color: #000;
+}
+.bias-sigma-detail-table {
+    border-collapse: collapse;
+    font-size: var(--rt-monitor-font-data);
+}
+.bias-sigma-detail-table th,
+.bias-sigma-detail-table td {
+    padding: 2px 6px;
+    text-align: left;
+    border: 1px solid #e0e0e0;
+}
+.bias-sigma-detail-table th {
+    color: #000;
+    background: #f5f5f5;
+    font-weight: 700;
+}
+.bias-sigma-detail-table td {
+    color: #000;
+}
+.bias-sigma-detail-table td:nth-child(1) { font-weight: 700; }
+.bias-sigma-detail-table td:nth-child(2),
+.bias-sigma-detail-table td:nth-child(3) { font-weight: 700; }
+.bias-sigma-detail-table td:nth-child(4) { text-align: right; }
+.bias-sigma-detail-table td:nth-child(5) { text-align: center; }
+/* 两表数值区字体一致：统一字重 600，便于对比阅读 */
+.median-table-wrap .median-table-num,
+.amount-table-wrap .median-table-num,
+.uppct-table-wrap .median-table-num {
+    font-weight: 600;
+}
+@media (max-width: 900px) {
+    .median-quad-row {
+        margin-left: 0;
+        margin-right: 0;
+    }
+    .median-quad-top-row,
+    .median-quad-bottom-row {
+        flex-wrap: wrap;
+    }
+}
+.median-table {
+    width: auto;                     /* 不强制占满整行 */
+    margin: 0;                       /* 靠左贴紧卡片内边距，减少左右留白 */
+    border-collapse: collapse;
+    font-size: var(--rt-monitor-font-data);
+    font-family: inherit;
+}
+/* 应收账款表：separate + 零间距，避免 collapse 合并格线导致表体分组竖线消失（表头仍可见） */
+.fina-arturn-wrap .fina-arturn-table.median-table {
+    border-collapse: separate;
+    border-spacing: 0;
+}
+/* 压过后文 .median-table th,td 的 1px 底边：第一行左侧状态格须与分组标题同为 2px 横线，否则「分组横线」在齿轮区断成浅线 */
+.fina-arturn-wrap .fina-arturn-table.median-table thead tr.fina-arturn-thead-group th.fina-arturn-metric-cell {
+    border-bottom: var(--fina-arturn-vline-group-width, 2px) solid var(--fina-arturn-vline-group, #6d7d8b);
+}
+.median-table th,
+.median-table td {
+    padding: 6px 10px;
+    text-align: right;
+    border-bottom: 1px solid #f0f0f0;
+    line-height: var(--rt-monitor-line-height-table);
+}
+/* 涨跌家数表同时使用 .median-table：居中 + 与成交额（亿）表同档 padding/行高（标签行与数值行统一） */
+.median-table-wrap.limit-stats-wrap .median-table.limit-stats-table th,
+.median-table-wrap.limit-stats-wrap .median-table.limit-stats-table td {
+    text-align: center;
+    padding: var(--rt-monitor-padding-limit-stats);
+    line-height: var(--rt-monitor-line-height-table);
+}
+.median-table th {
+    font-weight: 600;
+    color: #555;
+    background: #fafafa;
+}
+.median-table thead th {
+    text-align: center;
+}
+.median-table td.median-table-cat {
+    text-align: left;
+    font-weight: 500;
+    color: #333;
+}
+.median-table-num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+    min-width: 40px;                 /* 更窄的最小列宽，减少留白 */
+}
+/* 成交额表：MAX T-60 / 峰值日 居中（压过 .median-table td 右对齐） */
+.amount-table-wrap .median-table td.amount-peak-cell {
+    text-align: center !important;
+}
+.median-table-num .median-cell-value {
+    font-weight: 600;                /* 数值加粗，方便快速扫一眼 */
+}
+/* MA 表 Amp：振幅%，非涨跌方向，固定主文字色（不套用 .rise 红） */
+.ma-signal-table .ma-signal-idx-cell[data-q="amp"] {
+    color: #333;
+}
+.idx-amp-cell {
+    color: #333 !important;          /* 固定黑色：与成交额（亿）表一致，不随正负变色 */
+}
+.median-table-zebra td {
+    background: #fafafa;
+}
+.median-table tbody tr:hover td {
+    background: #f5f5f5;
+}
+.median-table-zebra tbody tr:hover td {
+    background: #f0f0f0;
+}
+
+.message-section {
+    margin-top: 6px;
+}
+
+.message {
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: var(--rt-monitor-font-data);
+}
+
+.message-error {
+    background: #fdecea;
+    color: #c0392b;
+    border: 1px solid #e74c3c;
+}
+
+/* 配置面板主操作：实心主色（与 --rt-monitor-focus-ring 同系） */
+.btn-refresh {
+    padding: 6px 12px;
+    font-size: var(--rt-monitor-font-data);
+    color: #fff;
+    background: #1565c0;
+    border: 1px solid #0d47a1;
+    border-radius: 6px;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 4px;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.btn-refresh:hover {
+    background: #0d47a1;
+    border-color: #0a3d91;
+}
+.btn-refresh:active {
+    background: #0a3d91;
+    border-color: #072f6e;
+}
+
+/* BIAS 可点格 hover（与涨跌家数分流：仅 BIAS/MCD 数值用主色提示） */
+.bias-cell-clickable:hover {
+    color: #1565c0;
+}
+.limit-stats-table .limit-stats-clickable {
+    cursor: pointer;
+}
+/* BIAS 序列弹窗：视觉与「国证A指 分钟成交额差值」区块统一 */
+.bias-series-modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0, 0, 0, 0.32);
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(2px);
+    overscroll-behavior: contain;
+}
+/* 财报单页·固定资产弹窗：不压暗、不毛玻璃；遮罩 pointer-events:none 让主表可点，弹窗壳 pointer-events:auto；关弹窗用关闭钮或 Esc（点空白处不再关） */
+#fina-fixed-assets-modal-overlay.bias-series-modal-overlay {
+    background: transparent;
+    backdrop-filter: none;
+    pointer-events: none;
+}
+#fina-fixed-assets-modal-overlay.bias-series-modal-overlay .fina-fixed-assets-modal-shell {
+    pointer-events: auto;
+}
+/* 财报单页·筛选方案弹窗：同上，透明不压暗、穿透点主表，关弹窗用关闭钮或 Esc */
+#fina-arturn-scheme-modal-overlay.bias-series-modal-overlay {
+    background: transparent;
+    backdrop-filter: none;
+    pointer-events: none;
+}
+#fina-arturn-scheme-modal-overlay.bias-series-modal-overlay .fina-arturn-scheme-modal-shell {
+    pointer-events: auto;
+}
+/* 行情监控主页：弹窗遮罩与财报页一致（透明、去 blur、穿透点背后页面；弹窗壳可交互；关弹窗用关闭钮或 Esc） */
+body.rt-monitor-main .bias-series-modal-overlay,
+body.rt-monitor-main .lbzt-detail-modal-overlay {
+    background: transparent;
+    backdrop-filter: none;
+    pointer-events: none;
+}
+body.rt-monitor-main .bias-series-modal-overlay .bias-series-modal,
+body.rt-monitor-main .lbzt-detail-modal-overlay .lbzt-detail-modal-shell {
+    pointer-events: auto;
+}
+.bias-series-modal-overlay.is-open {
+    display: flex;
+}
+.bias-series-modal {
+    background: #fff;
+    border-radius: 8px;
+    border: 1px solid #e8ecf0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+    max-width: 96%;
+    max-height: 95vh;
+    width: 1320px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.bias-series-modal-header {
+    padding: 10px 16px 8px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    background: #fafafa;
+}
+/* 标题与 .median-table-title 一致：与国证A指图表区统一，标题居中 */
+.bias-series-modal .bias-series-modal-title {
+    margin: 0;
+    padding: 0;
+    border: none;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    font-size: var(--rt-monitor-font-title);
+    font-weight: 600;
+    color: #444;
+    line-height: 1.4;
+    text-align: center;
+    flex: 1;
+}
+.bias-series-modal-close {
+    padding: 5px 12px;
+    font-size: var(--rt-monitor-font-data);
+    color: #555;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+}
+.bias-series-modal-close:hover {
+    background: #f5f5f5;
+    border-color: #ddd;
+    color: #333;
+}
+.bias-series-modal-close:active {
+    background: #eceff1;
+    border-color: #cfd8dc;
+}
+.bias-series-modal-body {
+    padding: 12px 16px 16px;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+}
+.bias-series-chart-wrap {
+    position: relative;
+    width: 100%;
+    flex: 1;
+    min-height: 520px;
+    margin-top: 8px;
+    border: 1px solid #f0f0f0;
+    border-radius: 6px;
+    background: #fff;
+    box-sizing: border-box;
+}
+/* 融资占比弹窗：图表区随窗体伸缩（窗体可 resize，见 .margin-rzmre-idx-modal-shell） */
+.bias-series-chart-wrap.margin-rzmre-idx-modal-chart-wrap {
+    flex: 1;
+    min-height: 160px;
+    width: 100%;
+    margin-top: 8px;
+}
+/* 净买入/融资余额弹窗：与融资占比弹窗同款可 resize 外壳 */
+.bias-series-chart-wrap.margin-daily-modal-chart-wrap {
+    flex: 1;
+    min-height: 160px;
+    width: 100%;
+    margin-top: 8px;
+}
+.bias-series-modal.margin-daily-modal-shell {
+    width: min(1400px, 96vw);
+    min-width: 320px;
+    min-height: 320px;
+    height: min(72vh, 95vh);
+    max-width: min(96vw, 100%);
+    max-height: 95vh;
+    box-sizing: border-box;
+    overflow: auto;
+    resize: both;
+}
+.bias-series-modal.margin-rzmre-idx-modal-shell {
+    width: min(1400px, 96vw);
+    min-width: 320px;
+    min-height: 320px;
+    height: min(72vh, 95vh);
+    max-width: min(96vw, 100%);
+    max-height: 95vh;
+    box-sizing: border-box;
+    /* 覆盖 .bias-series-modal 的 overflow:hidden，否则 resize 无效 */
+    overflow: auto;
+    resize: both;
+}
+/* 超跌（五日上涨占比）弹窗：与融资占比弹窗同款可 resize + 图表区 flex 撑满 */
+.bias-series-chart-wrap.up-num-ma5-modal-chart-wrap {
+    flex: 1;
+    min-height: 160px;
+    width: 100%;
+    margin-top: 8px;
+}
+.bias-series-modal.up-num-ma5-modal-shell {
+    width: min(1400px, 96vw);
+    min-width: 320px;
+    min-height: 320px;
+    height: min(72vh, 95vh);
+    max-width: min(96vw, 100%);
+    max-height: 95vh;
+    box-sizing: border-box;
+    overflow: auto;
+    resize: both;
+}
+
+/* BIAS / 聚集度Per 弹窗：与融资占比、超跌同款可 resize + 图表区 flex 撑满 */
+.bias-series-chart-wrap.etf-bias-mcd-modal-chart-wrap {
+    flex: 1;
+    min-height: 160px;
+    width: 100%;
+    margin-top: 8px;
+}
+.bias-series-modal.etf-bias-mcd-modal-shell {
+    width: min(1400px, 96vw);
+    min-width: 320px;
+    min-height: 320px;
+    height: min(72vh, 95vh);
+    max-width: min(96vw, 100%);
+    max-height: 95vh;
+    box-sizing: border-box;
+    overflow: auto;
+    resize: both;
+}
+
+/* 应收账款筛选方案：窄表单，勿继承 .bias-series-modal 的 1320px 大图宽 */
+.bias-series-modal.fina-arturn-scheme-modal-shell {
+    width: min(288px, calc(100vw - 32px));
+    max-width: min(96vw, 100%);
+    min-width: 200px;
+    min-height: 120px;
+    height: auto;
+    max-height: min(88vh, 95vh);
+    overflow: auto;
+    resize: both;
+    box-sizing: border-box;
+    /* 表单内部 flex/resize 布局不向外扩散，减轻开关瞬间整页参与布局 */
+    contain: layout style;
+}
+.bias-series-modal.fina-arturn-scheme-modal-shell .bias-series-modal-header {
+    padding: 8px 12px 6px;
+}
+.bias-series-modal-body.fina-arturn-scheme-modal-body {
+    padding: 10px 12px 12px;
+}
+/* 财报页固定资产弹窗：双轴图，尺寸与融资弹窗接近，支持 resize */
+.bias-series-modal.fina-fixed-assets-modal-shell {
+    width: min(1200px, 96vw);
+    min-width: 360px;
+    min-height: 320px;
+    height: min(72vh, 95vh);
+    max-width: min(96vw, 100%);
+    max-height: 95vh;
+    box-sizing: border-box;
+    overflow: auto;
+    resize: both;
+}
+/* 固定资产弹窗：合并标题 + 股票代码输入于同一行；关闭钮绝对定位；左侧「上一条/下一条」 */
+.bias-series-modal-header.fina-fixed-assets-modal-header {
+    position: relative;
+    display: block;
+    padding: 10px 76px 10px 132px;
+    box-sizing: border-box;
+}
+.fina-fixed-assets-nav-btns {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 6px;
+    z-index: 2;
+}
+.fina-fixed-assets-nav-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid #dcdfe6;
+    border-radius: 6px;
+    background: #fff;
+    color: #444;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.fina-fixed-assets-nav-btn:hover:not(:disabled) {
+    border-color: #1f6feb;
+    color: #1f6feb;
+}
+.fina-fixed-assets-nav-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.fina-fixed-assets-header-single-row {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+/* 输入框（代码）+ 名称 + 主题，单行居中，不重复展示代码 */
+.fina-fixed-assets-header-center {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px 12px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+.fina-fixed-assets-header-center .fina-fixed-assets-ts-input {
+    width: 11ch;
+    max-width: 11ch;
+    min-width: 9ch;
+    padding: 5px 6px;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    font-size: var(--rt-monitor-font-data);
+    font-variant-numeric: tabular-nums;
+    box-sizing: border-box;
+    flex: 0 0 auto;
+}
+.fina-fixed-assets-sec-name {
+    margin: 0;
+    padding: 0;
+    max-width: min(40vw, 14em);
+    min-width: 0;
+    font-size: var(--rt-monitor-font-title);
+    font-weight: 600;
+    color: #444;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fina-fixed-assets-modal-topic {
+    margin: 0;
+    padding: 0;
+    font-size: var(--rt-monitor-font-title);
+    font-weight: 600;
+    color: #444;
+    line-height: 1.35;
+    white-space: nowrap;
+}
+.fina-fixed-assets-modal-header .bias-series-modal-close {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    margin: 0;
+}
+@media (max-width: 720px) {
+    .fina-fixed-assets-header-single-row {
+        flex-wrap: wrap;
+        justify-content: center;
+        row-gap: 8px;
+    }
+    .fina-fixed-assets-header-center {
+        flex-direction: column;
+        row-gap: 6px;
+    }
+    .fina-fixed-assets-sec-name {
+        max-width: 100%;
+        text-align: center;
+    }
+    .fina-fixed-assets-modal-topic {
+        text-align: center;
+        white-space: normal;
+    }
+}
+/* 固定资产弹窗：TTM 营收 / PE / 当期单季指标；与表头「固定资产、合同负债、季度营收」同档字号与字重 */
+.fina-fixed-assets-modal-metrics {
+    display: flex;
+    justify-content: center;
+    padding: 8px 12px 10px;
+    margin: 0 0 6px;
+    font-size: var(--rt-monitor-font-title);
+    font-weight: 600;
+    color: #444;
+    line-height: 1.35;
+    border-radius: 8px;
+    border: 1px solid var(--rt-monitor-border-subtle, #e8ecf0);
+    background: var(--rt-monitor-surface, #fff);
+    box-sizing: border-box;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.fina-fixed-assets-metrics-anchor {
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.fina-fixed-assets-metrics-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 6px;
+    min-width: min-content;
+}
+/* 固定资产弹窗指标：第一行基本面（报告期→成长/盈利→FCF·杠杆·CCC）；第二行估值·市值·行业 */
+.fina-fixed-assets-metrics-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: center;
+    gap: 0;
+}
+.fina-fixed-assets-metrics-row--market .fina-fixed-assets-metric:last-child .fina-fixed-assets-metric-v {
+    white-space: normal;
+    word-break: break-all;
+}
+.fina-fixed-assets-metric {
+    display: inline;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.fina-fixed-assets-metric-k {
+    color: #444;
+    font-weight: 600;
+    margin-right: 2px;
+}
+/* 指标值统一蓝色（标签保持黑色）；特殊态颜色由 .hot / .neg 覆盖 */
+.fina-fixed-assets-metric-v {
+    color: #1565c0;
+}
+/* 与 .fina-arturn-table .fina-arturn-neg 一致：负值绿色（同比等） */
+.fina-fixed-assets-metric-neg {
+    color: #27ae60;
+}
+/* 固定资产弹窗·净债务/净现金：净现金整段强调为红；净债务走默认蓝 .fina-fixed-assets-metric-v */
+.fina-fixed-assets-metric-netcash,
+.fina-fixed-assets-metric-ccc-neg {
+    color: #c62828;
+}
+.fina-fixed-assets-metric-hot {
+    color: #c89b00;
+}
+.fina-fixed-assets-metrics-sep {
+    display: inline-block;
+    width: 0.65em;
+    user-select: none;
+}
+.fina-fixed-assets-mainbz-wrap {
+    margin: 0 0 6px;
+    padding: 6px 8px;
+    border: 1px solid var(--rt-monitor-border-subtle, #e8ecf0);
+    border-radius: 8px;
+    background: var(--rt-monitor-surface, #fff);
+    box-sizing: border-box;
+    overflow-x: auto;
+}
+.fina-fixed-assets-mainbz-dual {
+    display: grid;
+    grid-template-columns: max-content max-content;
+    gap: 8px;
+    align-items: start;
+    width: max-content;
+    min-width: 100%;
+}
+.fina-fixed-assets-mainbz-triple {
+    display: grid;
+    grid-template-columns: minmax(560px, 1fr) minmax(250px, 280px) minmax(560px, 1fr);
+    gap: 8px;
+    align-items: start;
+}
+.fina-fixed-assets-mainbz-panel {
+    min-width: 0;
+    position: relative;
+    background: #fff;
+    border: 1px solid var(--rt-monitor-border-subtle, #e8ecf0);
+    border-radius: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+.fina-fixed-assets-mainbz-panel-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #333;
+    margin: 0 0 4px;
+    line-height: 1.2;
+}
+.fina-fixed-assets-mainbz-table {
+    width: max-content;
+    min-width: 760px;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 12px;
+    color: #333;
+}
+.fina-fixed-assets-mainbz-table.mainbz-has-compare {
+    min-width: 940px;
+}
+.fina-fixed-assets-mainbz-table th,
+.fina-fixed-assets-mainbz-table td {
+    border: 1px solid #d8d8d8;
+    padding: 2px 4px;
+    text-align: center;
+    vertical-align: middle;
+    line-height: 1.3;
+    white-space: nowrap;
+}
+.fina-fixed-assets-mainbz-table tbody tr {
+    height: 22px;
+}
+/* 主营构成：序号 1 按区块分色（产品=蓝 tint / 行业=绿 tint / 地区=琥珀 tint）；左侧类别列 rowspan 保持白底 */
+.fina-fixed-assets-mainbz-table tbody tr[class^="mainbz-rank-1-"] td[rowspan="3"] {
+    background-color: #fff;
+}
+.fina-fixed-assets-mainbz-table tbody tr.mainbz-rank-1-P td:not([rowspan]) {
+    background-color: #e3f2fd;
+}
+.fina-fixed-assets-mainbz-table tbody tr.mainbz-rank-1-I td:not([rowspan]) {
+    background-color: #e8f5e9;
+}
+.fina-fixed-assets-mainbz-table tbody tr.mainbz-rank-1-D td:not([rowspan]) {
+    background-color: #fff3e0;
+}
+.fina-fixed-assets-mainbz-table th {
+    background: #fafafa;
+    font-weight: 600;
+}
+.fina-fixed-assets-mainbz-table td.mainbz-item {
+    text-align: center;
+    padding-left: 2px;
+    padding-right: 2px;
+    white-space: nowrap;
+    word-break: normal;
+}
+.fina-fixed-assets-mainbz-table th.mainbz-end-cell,
+.fina-fixed-assets-mainbz-table td.mainbz-end-cell {
+    text-align: left;
+    padding: 4px 6px;
+    font-weight: 600;
+    background: #fcfcfc;
+}
+.fina-fixed-assets-mainbz-compare-table {
+    min-width: 220px;
+}
+.fina-fixed-assets-mainbz-compare-table th.mainbz-end-cell {
+    text-align: center;
+}
+.fina-fixed-assets-mainbz-compare-table th,
+.fina-fixed-assets-mainbz-compare-table td {
+    font-size: 12px;
+    padding-left: 2px;
+    padding-right: 2px;
+    white-space: nowrap;
+}
+.fina-fixed-assets-mainbz-compare-table th:nth-child(1),
+.fina-fixed-assets-mainbz-compare-table td:nth-child(1),
+.fina-fixed-assets-mainbz-compare-table th:nth-child(2),
+.fina-fixed-assets-mainbz-compare-table td:nth-child(2),
+.fina-fixed-assets-mainbz-compare-table th:nth-child(3),
+.fina-fixed-assets-mainbz-compare-table td:nth-child(3) {
+    width: 78px;
+}
+.fina-fixed-assets-mainbz-table col.mainbz-col-type {
+    width: 50px;
+}
+.fina-fixed-assets-mainbz-table col.mainbz-col-rank {
+    width: 24px;
+}
+.fina-fixed-assets-mainbz-table col.mainbz-col-item {
+    width: 230px;
+}
+.fina-fixed-assets-mainbz-table col.mainbz-col-compare {
+    width: 68px;
+}
+.fina-fixed-assets-mainbz-compare-table col.mainbz-compare-col {
+    width: 68px;
+}
+.mainbz-delta-pos {
+    color: #c62828;
+    font-weight: 600;
+}
+.mainbz-delta-neg {
+    color: #2e7d32;
+    font-weight: 600;
+}
+.fina-fixed-assets-mainbz-empty {
+    font-size: 12px;
+    color: #666;
+    line-height: 1.4;
+    padding: 2px 0;
+}
+
+/* 图表区：略抬层次，与卡片表面一致 */
+#fina-fixed-assets-chart-wrap.fina-fixed-assets-chart-wrap {
+    flex: 1;
+    min-height: 220px;
+    width: 100%;
+    margin-top: 4px;
+    /* 上边距收紧，减少图例与卡片顶边、图例与柱区之间的留白 */
+    padding: 3px 6px 6px;
+    border-radius: 8px;
+    border: 1px solid var(--rt-monitor-border-subtle, #e8ecf0);
+    background: var(--rt-monitor-surface, #fff);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+    box-sizing: border-box;
+}
+
+/* 固定资产弹窗：单季经营指标宽表（横向滚动，首列指标 sticky） */
+.fina-fixed-assets-operating-data-wrap {
+    width: 100%;
+    margin-top: 8px;
+    padding: 6px 8px 8px;
+    border-radius: 8px;
+    border: 1px dashed var(--rt-monitor-border-subtle, #cbd5e1);
+    background: #fafbfc;
+    box-sizing: border-box;
+}
+.fina-fa-opdata-scroll {
+    overflow-x: auto;
+    max-width: 100%;
+    -webkit-overflow-scrolling: touch;
+}
+.fina-fa-opdata-table {
+    border-collapse: collapse;
+    font-size: 11px;
+    font-family: var(--rt-monitor-font-stack, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif);
+    white-space: nowrap;
+}
+.fina-fa-opdata-table th,
+.fina-fa-opdata-table td {
+    border: 1px solid #e2e8f0;
+    padding: 5px 8px;
+    text-align: center;
+    vertical-align: middle;
+}
+.fina-fa-opdata-table thead th {
+    background: #f1f5f9;
+    color: #334155;
+    font-weight: 600;
+}
+.fina-fa-opdata-corner,
+.fina-fa-opdata-rowhead {
+    text-align: left;
+    font-weight: 600;
+    color: #334155;
+    background: #f8fafc;
+}
+/* 指标列在表右：横滚时贴右缘固定，左侧阴影与数值区分隔 */
+.fina-fa-opdata-rowhead {
+    position: sticky;
+    right: 0;
+    z-index: 1;
+    min-width: 11em;
+    box-shadow: -1px 0 0 #e2e8f0;
+}
+.fina-fa-opdata-corner {
+    position: sticky;
+    right: 0;
+    z-index: 2;
+    min-width: 11em;
+    box-shadow: -1px 0 0 #e2e8f0;
+}
+.fina-fa-opdata-num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+}
+/* 营业收入同比 / 营业利润同比：>30% 浅蓝底（与主营构成「产品·序号1」#e3f2fd 同源风格） */
+.fina-fa-opdata-num.fina-fa-opdata-yoy-over-30 {
+    background-color: #e3f2fd;
+    font-weight: 600;
+    color: #0d47a1;
+    box-shadow: inset 0 0 0 1px rgba(25, 118, 210, 0.28);
+}
+/* ROE(扣非)：>4 浅黄底（与主营构成「地区·序号1」#fff3e0 同暖色系，贴近图二 #FEF3E2） */
+.fina-fa-opdata-num.fina-fa-opdata-roep-over-4 {
+    background-color: #fef3e2;
+    font-weight: 600;
+    color: #7c2d12;
+    box-shadow: inset 0 0 0 1px rgba(180, 83, 9, 0.22);
+}
+/* 稿表每行：玫红=最大，青绿=最小，琥珀黄=中位数；双类与同比/ROE 强调同级，置后覆盖 */
+.fina-fa-opdata-num.fina-fa-opdata-cell-max {
+    background: #fecdd3;
+    color: #9f1239;
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px rgba(190, 18, 60, 0.35);
+}
+.fina-fa-opdata-num.fina-fa-opdata-cell-min {
+    background: #99f6e4;
+    color: #0f766e;
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px rgba(13, 148, 136, 0.35);
+}
+.fina-fa-opdata-num.fina-fa-opdata-cell-median {
+    background: #fde68a;
+    color: #78350f;
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px rgba(180, 83, 9, 0.38);
+}
+
+/* 负值：翡翠绿字（沿袭「绿示负」习惯）；与玫红/琥珀对比强，与「最小」整格铺青绿底区分——语义不同 */
+.fina-fa-opdata-num.fina-fa-opdata-negative {
+    color: #047857;
+    font-weight: 700;
+}
+.fina-fa-opdata-num.fina-fa-opdata-cell-max.fina-fa-opdata-negative {
+    color: #065f46;
+}
+.fina-fa-opdata-num.fina-fa-opdata-cell-min.fina-fa-opdata-negative {
+    color: #042f2e;
+}
+.fina-fa-opdata-num.fina-fa-opdata-cell-median.fina-fa-opdata-negative {
+    color: #065f46;
+}
+
+.bias-series-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(250, 250, 250, 0.95);
+    font-size: var(--rt-monitor-font-data);
+    color: #666;
+    border-radius: 6px;
+}
+.bias-series-msg {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.98);
+    font-size: var(--rt-monitor-font-data);
+    color: #c0392b;
+    text-align: center;
+    padding: 16px;
+    border-radius: 6px;
+}
+
+.lbzt-detail-modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 210;
+    background: rgba(0, 0, 0, 0.32);
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(2px);
+    overscroll-behavior: contain;
+}
+.lbzt-detail-modal-overlay.is-open {
+    display: flex;
+}
+.lbzt-detail-modal.lbzt-detail-modal-shell {
+    background: #fff;
+    border-radius: 8px;
+    border: 1px solid #e8ecf0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+    width: 1120px;
+    min-width: 320px;
+    min-height: 320px;
+    max-width: min(96vw, 100%);
+    max-height: 95vh;
+    overflow: auto;
+    resize: both;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+}
+.lbzt-detail-modal-header {
+    padding: 10px 16px 8px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #fafafa;
+}
+.lbzt-detail-modal-title {
+    margin: 0;
+    font-size: var(--rt-monitor-font-title);
+    font-weight: 600;
+    color: #444;
+    line-height: 1.4;
+}
+.lbzt-detail-modal-close {
+    padding: 5px 12px;
+    font-size: var(--rt-monitor-font-data);
+    color: #555;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.lbzt-detail-modal-close:hover {
+    background: #f5f5f5;
+    border-color: #ddd;
+    color: #333;
+}
+.lbzt-detail-modal-close:active {
+    background: #eceff1;
+    border-color: #cfd8dc;
+}
+.lbzt-detail-modal-body {
+    position: relative;
+    padding: 12px 16px 16px;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.lbzt-detail-loading,
+.lbzt-detail-msg {
+    position: absolute;
+    inset: 12px 16px 16px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.96);
+    font-size: var(--rt-monitor-font-data);
+    color: #555;
+    z-index: 1;
+}
+.lbzt-detail-msg {
+    color: #c0392b;
+}
+.lbzt-detail-table-wrap {
+    flex: 1;
+    min-height: 120px;
+    overflow: auto;
+}
+.lbzt-detail-table td:nth-child(3),
+.lbzt-detail-table td:nth-child(4),
+.lbzt-detail-table th:nth-child(3),
+.lbzt-detail-table th:nth-child(4) {
+    text-align: center;
+}
+/* 弹窗涨跌幅：红涨绿跌（myuiux 一致） */
+.lbzt-detail-table td.rise {
+    color: #e74c3c;
+}
+.lbzt-detail-table td.fall {
+    color: #27ae60;
+}
+
+/* 首行四表：与内嵌样式一致（外链备份） */
+.rt-monitor .container .median-quad-row {
+    display: flex !important;
+    flex-direction: column !important;
+    flex-wrap: nowrap !important;
+    align-items: flex-start !important;
+    justify-content: flex-start !important;
+    gap: var(--rt-monitor-quad-gap) !important;
+    width: max-content !important;
+    min-width: min-content !important;
+    max-width: none !important;
+    overflow-x: visible !important;
+}
+.rt-monitor .container #median-quad-row .median-table-wrap {
+    margin: 0 !important;
+}
+
+/* 减弱动画偏好：弹窗毛玻璃关闭；按钮过渡关闭（指南：尊重 prefers-reduced-motion） */
+@media (prefers-reduced-motion: reduce) {
+    .bias-series-modal-overlay,
+    .lbzt-detail-modal-overlay {
+        backdrop-filter: none;
+    }
+    body.rt-monitor .config-trigger,
+    body.rt-monitor .btn-refresh-daily,
+    body.rt-monitor .btn-refresh,
+    body.rt-monitor .config-close,
+    body.rt-monitor .btn-ma-sr-save {
+        transition: none;
+    }
+}
+/* 代码更新时间：2026-04-09 12:28 首块上下行+上行三表横排；#median-quad-row 内卡片 margin:0 禁双缝 */
+/* 代码更新时间：2026-04-09 12:21 首块 flex+左纵叠右 2×2，竖缝统一 quad-gap；峰值列居中 !important */
+/* 代码更新时间：2026-04-09 12:25 median-quad 3×2：成交额在涨跌幅下、涨跌家数同排跨两列 */
+/* 代码更新时间：2026-04-06 23:40 */
+/* 代码更新时间：2026-04-14 08:36 Top30：--rt-monitor-top-moves-code-name-h-gap 代码列与名称列间距 */
+/* 代码更新时间：2026-04-14 08:40 Top30：--rt-monitor-top-moves-metric-industry-h-gap 回落回升%与申万列间距 */
+/* 代码更新时间：2026-04-14 涨跌家数表：12px 字号、行高1.35、数值行2px5px、标签行3px6px、标题区略紧 */
+/* 代码更新时间：2026-04-14 涨跌家数：与成交额（亿）median 表同行高（font-data、line-height-table、6px10px） */
+/* 代码更新时间：2026-04-16 06:59 主监控顶栏配置下「财报」入口链接样式 */
+/* 代码更新时间：2026-04-16 两融独立页 /rt-monitor/margin；顶栏「财报|两融」与隐藏「刷新日频」 */
+/* 代码更新时间：2026-04-16 08:07 body.rt-monitor 四边留白 12px→3px；RT_MONITOR_STATIC_VER 20260416-5 */
+/* 代码更新时间：2026-04-16 11:54 财报表筛选浮层定位见 rt_monitor.js 钳制（本节未改 class） */
+/* 代码更新时间：2026-04-16 14:33 财报表 hover 整行浅冰蓝高亮（#dfefff / #d7e9ff） */
+/* 代码更新时间：2026-04-17 11:41 固定资产弹窗：msg 移入 chart-wrap，避免 absolute 相对遮罩盖住整页 */
+/* 代码更新时间：2026-04-17 12:15 固定资产弹窗去掉 caption 样式块 */
+/* 代码更新时间：2026-04-17 12:28 固定资产弹窗标题行代码名称+查询行 */
+/* 代码更新时间：2026-04-17 12:20 连板明细/筛选方案弹窗可 resize；几何 localStorage 与 JS 同步 */
+/* 代码更新时间：2026-04-17 12:29 固定资产弹窗：标题三栏网格居中；查询区两行+加载按钮居中覆写 btn-refresh 全宽 */
+/* 代码更新时间：2026-04-17 12:35 固定资产弹窗：表头合并居中；查询单行短输入+紧贴按钮；图表区内边距与壳样式 */
+/* 代码更新时间：2026-04-17 12:42 固定资产：标题与输入同一行；去加载按钮；拖曳排除 input */
+/* 代码更新时间：2026-04-18 13:35 财报表 thead 两行垂直 sticky；外层卡片 overflow 放行视口 sticky；JS 写入第一行高度变量 */
+/* 代码更新时间：2026-04-18 13:44 .fina-arturn-table-wrap 增加 overflow-y:clip，避免 overflow-x:auto 配对把 y 算成 auto 切断视口 sticky */
+/* 代码更新时间：2026-04-18 13:51 财报表：横向滚动改视口承载，去掉 wrap 的 overflow-x:auto（clip 仍不稳）；JS 同步 scrollingElement */
+/* 代码更新时间：2026-04-18 14:03 财报表顶栏横滚迭代（随后已移除顶栏 DOM，仅视口底部横滚） */
+/* 代码更新时间：2026-04-18 14:15 移除财报顶栏横向滚动条 DOM/CSS，仅用视口底部滚动条 */
+/* 代码更新时间：2026-04-18 14:10 财报表体整行斑马底色统一；分组竖线 2px→1px；卡片 padding 略收紧 */
+/* 代码更新时间：2026-04-18 14:14 应收表 thead：去冻结区投影、统一底色（后用户偏好恢复 #fafafa） */
+/* 代码更新时间：2026-04-18 14:19 应收表：表头恢复 #fafafa；去卡片顶内边距白缝；thead 禁 box-shadow；冻结列 tbody 改细线 */
+/* 代码更新时间：2026-04-18 14:22 应收表第一行压缩：metric/齿轮/fina-arturn-th-group padding；--fina-arturn-thead-row1-height 默认 34px（JS 仍会实测） */
+/* 代码更新时间：2026-04-18 14:25 应收表第一行再收 1px：齿轮 24→23、--fina-arturn-thead-row1-height 33 */
+/* 代码更新时间：2026-04-18 14:27 应收表第一行再收 1px：齿轮 23→22、--fina-arturn-thead-row1-height 32 */
+/* 代码更新时间：2026-04-18 14:30 方案入口改「配置」文字+紧凑按钮样式；metric 上下 padding 1px；默认行高占位 28px */
+/* 代码更新时间：2026-04-18 15:32 应收表卡片去 padding-bottom，消表体下缘与圆角之间的白托底叠层 */
+/* 代码更新时间：2026-04-18 15:39 财报单页：html 滚动条轨道与页面灰底一致；末行 td 底边/overflow；区块底 margin 0 */
+/* 代码更新时间：2026-04-18 19:19 应收表：单季营收增「新高」列后，分组粗竖线 nth-child 自 r 段起整体 +1（与第一行 colspan 对齐） */
+/* 代码更新时间：2026-04-18 19:23 分组竖线：2px 深灰（--fina-arturn-vline-group*），列间竖线仍 1px；RT_MONITOR_STATIC_VER 20260418-23 */
+/* 代码更新时间：2026-04-18 19:28 thead 第一行/第二行底横线与分组线同 token；RT_MONITOR_STATIC_VER 20260418-24 */
+/* 代码更新时间：2026-04-18 19:38 第二行表头浅竖线排除分组起列（:not 8,11,…,97），避免与 2px 分组线层叠冲突；RT_MONITOR_STATIC_VER 20260418-26 */
+/* 代码更新时间：2026-04-18 19:42 第一行 metric 格底边压过 .median-table 1px，与分组横线同为 2px；RT_MONITOR_STATIC_VER 20260418-27 */
+/* 代码更新时间：2026-04-18 19:59 合同负债区增「新高」列：固定资产组粗线 97→98，thead :not 末项同步；107 列；RT_MONITOR_STATIC_VER 20260418-28 */
+/* 代码更新时间：2026-04-18 20:09 第一行空档拆成两 th（公告日/上市日），分组左线 nth-child(3)→(4)…(17)；RT_MONITOR_STATIC_VER 20260418-29 */
+/* 代码更新时间：2026-04-18 20:26 修复：tbody 勿叠 :not(7)（会抬浅线特异性压过粗线）；thead 浅线保留 :not(7) 与粗线分工；RT_MONITOR_STATIC_VER 20260418-31 */
+/* 代码更新时间：2026-04-18 20:35 冻结边界 2px 画在公告日列（第 6 列）右缘，横滚不丢；去分组规则里 th/td(7) 左线、表体 td(7) border-left:none；RT_MONITOR_STATIC_VER 20260418-32 */
+/* 代码更新时间：2026-04-19 应收表增单季经营活动净收益 10 列：第一行 th-group+1；粗线 41/51/60/…/108；:not 浅线；117 列；RT_MONITOR_STATIC_VER 20260419-1 */
+/* 代码更新时间：2026-04-19 应收表增单季扣非净利润 10 列：粗线顺延；127 列；RT_MONITOR_STATIC_VER 20260419-2 */
+/* 代码更新时间：2026-04-19 财报表扣非右侧增单季 OCF/营收%、OCF/经营净收益% 共 18 列：145 列、分组线 115/124/136；RT_MONITOR_STATIC_VER 20260419-4 */
+/* 代码更新时间：2026-04-19 单季 ocs/oco 接口改直接库值（文案/缓存）；RT_MONITOR_STATIC_VER 20260419-5 */
+/* 代码更新时间：2026-04-19 单季 OCF/营收% 增新高列 ocs_high；146 列竖线；RT_MONITOR_STATIC_VER 20260419-6 */
+/* 代码更新时间：2026-04-19 单季 OCF/营收% 新高右侧增 ocs_wqcv（加权CV）；147 列竖线；RT_MONITOR_STATIC_VER 20260419-7 */
+/* 代码更新时间：2026-04-19 13:10 固定资产弹窗去掉第二张组合图 DOM；稿表去 caption；删 #chart2-wrap；RT_MONITOR_STATIC_VER 20260419-26 */
+/* 代码更新时间：2026-04-19 11:56 与 JS 双图协调（缓存 bust 随 RT_MONITOR_STATIC_VER 20260419-21） */
+/* 代码更新时间：2026-04-19 固定资产弹窗 .fina-fixed-assets-operating-data-wrap 稿用宽表样式；RT_MONITOR_STATIC_VER 20260419-23 */
+/* 代码更新时间：2026-04-19 13:03 稿表居中 + .fina-fa-opdata-cell-max/min 极值色；RT_MONITOR_STATIC_VER 20260419-24 */
+/* 代码更新时间：2026-04-19 13:05 max/min 极值配色对调；RT_MONITOR_STATIC_VER 20260419-25 */
+/* 代码更新时间：2026-04-19 13:16 稿表每行增加中位数琥珀底（.fina-fa-opdata-cell-median）；RT_MONITOR_STATIC_VER 20260419-27 */
+/* 代码更新时间：2026-04-19 13:19 稿表负值翡翠绿字（.fina-fa-opdata-negative），极值底色上加深绿；RT_MONITOR_STATIC_VER 20260419-28 */
+/* 代码更新时间：2026-04-19 15:29 固定资产主营构成 .mainbz-rank-1-row 浅黄底 #fff9e6；RT_MONITOR_STATIC_VER 20260419-35 */
+/* 代码更新时间：2026-04-19 15:34 mainbz-rank-1-P/I/D 分区色；类别 rowspan 白底；RT_MONITOR_STATIC_VER 20260419-36 */
+/* 代码更新时间：2026-04-19 16:06 稿表指标列改 sticky right + 左阴影；RT_MONITOR_STATIC_VER 20260419-38 */
+/* 代码更新时间：2026-04-19 17:11 .fina-fa-opdata-yoy-over-30（同比>30 浅绿）；RT_MONITOR_STATIC_VER 20260419-40 */
+/* 代码更新时间：2026-04-19 17:15 .fina-fa-opdata-yoy-over-30 浅蓝 #e3f2fd；RT_MONITOR_STATIC_VER 20260419-41 */
+/* 代码更新时间：2026-04-19 17:20 .fina-fa-opdata-roep-over-4 ROE>4 浅黄 #fef3e2；RT_MONITOR_STATIC_VER 20260419-42 */
+/* 代码更新时间：2026-04-19 17:27 极值三色 .num.cell-max/min/median 双类（与同比/ROE 底同权、序后覆盖）；RT_MONITOR_STATIC_VER 20260419-43 */
+/* 代码更新时间：2026-04-19 18:39 #fina-fixed-assets-modal-overlay 透明遮罩、去 blur，财报表不灰；RT_MONITOR_STATIC_VER 20260419-45 */
+/* 代码更新时间：2026-04-19 18:46 固定资产遮罩 pointer-events:none + 弹窗壳 auto，主表穿透点击刷新弹窗；RT_MONITOR_STATIC_VER 20260419-46 */
+/* 代码更新时间：2026-04-19 20:00 筛选方案弹窗 .fina-arturn-scheme-stock-scope 股票范围复选行；RT_MONITOR_STATIC_VER 20260419-47 */
+/* 代码更新时间：2026-04-19 20:09 #fina-arturn-scheme-modal-overlay 透明遮罩+穿透点击（对齐固定资产弹窗）；RT_MONITOR_STATIC_VER 20260419-48 */
+/* 代码更新时间：2026-04-20 09:47 body.rt-monitor-main：BIAS/超跌/涨跌家数明细弹窗遮罩透明（对齐财报页）；RT_MONITOR_STATIC_VER 20260420-1 */
+/* 代码更新时间：2026-04-21 财报表扣非右侧增单季 FCF：分组粗线 71/81/92…/158 + th-group nth 至 23；167 列；RT_MONITOR_STATIC_VER 20260421-3 */
+/* 代码更新时间：2026-04-21 固定资产弹窗指标条两行+FQM 四快照；RT_MONITOR_STATIC_VER 20260421-4 */
+/* 代码更新时间：2026-04-21 净现金强调红 .fina-fixed-assets-metric-netcash；RT_MONITOR_STATIC_VER 20260421-5 */
