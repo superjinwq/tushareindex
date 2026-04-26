@@ -1,0 +1,127 @@
+---
+description: 财报筛选表（应收账款）分栏架构、表头布局与 nth-child 竖线规则（勿擅自改动）
+alwaysApply: false
+---
+
+## 财报筛选表（`#fina-arturn-table`）—— 技术架构与版式规范
+
+---
+
+### 一、横向滚动性能架构：split-pane 分栏（2026-04 定稿）
+
+#### 背景
+旧方案（`position: sticky; left:`）在 Chrome 中**无论 local overflow 还是 document scroll，横向 sticky 均走主线程**，导致 2500+ 行时横向拖动严重卡鼠标（lnput lag）。纵向 sticky-top 经 Chrome 优化可走 compositor-thread，因此纵向一直流畅。
+
+#### 解决方案：两面板分栏
+| 面板 | ID | 作用 | 滚动 |
+|------|----|------|------|
+| 冻结面板（左） | `#fina-arturn-frozen-pane` | 股票代码/名称/申万/总市值/自由市值/公告日（6 列） | `overflow: hidden`；scrollTop 由 JS 同步 |
+| 可滚动面板（右） | `#fina-arturn-scroll-pane` | 上市日 … 固定资产（185 列） | `overflow: auto`，纯原生 compositor-thread |
+
+两个面板并排，外层 `.fina-arturn-split-wrap` 为 flex-row，页面全高 flex 布局（`body/container` `height: 100vh; overflow: hidden`）。**彻底无 sticky-left，横向滚动零主线程开销。**
+
+#### 关键 JS 逻辑（`rt_monitor_fina.js`）
+
+- **`buildRowHtml(row, i)`** → 返回 `{f: 冻结6列HTML, s: 可滚动185列HTML}`
+- **分批渲染**：每 chunk 同时 `insertAdjacentHTML` 到 `#fina-arturn-frozen-tbody` 和 `#fina-arturn-tbody`
+- **thead 渲染**：`#fina-arturn-frozen-thead` 含 metric-cell(colspan=5)+公告日组+6个列头；`#fina-arturn-thead` 含上市日组起全部
+- **`syncFinaArturnTheadStickyHeights()`**：先清除旧 height，测量两边每行自然高度，取 max 后同时写入两边 `tr.style.height`，再更新 `--fina-arturn-thead-row1-height` CSS 变量（供第二行 sticky top 定位）
+- **`initFinaArturnHorizScrollHelpers()`** 负责：
+  1. `scrollPane.scroll` → `frozenPane.scrollTop = scrollPane.scrollTop`（纵向同步）
+  2. 行悬停高亮同步：`frozenTbody` / `scrollTbody` 各监听 mouseover/out，按 `sectionRowIndex` 匹配行，toggle `fina-arturn-row-hover` 类
+  3. 冻结 thead 的 sort / filter 点击委托（`frozenThead.addEventListener('click', ...)`）
+  4. Shift+滚轮 → 横向
+- **`renderFinaMetricHeaderFilterButtons`**：同时更新 `#fina-arturn-thead` 和 `#fina-arturn-frozen-thead` 的筛选按钮激活状态
+
+#### 行高对齐原则
+- **thead**：JS 同步（见 `syncFinaArturnTheadStickyHeights`）
+- **tbody**：两表共享同一套 padding/font-size CSS（`.fina-arturn-table.median-table td { padding: 4px 4px; line-height: 1.45 }`），单行文本高度天然一致；若任一侧出现换行，须检查列宽约束
+
+---
+
+### 二、列分布
+
+#### 冻结面板（`#fina-arturn-frozen-table`，6 列）
+| 冻结列序 | 字段 | key |
+|---------|------|-----|
+| 1 | 股票代码 | tsCode |
+| 2 | 股票名称 | secName |
+| 3 | 申万二级行业 | swName |
+| 4 | 总市值 | total_mv_yi |
+| 5 | 自由市值 | free_mv_yi |
+| 6 | 公告日 | a0 |
+
+#### 可滚动面板（`#fina-arturn-table`，185 列）
+从「上市日」(`listDate`) 起，依次为市值/货币、资产负债率、带息负债率、营收、PE、应收%、ROE×4、应收周转×4、毛利率×4、经营现金流比率×4×2、单季各组（含同比/利润增速差等）、存货、合同负债、固定资产等，共 185 列（与 thead 第二行 `th` 数一致；增删列后须重数）。
+
+**列序关系**：scroll 表第 N 列 = 旧单表第 N+6 列。
+
+---
+
+### 三、thead 布局（勿擅自改 colspan / 行序）
+
+1. **第一行 `tr.fina-arturn-thead-group`**
+   - **冻结 thead（frozen-thead）**：第 1 格 `colspan="5"`（metric-cell，含齿轮/`#fina-arturn-head-updated`/`#fina-arturn-msg`）+ 第 2 格 `colspan="1"`（公告日空格）
+   - **scroll thead**：第 1 格 `colspan="1"`（上市日空格）+ 依次 TTM、ROE扣非、应收周转……固定资产各分组格，colspan 以 `renderFinaMetricTable` 为准
+
+2. **第二行 `tr.fina-arturn-thead-cols`**：冻结 6 列在 frozen-thead，上市日起 185 列在 scroll thead
+
+3. 齿轮/配置按钮、`#fina-arturn-head-updated`、`#fina-arturn-msg` 均在 **frozen-thead** 的 metric-cell 内，按 ID 访问无需修改其他代码
+
+---
+
+### 四、CSS nth-child 分组竖线（`rt_monitor.css`）
+
+> 所有粗线规则已改为 `#fina-arturn-table`（ID 选择器），仅作用于可滚动面板，**不影响冻结面板**。改列后须同步更新下表。
+
+#### scroll 表 tbody / thead-cols 分组粗竖线列位置
+（= 旧单表列号 − 6，冻结6列已独立）
+
+| 分组起始列 | scroll 内 nth-child | 旧单表 nth-child |
+|-----------|--------------------|--------------------|
+| 营收（TTM） | **2** | 8 |
+| roe0（ROE扣非） | **5** | 11 |
+| p0（应收周转） | **9** | 15 |
+| g0（毛利率） | **13** | 19 |
+| c0（经营现金/经营） | **17** | 23 |
+| o0（经营现金/营收） | **21** | 27 |
+| s_high（单季收入） | **25** | 31 |
+| cf_high（单季现金流） | **35** | 41 |
+| oi_high（单季经营净收益） | **45** | 51 |
+| dtp_high（单季扣非） | **55** | 61 |
+| fst_high（FCF） | **65** | 71 |
+| ocs_high（单季现金/营收%） | **75** | 81 |
+| oco0（单季现金/经营%） | **89** | 95 |
+| r0（营收同比） | **98** | 104 |
+| u0（营业利润同比） | **107** | 113 |
+| v0（利润增速−收入增速，百分点） | **116** | 122 |
+| m0（毛利率%） | **125** | 131 |
+| n0（净利率%） | **134** | 140 |
+| t0（ROE扣非%） | **143** | 149 |
+| invchg（存货 Chg%，非 inv0） | **152** | 158 |
+| kchg（合同负债，**非 k0**） | **164** | 170 |
+| fchg（固定资产，**非 f0**） | **176** | 182 |
+
+> **易错**：合同负债组首列是 `kchg`（Chg%），固定资产组首列是 `fchg`（Chg%）；若错标到 `k0`/`f0`，竖线右偏一列。
+
+#### scroll 表 thead-group（第一行）分组粗竖线
+scroll thead-group 第 1 格为「上市日」空格（无粗线），**从第 2 格起**（TTM）到第 23 格（固定资产）均加粗竖线：
+
+```css
+#fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(2),
+/* ... nth-child(3) ~ nth-child(23) */
+```
+
+（= 旧单表 nth-child(4)~(23) 各减 2）
+
+---
+
+### 五、增删列的操作流程
+
+1. 在 `buildRowHtml` 里同时修改 `fHtml`（冻结，仅前6列）和 `sHtml`（scroll，其余列）
+2. 在 `renderFinaMetricTable` 里同时修改 `frozenThead.innerHTML` 和 `thead.innerHTML`
+3. 重数 scroll 表列号，更新 `rt_monitor.css` 中：
+   - `#fina-arturn-table … thead-group th:nth-child(N)` 粗线
+   - `#fina-arturn-table … thead-cols th:nth-child(N)` 粗线 + NOT 列表
+   - `#fina-arturn-table … tbody > tr > td:nth-child(N)` 粗线
+4. 递增 `RT_MONITOR_STATIC_VER` 发版

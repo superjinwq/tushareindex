@@ -18,16 +18,46 @@ function rtMonitorApiUrl(path) {
     pre = pre != null && pre !== '' ? String(pre).replace(/\/+$/, '') : '';
     return pre ? pre + p : p;
 }
+/** 财报表首屏：与 #fina-boot-hint 成对，避免 fetch 挂起或链上异常时永远停留在「正在加载…」 */
+function hideFinaBootHint() {
+    var el = document.getElementById('fina-boot-hint');
+    if (el) el.style.display = 'none';
+}
+/** 主表 API 无默认超时，慢库会长期 pending；到点 abort 以便走 catch 并收起首屏提示 */
+var FINA_METRIC_TABLE_FETCH_TIMEOUT_MS = 240000;
 var FINA_ARTURN_SCHEME_STORAGE_KEY = 'rt_monitor_fina_arturn_filter_schemes_v1';
 var FINA_ARTURN_VIEW_STATE_STORAGE_KEY = 'rt_monitor_fina_arturn_view_state_v1';
 var FINA_ARTURN_SCHEME_APPLY_PREF_KEY = 'rt_monitor_fina_arturn_scheme_apply_pref_v1';
 var finaFixedAssetsChartInstance = null;
+var finaCashCreateChartInstance = null;
+var finaWorkingCapTurnoverChartInstance = null;
+var finaCapEffChartInstance = null;
+var finaFixedAssetsCurrentRows = [];
+var finaFixedAssetsCurrentTitle = '';
 var FINA_FIXED_ASSETS_SERIES_LIMIT = 25;
 /** 表头合并文案中的图表主题（与模板默认一致） */
-var FINA_FIXED_ASSETS_HEADER_CHART_TITLE = '固定资产、在建工程、合同负债、季度营收';
+var FINA_FIXED_ASSETS_HEADER_CHART_TITLE = '速览';
 var FINA_FIXED_ASSETS_MODAL_LAYOUT_STORAGE_KEY = 'rt_monitor_fina_fixed_assets_modal_layout_v1';
+var FINA_FIXED_ASSETS_GROWTH_CONFIG_STORAGE_KEY = 'rt_monitor_fina_fixed_assets_growth_metrics_v1';
+var FINA_FIXED_ASSETS_GROWTH_METRIC_OPTIONS = [
+    { label: '营业收入同比(%)', key: 'q_gr_yoy' },
+    { label: '营业收入环比(%)', key: 'q_gr_qoq' },
+    { label: '营业利润同比(%)', key: 'q_op_yoy' },
+    { label: '营业利润环比(%)', key: 'q_op_qoq' },
+    { label: '归母净利同比(%)', key: 'q_netprofit_yoy' },
+    { label: '归母净利环比(%)', key: 'q_netprofit_qoq' },
+];
 var finaFixedAssetsModalLayoutOpenTs = 0;
 var finaFixedAssetsModalSaveTimer = null;
+var FINA_CASH_CREATE_MODAL_LAYOUT_STORAGE_KEY = 'rt_monitor_fina_cash_create_modal_layout_v1';
+var finaCashCreateModalLayoutOpenTs = 0;
+var finaCashCreateModalSaveTimer = null;
+var FINA_WORKING_CAP_MODAL_LAYOUT_STORAGE_KEY = 'rt_monitor_fina_working_cap_modal_layout_v1';
+var finaWorkingCapModalLayoutOpenTs = 0;
+var finaWorkingCapModalSaveTimer = null;
+var FINA_CAP_EFF_MODAL_LAYOUT_STORAGE_KEY = 'rt_monitor_fina_cap_eff_modal_layout_v1';
+var finaCapEffModalLayoutOpenTs = 0;
+var finaCapEffModalSaveTimer = null;
 var FINA_SCHEME_MODAL_LAYOUT_STORAGE_KEY = 'rt_monitor_fina_arturn_scheme_modal_layout_v1';
 var finaSchemeModalLayoutOpenTs = 0;
 var finaSchemeModalSaveTimer = null;
@@ -47,6 +77,24 @@ function showFinaFixedAssetsMsg(text) {
     el.textContent = text || '';
     el.style.display = text ? 'flex' : 'none';
 }
+function showFinaCashCreateMsg(text) {
+    var el = document.getElementById('fina-cash-create-modal-msg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.display = text ? 'flex' : 'none';
+}
+function showFinaWorkingCapMsg(text) {
+    var el = document.getElementById('fina-working-cap-modal-msg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.display = text ? 'flex' : 'none';
+}
+function showFinaCapEffMsg(text) {
+    var el = document.getElementById('fina-cap-eff-modal-msg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.display = text ? 'flex' : 'none';
+}
 var finaArturnState = {
     selectedEndDate: '',
     periods: [],
@@ -57,6 +105,9 @@ var finaArturnState = {
         tsCode: '', secName: '', swName: '',
         total_mv_yi: '', free_mv_yi: '',
         a0: '', listDate: '',
+        money_cap_ratio_pct: '',
+        fqm_debt_to_assets: '',
+        fqm_interestdebt_ratio: '',
         ttm_revenue_yi: '',
         pe_ttm: '',
         ar_pct: '',
@@ -82,13 +133,18 @@ var finaArturnState = {
         m0: '', m1: '', m2: '', m3: '', m4: '', m5: '', m6: '', m7: '', m8: '',
         n0: '', n1: '', n2: '', n3: '', n4: '', n5: '', n6: '', n7: '', n8: '',
         t0: '', t1: '', t2: '', t3: '', t4: '', t5: '', t6: '', t7: '', t8: '',
+        invchg: '',
+        inv_revenue_pct: '',
+        inv_high: '',
+        inv0: '', inv1: '', inv2: '', inv3: '', inv4: '', inv5: '', inv6: '', inv7: '', inv8: '',
         kchg: '',
         k_revenue_pct: '',
         k_high: '',
         k0: '', k1: '', k2: '', k3: '', k4: '', k5: '', k6: '', k7: '', k8: '',
         fchg: '',
-        f0: '', f1: '', f2: '', f3: '', f4: '', f5: '', f6: '', f7: '', f8: '',
-        u0: '', u1: '', u2: '', u3: '', u4: '', u5: '', u6: '', u7: '', u8: ''
+        f0: '', f1: '', f2: '', f3: '', f4: '', f5: '', f6: '', f7: '',         f8: '',
+        u0: '', u1: '', u2: '', u3: '', u4: '', u5: '', u6: '', u7: '', u8: '',
+        v0: '', v1: '', v2: '', v3: '', v4: '', v5: '', v6: '', v7: '', v8: ''
     },
     activeFilterKey: '',
     /** 排序：sortKey 为空表示不排序；sortDir 为 asc|desc（仅当 sortKey 非空时有效） */
@@ -134,6 +190,8 @@ var FINA_METRIC_PANEL = {
             schemeApply: 'fina-arturn-apply-scheme-btn',
             schemeDelete: 'fina-arturn-delete-scheme-btn',
             schemeResetFilters: 'fina-arturn-reset-filters-btn',
+            schemePreviewWrap: 'fina-arturn-scheme-preview-wrap',
+            schemePreviewBody: 'fina-arturn-scheme-preview-body',
             excludeBj: 'fina-arturn-exclude-bj',
             excludeSt: 'fina-arturn-exclude-st'
         }
@@ -141,6 +199,97 @@ var FINA_METRIC_PANEL = {
 };
 function _finaMetricState() {
     return finaArturnState;
+}
+
+/* ==================== 筛选弹窗：列类型 + per-key 历史记录（v20260423-47） ====================
+   需求：
+    1. 打开筛选弹窗时按「当前值 > 最近一次历史 > 空」顺序预填；用户按「确定」即应用
+    2. 历史按列独立存储（LRU 去重 max 12 条），「重置所有筛选」不清 history
+    3. 历史值按列类型过滤：
+         number   → 仅保留 >= < > <= = != 数值 / a-b 区间 / 纯数
+         date     → 仅保留 yyyymmdd / yyyy-mm-dd / yyyy/mm/dd / 纯数字日期片段
+         binary01 → 仅保留 0/1（含 =0/=1）
+         text     → 任意非空字符串
+*/
+var FINA_FILTER_TYPE = {
+    tsCode: 'text', secName: 'text', swName: 'text',
+    a0: 'date', listDate: 'date',
+    s_high: 'binary01', cf_high: 'binary01', oi_high: 'binary01',
+    dtp_high: 'binary01', fst_high: 'binary01', ocs_high: 'binary01',
+    inv_high: 'binary01', k_high: 'binary01'
+};
+function finaMetricFilterKeyType(key) {
+    return FINA_FILTER_TYPE[key] || 'number';
+}
+var FINA_FILTER_HISTORY_KEY = 'fina-arturn-filter-history';
+var FINA_FILTER_HISTORY_MAX = 12;
+function loadFinaFilterHistory() {
+    try {
+        var raw = localStorage.getItem(FINA_FILTER_HISTORY_KEY);
+        if (!raw) return {};
+        var obj = JSON.parse(raw);
+        return (obj && typeof obj === 'object') ? obj : {};
+    } catch (e) { return {}; }
+}
+function saveFinaFilterHistory(obj) {
+    try { localStorage.setItem(FINA_FILTER_HISTORY_KEY, JSON.stringify(obj || {})); }
+    catch (e) { /* quota / 无痕模式，忽略 */ }
+}
+function pushFinaFilterHistory(filterKey, value) {
+    if (!filterKey) return;
+    var v = String(value == null ? '' : value).trim();
+    if (!v) return;
+    var all = loadFinaFilterHistory();
+    var list = Array.isArray(all[filterKey]) ? all[filterKey] : [];
+    /* 去重（大小写不敏感 + 去空白）：先剔除已存在的同值项 */
+    var vLow = v.toLowerCase();
+    list = list.filter(function (x) { return String(x || '').trim().toLowerCase() !== vLow; });
+    list.unshift(v);
+    if (list.length > FINA_FILTER_HISTORY_MAX) list.length = FINA_FILTER_HISTORY_MAX;
+    all[filterKey] = list;
+    saveFinaFilterHistory(all);
+}
+/* 数值表达式：支持 >= <= > < = != + 数字（可带小数/负号/百分号），或区间 a-b（b 可空），或纯数 */
+var _FINA_NUM_RE = /^\s*(?:(?:>=|<=|!=|>|<|=)\s*-?\d+(?:\.\d+)?%?|-?\d+(?:\.\d+)?%?(?:\s*-\s*-?\d+(?:\.\d+)?%?)?)\s*$/;
+/* 日期：yyyymmdd(6-8 位数字)、yyyy-mm-dd / yyyy/mm/dd（年/月/日位数放宽），或带比较符 */
+var _FINA_DATE_RE = /^\s*(?:(?:>=|<=|!=|>|<|=)\s*)?(?:\d{4,8}|\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?|\d{2}[-/]\d{1,2})\s*$/;
+var _FINA_BIN_RE = /^\s*(?:=?\s*[01])\s*$/;
+function isFinaFilterValueValid(value, type) {
+    var v = String(value == null ? '' : value).trim();
+    if (!v) return false;
+    if (type === 'text') return true;
+    if (type === 'binary01') return _FINA_BIN_RE.test(v);
+    if (type === 'date') return _FINA_DATE_RE.test(v);
+    /* number：默认 */
+    return _FINA_NUM_RE.test(v);
+}
+/* 取过滤后的历史值列表（按列类型） */
+function getFinaFilterHistoryFor(filterKey) {
+    var list = loadFinaFilterHistory()[filterKey];
+    if (!Array.isArray(list)) return [];
+    var type = finaMetricFilterKeyType(filterKey);
+    return list.filter(function (v) { return isFinaFilterValueValid(v, type); });
+}
+
+/**
+ * 标记 rows 数据已变化（fetch 新数据时调用）：
+ *  - _rowsVersion 自增 → 触发下次 render 走全量重建而非快路径
+ *  - 清空 tr Map（旧引用已失效）
+ *  - 重置 DOM 构建版本
+ *  - 给每个 row 打 _origIdx 标记（供 filter/sort 快路径按原始索引定位 tr）
+ */
+function markFinaMetricRowsChanged(st) {
+    st._rowsVersion = (st._rowsVersion || 0) + 1;
+    st._domBuiltRowsVersion = -1;
+    st._frozenTrMap = null;
+    st._scrollTrMap = null;
+    if (Array.isArray(st.rows)) {
+        for (var i = 0; i < st.rows.length; i++) {
+            if (st.rows[i] && typeof st.rows[i] === 'object') {
+                st.rows[i]._origIdx = i;
+            }
+        }
+    }
 }
 
 function loadFinaMetricViewState(panelKey) {
@@ -240,6 +389,29 @@ function formatFinaQuarterLabel(endDate) {
 
 /** 与主监控 formatAxisInt 一致：Y 轴整数、无千分位 */
 var FINA_CHART_PAGE_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif';
+/** 固定资产弹窗图：保证高分屏/缩放下的绘制像素密度，降低「发虚」观感 */
+function getFinaFixedAssetsChartDpr() {
+    var dpr = window.devicePixelRatio || 1;
+    if (!isFinite(dpr) || dpr <= 0) dpr = 1;
+    return Math.min(3, Math.max(2, dpr));
+}
+/** 按点数自适应字号：点少可读性优先，点多避免重叠 */
+function getFinaFixedAssetsChartTextPreset(pointCount) {
+    var n = Number(pointCount) || 0;
+    if (n <= 0) {
+        return { axisFontSize: 11, labelFontSize: 12, labelStrokeWidth: 3 };
+    }
+    if (n <= 12) {
+        return { axisFontSize: 12, labelFontSize: 13, labelStrokeWidth: 3 };
+    }
+    if (n <= 20) {
+        return { axisFontSize: 11, labelFontSize: 12, labelStrokeWidth: 3 };
+    }
+    if (n <= 28) {
+        return { axisFontSize: 10, labelFontSize: 11, labelStrokeWidth: 2.5 };
+    }
+    return { axisFontSize: 9, labelFontSize: 10, labelStrokeWidth: 2 };
+}
 function finaFixedAssetsAxisInt(val) {
     if (val == null || (typeof val !== 'number' && isNaN(Number(val)))) return val;
     return String(Math.round(Number(val)));
@@ -516,7 +688,7 @@ function renderFinaFixedAssetsMainbzTable(payload) {
     el.innerHTML = '<div class="fina-fixed-assets-mainbz-dual">' + blocks.join('') + '</div>';
 }
 
-/** 与财报表 TTM 区 PE、营收 TTM 及单季列口径一致；payload 来自 /api/fina_fixed_assets_revenue_series */
+/** 与财报表 TTM 区 PE、营收 TTM 及单季列口径一致；payload 来自 /api/fina_fixed_assets_revenue_series；上市时间优先 payload.list_date（与 ts 对齐），否则 arturnRow.list_date */
 function renderFinaFixedAssetsMetricsBar(payload, arturnRow) {
     var el = document.getElementById('fina-fixed-assets-modal-metrics');
     if (!el) return;
@@ -553,6 +725,16 @@ function renderFinaFixedAssetsMetricsBar(payload, arturnRow) {
     var totalMvYi = formatFinaArturnValue(arturnRow && arturnRow.total_mv_yi, 1);
     var freeMvYi = formatFinaArturnValue(arturnRow && arturnRow.free_mv_yi, 1);
     var sw2Esc = _finaArturnEscCellText(sw2 || '--');
+    var actNameRaw = payload && payload.act_name != null ? String(payload.act_name).trim() : '';
+    if (!actNameRaw && arturnRow && arturnRow.act_name != null) {
+        actNameRaw = String(arturnRow.act_name).trim();
+    }
+    var actEntRaw = payload && payload.act_ent_type != null ? String(payload.act_ent_type).trim() : '';
+    if (!actEntRaw && arturnRow && arturnRow.act_ent_type != null) {
+        actEntRaw = String(arturnRow.act_ent_type).trim();
+    }
+    var actNameEsc = _finaArturnEscCellText(actNameRaw || '--');
+    var actEntEsc = _finaArturnEscCellText(actEntRaw || '--');
     var anchorValueHtml = wrapMetricValue(anchorEsc, '');
     var fcfTtmYi = formatFinaArturnValue(payload.fcf_star_ttm_yi, 2);
     function fmtNetDebtYiBlock() {
@@ -641,7 +823,26 @@ function renderFinaFixedAssetsMetricsBar(payload, arturnRow) {
             wrapMetricValue(cccTxt, cccCls) +
             '</span>'
     );
+    var listDateRaw = '';
+    if (payload && payload.list_date != null && String(payload.list_date).trim() !== '') {
+        listDateRaw = String(payload.list_date).trim();
+    } else if (arturnRow && arturnRow.list_date != null && String(arturnRow.list_date).trim() !== '') {
+        listDateRaw = String(arturnRow.list_date).trim();
+    }
+    var listDateDisp = listDateRaw ? formatFinaArturnAnnDate(listDateRaw) : '--';
+    var listDateValueHtml = listDateDisp;
+    if (listDateRaw && listDateDisp !== '--') {
+        var tenureZh = finaListingTenureZhFromNow(listDateRaw);
+        if (tenureZh) {
+            listDateValueHtml = listDateDisp + '\u00a0' + tenureZh;
+        }
+    }
     var rowMarket = [];
+    rowMarket.push(
+        '<span class="fina-fixed-assets-metric"><span class="fina-fixed-assets-metric-k">上市时间</span> ' +
+            wrapMetricValue(listDateValueHtml, '') +
+            '</span>'
+    );
     rowMarket.push(
         '<span class="fina-fixed-assets-metric"><span class="fina-fixed-assets-metric-k">PE</span> ' +
             wrapMetricValue(pe, '') +
@@ -658,8 +859,18 @@ function renderFinaFixedAssetsMetricsBar(payload, arturnRow) {
             '</span>'
     );
     rowMarket.push(
-        '<span class="fina-fixed-assets-metric"><span class="fina-fixed-assets-metric-k">申万二级行业</span> ' +
+        '<span class="fina-fixed-assets-metric"><span class="fina-fixed-assets-metric-k">申万行业</span> ' +
             wrapMetricValue(sw2Esc, '') +
+            '</span>'
+    );
+    rowMarket.push(
+        '<span class="fina-fixed-assets-metric"><span class="fina-fixed-assets-metric-k">实控人</span> ' +
+            wrapMetricValue(actNameEsc, '') +
+            '</span>'
+    );
+    rowMarket.push(
+        '<span class="fina-fixed-assets-metric"><span class="fina-fixed-assets-metric-k">企业性质</span> ' +
+            wrapMetricValue(actEntEsc, '') +
             '</span>'
     );
     el.innerHTML =
@@ -739,6 +950,213 @@ function scheduleSaveFinaFixedAssetsModalLayout(modalEl) {
     finaFixedAssetsModalSaveTimer = setTimeout(function () {
         if (Date.now() - finaFixedAssetsModalLayoutOpenTs < 700) return;
         saveFinaFixedAssetsModalLayout(modalEl);
+    }, 400);
+}
+
+function loadFinaCashCreateModalLayout() {
+    try {
+        if (typeof localStorage === 'undefined') return null;
+        var raw = localStorage.getItem(FINA_CASH_CREATE_MODAL_LAYOUT_STORAGE_KEY);
+        if (!raw) return null;
+        var o = JSON.parse(raw);
+        if (typeof o.w !== 'number' || typeof o.h !== 'number') return null;
+        if (o.w < 320 || o.h < 320) return null;
+        return {
+            w: o.w,
+            h: o.h,
+            l: typeof o.l === 'number' ? o.l : null,
+            t: typeof o.t === 'number' ? o.t : null,
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+function saveFinaCashCreateModalLayout(modalEl) {
+    try {
+        if (!modalEl || typeof localStorage === 'undefined') return;
+        var rect = modalEl.getBoundingClientRect();
+        var w = Math.round(rect.width);
+        var h = Math.round(rect.height);
+        var l = Math.round(rect.left);
+        var t = Math.round(rect.top);
+        if (w < 320 || h < 320) return;
+        localStorage.setItem(
+            FINA_CASH_CREATE_MODAL_LAYOUT_STORAGE_KEY,
+            JSON.stringify({ w: w, h: h, l: l, t: t })
+        );
+    } catch (e) {
+        /* ignore */
+    }
+}
+
+function applyFinaCashCreateModalSavedLayout() {
+    var overlay = document.getElementById('fina-cash-create-modal-overlay');
+    var modal = overlay && overlay.querySelector('.fina-cash-create-modal-shell');
+    if (!modal) return;
+    var lay = loadFinaCashCreateModalLayout();
+    if (!lay) return;
+    var vw = window.innerWidth || document.documentElement.clientWidth;
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    var minW = 320;
+    var minH = 320;
+    var w = Math.min(Math.max(lay.w, minW), Math.max(minW, vw - 4));
+    var h = Math.min(Math.max(lay.h, minH), Math.max(minH, vh - 4));
+    modal.style.width = w + 'px';
+    modal.style.height = h + 'px';
+    modal.style.transform = 'none';
+    var l = lay.l != null ? lay.l : (vw - w) / 2;
+    var t = lay.t != null ? lay.t : (vh - h) / 2;
+    l = Math.max(0, Math.min(l, vw - w));
+    t = Math.max(0, Math.min(t, vh - h));
+    modal.style.left = l + 'px';
+    modal.style.top = t + 'px';
+}
+
+function scheduleSaveFinaCashCreateModalLayout(modalEl) {
+    if (!modalEl) return;
+    clearTimeout(finaCashCreateModalSaveTimer);
+    finaCashCreateModalSaveTimer = setTimeout(function () {
+        if (Date.now() - finaCashCreateModalLayoutOpenTs < 700) return;
+        saveFinaCashCreateModalLayout(modalEl);
+    }, 400);
+}
+
+function loadFinaWorkingCapModalLayout() {
+    try {
+        if (typeof localStorage === 'undefined') return null;
+        var raw = localStorage.getItem(FINA_WORKING_CAP_MODAL_LAYOUT_STORAGE_KEY);
+        if (!raw) return null;
+        var o = JSON.parse(raw);
+        if (typeof o.w !== 'number' || typeof o.h !== 'number') return null;
+        if (o.w < 320 || o.h < 320) return null;
+        return {
+            w: o.w,
+            h: o.h,
+            l: typeof o.l === 'number' ? o.l : null,
+            t: typeof o.t === 'number' ? o.t : null,
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+function saveFinaWorkingCapModalLayout(modalEl) {
+    try {
+        if (!modalEl || typeof localStorage === 'undefined') return;
+        var rect = modalEl.getBoundingClientRect();
+        var w = Math.round(rect.width);
+        var h = Math.round(rect.height);
+        var l = Math.round(rect.left);
+        var t = Math.round(rect.top);
+        if (w < 320 || h < 320) return;
+        localStorage.setItem(
+            FINA_WORKING_CAP_MODAL_LAYOUT_STORAGE_KEY,
+            JSON.stringify({ w: w, h: h, l: l, t: t })
+        );
+    } catch (e) {
+        /* ignore */
+    }
+}
+
+function applyFinaWorkingCapModalSavedLayout() {
+    var overlay = document.getElementById('fina-working-cap-modal-overlay');
+    var modal = overlay && overlay.querySelector('.fina-working-cap-modal-shell');
+    if (!modal) return;
+    var lay = loadFinaWorkingCapModalLayout();
+    if (!lay) return;
+    var vw = window.innerWidth || document.documentElement.clientWidth;
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    var minW = 320;
+    var minH = 320;
+    var w = Math.min(Math.max(lay.w, minW), Math.max(minW, vw - 4));
+    var h = Math.min(Math.max(lay.h, minH), Math.max(minH, vh - 4));
+    modal.style.width = w + 'px';
+    modal.style.height = h + 'px';
+    modal.style.transform = 'none';
+    var l = lay.l != null ? lay.l : (vw - w) / 2;
+    var t = lay.t != null ? lay.t : (vh - h) / 2;
+    l = Math.max(0, Math.min(l, vw - w));
+    t = Math.max(0, Math.min(t, vh - h));
+    modal.style.left = l + 'px';
+    modal.style.top = t + 'px';
+}
+
+function scheduleSaveFinaWorkingCapModalLayout(modalEl) {
+    if (!modalEl) return;
+    clearTimeout(finaWorkingCapModalSaveTimer);
+    finaWorkingCapModalSaveTimer = setTimeout(function () {
+        if (Date.now() - finaWorkingCapModalLayoutOpenTs < 700) return;
+        saveFinaWorkingCapModalLayout(modalEl);
+    }, 400);
+}
+
+function loadFinaCapEffModalLayout() {
+    try {
+        if (typeof localStorage === 'undefined') return null;
+        var raw = localStorage.getItem(FINA_CAP_EFF_MODAL_LAYOUT_STORAGE_KEY);
+        if (!raw) return null;
+        var o = JSON.parse(raw);
+        if (typeof o.w !== 'number' || typeof o.h !== 'number') return null;
+        if (o.w < 320 || o.h < 320) return null;
+        return {
+            w: o.w,
+            h: o.h,
+            l: typeof o.l === 'number' ? o.l : null,
+            t: typeof o.t === 'number' ? o.t : null,
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+function saveFinaCapEffModalLayout(modalEl) {
+    try {
+        if (!modalEl || typeof localStorage === 'undefined') return;
+        var rect = modalEl.getBoundingClientRect();
+        var w = Math.round(rect.width);
+        var h = Math.round(rect.height);
+        var l = Math.round(rect.left);
+        var t = Math.round(rect.top);
+        if (w < 320 || h < 320) return;
+        localStorage.setItem(
+            FINA_CAP_EFF_MODAL_LAYOUT_STORAGE_KEY,
+            JSON.stringify({ w: w, h: h, l: l, t: t })
+        );
+    } catch (e) {
+        /* ignore */
+    }
+}
+
+function applyFinaCapEffModalSavedLayout() {
+    var overlay = document.getElementById('fina-cap-eff-modal-overlay');
+    var modal = overlay && overlay.querySelector('.fina-cap-eff-modal-shell');
+    if (!modal) return;
+    var lay = loadFinaCapEffModalLayout();
+    if (!lay) return;
+    var vw = window.innerWidth || document.documentElement.clientWidth;
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    var minW = 320;
+    var minH = 320;
+    var w = Math.min(Math.max(lay.w, minW), Math.max(minW, vw - 4));
+    var h = Math.min(Math.max(lay.h, minH), Math.max(minH, vh - 4));
+    modal.style.width = w + 'px';
+    modal.style.height = h + 'px';
+    modal.style.transform = 'none';
+    var l = lay.l != null ? lay.l : (vw - w) / 2;
+    var t = lay.t != null ? lay.t : (vh - h) / 2;
+    l = Math.max(0, Math.min(l, vw - w));
+    t = Math.max(0, Math.min(t, vh - h));
+    modal.style.left = l + 'px';
+    modal.style.top = t + 'px';
+}
+
+function scheduleSaveFinaCapEffModalLayout(modalEl) {
+    if (!modalEl) return;
+    clearTimeout(finaCapEffModalSaveTimer);
+    finaCapEffModalSaveTimer = setTimeout(function () {
+        if (Date.now() - finaCapEffModalLayoutOpenTs < 700) return;
+        saveFinaCapEffModalLayout(modalEl);
     }, 400);
 }
 
@@ -873,6 +1291,10 @@ function closeFinaFixedAssetsModal() {
     var wasOpen = overlay.classList.contains('is-open');
     var modal = overlay.querySelector('.fina-fixed-assets-modal-shell');
     if (wasOpen && modal) saveFinaFixedAssetsModalLayout(modal);
+    setFinaFixedAssetsGrowthConfigPanelOpen(false);
+    closeFinaCashCreateModal();
+    closeFinaWorkingCapModal();
+    closeFinaCapEffModal();
     overlay.classList.remove('is-open');
     showFinaFixedAssetsMsg('');
     var secEl = document.getElementById('fina-fixed-assets-modal-sec-name');
@@ -891,6 +1313,8 @@ function closeFinaFixedAssetsModal() {
         finaFixedAssetsChartInstance = null;
     }
     clearFinaFixedAssetsOperatingDataTable();
+    finaFixedAssetsCurrentRows = [];
+    finaFixedAssetsCurrentTitle = '';
     if (wasOpen) _modalClosed();
 }
 
@@ -899,10 +1323,94 @@ function clearFinaFixedAssetsOperatingDataTable() {
     if (wrap) wrap.innerHTML = '';
 }
 
+function loadFinaFixedAssetsGrowthConfig() {
+    var cfg = {};
+    FINA_FIXED_ASSETS_GROWTH_METRIC_OPTIONS.forEach(function (opt) {
+        cfg[opt.key] = true;
+    });
+    try {
+        if (typeof localStorage === 'undefined') return cfg;
+        var raw = localStorage.getItem(FINA_FIXED_ASSETS_GROWTH_CONFIG_STORAGE_KEY);
+        if (!raw) return cfg;
+        var saved = JSON.parse(raw);
+        FINA_FIXED_ASSETS_GROWTH_METRIC_OPTIONS.forEach(function (opt) {
+            if (saved && Object.prototype.hasOwnProperty.call(saved, opt.key)) {
+                cfg[opt.key] = saved[opt.key] !== false;
+            }
+        });
+    } catch (e) {
+        return cfg;
+    }
+    return cfg;
+}
+
+function saveFinaFixedAssetsGrowthConfig(cfg) {
+    try {
+        if (typeof localStorage === 'undefined') return;
+        localStorage.setItem(FINA_FIXED_ASSETS_GROWTH_CONFIG_STORAGE_KEY, JSON.stringify(cfg || {}));
+    } catch (e) {
+        /* ignore */
+    }
+}
+
+function renderFinaFixedAssetsGrowthConfigPanel() {
+    var panel = document.getElementById('fina-fixed-assets-growth-config-panel');
+    if (!panel) return;
+    var cfg = loadFinaFixedAssetsGrowthConfig();
+    var rows = FINA_FIXED_ASSETS_GROWTH_METRIC_OPTIONS.map(function (opt) {
+        var checked = cfg[opt.key] !== false ? ' checked' : '';
+        return (
+            '<label class="fina-fixed-assets-growth-config-line">' +
+            '<input type="checkbox" data-growth-key="' +
+            opt.key +
+            '"' +
+            checked +
+            '> ' +
+            _finaArturnEscCellText(opt.label) +
+            '</label>'
+        );
+    }).join('');
+    panel.innerHTML =
+        '<div class="fina-fixed-assets-growth-config-title">成长性显示指标</div>' +
+        rows +
+        '<div class="fina-fixed-assets-growth-config-hint">设置会自动保存</div>';
+}
+
+function setFinaFixedAssetsGrowthConfigPanelOpen(open) {
+    var btn = document.getElementById('fina-fixed-assets-growth-config-btn');
+    var panel = document.getElementById('fina-fixed-assets-growth-config-panel');
+    if (!btn || !panel) return;
+    if (open) {
+        renderFinaFixedAssetsGrowthConfigPanel();
+        panel.hidden = false;
+        btn.setAttribute('aria-expanded', 'true');
+    } else {
+        panel.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+    }
+}
+
+function applyFinaFixedAssetsGrowthConfigFromPanel() {
+    var panel = document.getElementById('fina-fixed-assets-growth-config-panel');
+    if (!panel) return;
+    var cfg = loadFinaFixedAssetsGrowthConfig();
+    var inputs = panel.querySelectorAll('input[data-growth-key]');
+    inputs.forEach(function (input) {
+        var key = input.getAttribute('data-growth-key');
+        if (key) cfg[key] = !!input.checked;
+    });
+    saveFinaFixedAssetsGrowthConfig(cfg);
+    if (Array.isArray(finaFixedAssetsCurrentRows) && finaFixedAssetsCurrentRows.length > 0) {
+        renderFinaFixedAssetsOperatingDataTable(finaFixedAssetsCurrentRows);
+    }
+}
+
 /**
- * 固定资产弹窗下方经营宽表：列为报告期（从左至右由旧到新，与上图 X 轴一致），「指标」行名列置于最右列；行为营收/现金流/净收益/扣非净利/毛利率/净利率/ROE/现金转化率、单季营收同比·营业利润同比、股东户数（户÷1e4 万户两位小数）；末行应收% = (balancesheet.accounts_receiv+oth_receiv)/单季营业收入×100。
- * 同比两行：>30 浅蓝、ROE>4 浅黄仅在「非该行最大/最小/中位」格叠加；该三行仍各标一枚最大(玫红)/最小(青绿)/中位(琥珀)；优先级：极值三色 > 条件浅蓝/浅黄。
- * 极值与中位数同一行内各仅标一列；若多列并列则取时间轴上最左一列（与单元格优先级 max > min > median 一致）。
+ * 固定资产弹窗下方经营宽表：列为报告期（旧→新），右起「指标」「业务逻辑」两列 sticky。
+ * 首四行（经营现金流净额、资本开支、FCF、现金转化率）在「业务逻辑」列 rowspan=4 合并为「现金创造能力」（行头不再缀「模块A·」）。
+ * 模块B 五行（应收/存货/应付天数、现金循环天数、应收占收入比）：业务逻辑 rowspan=5，「营运资本」+换行+「周转天数」。模块C 三行：「资本结构」+换行+「杠杆」。
+ * 其下依次为：资本效率(2)→规模.损益(3)→盈利能力(2)→成长性(可配置)→股东与筹码(1)；行序见 specs 与 tail*Logic* 常量（勿只改 specs 不改跨度）。
+ * 应收天数·存货天数·应收占收入比：仍参与 max/min/median（极值三色；均为越小越好）；仅当该格未标极值时，再按相对行中位数标浅红/浅绿。
  */
 function renderFinaFixedAssetsOperatingDataTable(rows) {
     var wrap = document.getElementById('fina-fixed-assets-operating-data-wrap');
@@ -918,13 +1426,29 @@ function renderFinaFixedAssetsOperatingDataTable(rows) {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
     }
-    function tdNumStyled(rawVal, band, decPlaces, yoyOver30, roeOver4) {
+    /** meanTone：应收/存货/应收占收入比在非 max/min/median 格上叠加相对行中位数（低于浅红、高于浅绿）；极值三色优先 */
+    function tdNumStyled(
+        rawVal,
+        band,
+        decPlaces,
+        yoyOver30,
+        roeOver4,
+        cccNeg,
+        netdebtNeg,
+        meanTone
+    ) {
         var cls = 'fina-fa-opdata-num';
         if (band === 'max') cls += ' fina-fa-opdata-cell-max';
         else if (band === 'min') cls += ' fina-fa-opdata-cell-min';
         else if (band === 'median') cls += ' fina-fa-opdata-cell-median';
+        else {
+            if (meanTone === 'below') cls += ' fina-fa-opdata-mean-below';
+            else if (meanTone === 'above') cls += ' fina-fa-opdata-mean-above';
+        }
         if (yoyOver30) cls += ' fina-fa-opdata-yoy-over-30';
         if (roeOver4) cls += ' fina-fa-opdata-roep-over-4';
+        if (cccNeg) cls += ' fina-fa-opdata-ccc-neg';
+        if (netdebtNeg) cls += ' fina-fa-opdata-netdebt-neg';
         if (rawVal == null || rawVal === '') return '<td class="' + cls + '">--</td>';
         var n = parseFloat(rawVal);
         if (isNaN(n)) return '<td class="' + cls + '">--</td>';
@@ -942,19 +1466,56 @@ function renderFinaFixedAssetsOperatingDataTable(rows) {
         })
         .join('');
     var specs = [
+        { label: '经营现金流净额（亿）', key: 'q_ocf_yi', decimals: 2 },
+        { label: '资本开支（亿）', key: 'q_capex_yi', decimals: 2 },
+        { label: '自由现金流FCF（亿）', key: 'q_fcf_star_yi', decimals: 2 },
+        { label: '现金转化率', key: 'q_ocf_to_or_pct', decimals: 2 },
+        { label: '应收天数（天）', key: 'ar_days_q', decimals: 1 },
+        { label: '存货天数（天）', key: 'inv_days_q', decimals: 1 },
+        { label: '应付天数（天）', key: 'ap_days_q', decimals: 1 },
+        { label: '现金循环天数（天）', key: 'ccc_q', decimals: 1 },
+        { label: '应收占收入比', key: 'recv_pct', decimals: 2 },
+        { label: '资产负债率（%）', key: 'debt_to_assets_q', decimals: 2 },
+        { label: '带息负债率（%）', key: 'interestdebt_ratio_q', decimals: 2 },
+        { label: '净债务/净现金（亿）', key: 'netdebt_yi_q', decimals: 1 },
+        {
+            label: 'ROIC',
+            key: 'roic_sq_pct_avg_ic_q',
+            decimals: 2,
+        },
+        { label: 'ROE(扣非)', key: 'q_dt_roe', decimals: 2 },
         { label: '营业收入（亿）', key: 'q_revenue_yi', decimals: 1 },
-        { label: '经营现金流净额（亿）', key: 'q_cashflow_yi', decimals: 1 },
         { label: '经营活动净收益（亿）', key: 'q_opincome_yi', decimals: 1 },
         { label: '扣非净利润（亿）', key: 'q_dtprofit_yi', decimals: 1 },
         { label: '毛利率(%)', key: 'q_gsprofit_margin', decimals: 2 },
         { label: '净利率(%)', key: 'q_netprofit_margin', decimals: 2 },
-        { label: 'ROE(扣非)', key: 'q_dt_roe', decimals: 2 },
-        { label: '现金转化率（%）', key: 'q_ocf_to_or_pct', decimals: 2 },
         { label: '营业收入同比(%)', key: 'q_gr_yoy', decimals: 2 },
+        { label: '营业收入环比(%)', key: 'q_gr_qoq', decimals: 2 },
         { label: '营业利润同比(%)', key: 'q_op_yoy', decimals: 2 },
+        { label: '营业利润环比(%)', key: 'q_op_qoq', decimals: 2 },
+        { label: '归母净利同比(%)', key: 'q_netprofit_yoy', decimals: 2 },
+        { label: '归母净利环比(%)', key: 'q_netprofit_qoq', decimals: 2 },
         { label: '股东户数(万户)', key: 'holder_num', decimals: 2 },
-        { label: '应收%', key: 'recv_pct', decimals: 2 },
     ];
+    var growthMetricVisible = loadFinaFixedAssetsGrowthConfig();
+    var growthMetricKeys = {};
+    FINA_FIXED_ASSETS_GROWTH_METRIC_OPTIONS.forEach(function (opt) {
+        growthMetricKeys[opt.key] = 1;
+    });
+    specs = specs.filter(function (sp) {
+        if (!growthMetricKeys[sp.key]) return true;
+        return growthMetricVisible[sp.key] !== false;
+    });
+    // 默认大为优（goodCol→band max、badCol→band min 对应稿表玫红/青绿）；以下指标小为优（与应收天数同：最低值列走 band max、最高值列走 band min）
+    var lowerIsBetterKeys = {
+        ar_days_q: 1,
+        inv_days_q: 1,
+        ccc_q: 1,
+        recv_pct: 1,
+        debt_to_assets_q: 1,
+        interestdebt_ratio_q: 1,
+        netdebt_yi_q: 1,
+    };
     /** 有效数值≥3：奇数取排序正中元素对应值，偶数取中间两数平均；仅标一列（并列取最左列）。 */
     function rowMedianHighlightCol(parsed) {
         var finiteList = parsed.filter(function (x) {
@@ -991,8 +1552,41 @@ function renderFinaFixedAssetsOperatingDataTable(rows) {
         }
         return -1;
     }
+    /** 行内有限值的中位数（奇数取正中，偶数取中间两数平均）；用于应收/存货/应收占收入比的偏离浅色底 */
+    function rowMedianRefValue(finiteList) {
+        if (!finiteList || finiteList.length === 0) return null;
+        var sorted = finiteList.slice().sort(function (a, b) {
+            return a - b;
+        });
+        var n = sorted.length;
+        if (n % 2 === 1) return sorted[(n - 1) / 2];
+        return (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+    }
+    var moduleALogicRowspan = 4;
+    var moduleALogicLabel = '现金创造能力';
+    /** 与 specs 中模块B（应收/存货/应付天数、现金循环天数、应收占收入比）五行顺序一致 */
+    var moduleBLogicRowspan = 5;
+    var moduleBLogicStartRow = moduleALogicRowspan;
+    /** 与 specs 中模块C（资产负债率/带息负债率/净债务）三行顺序一致 */
+    var moduleCLogicRowspan = 3;
+    var moduleCLogicStartRow = moduleBLogicStartRow + moduleBLogicRowspan;
+    /** 模块C 之后：资本效率 / 规模·损益 / 盈利能力 / 成长性 / 股东与筹码（与 specs 顺序一致） */
+    var afterModuleCRow = moduleCLogicStartRow + moduleCLogicRowspan;
+    var tailD1LogicRowspan = 2;
+    var tailD1LogicStartRow = afterModuleCRow;
+    var tailD2LogicRowspan = 3;
+    var tailD2LogicStartRow = tailD1LogicStartRow + tailD1LogicRowspan;
+    var tailD3LogicRowspan = 2;
+    var tailD3LogicStartRow = tailD2LogicStartRow + tailD2LogicRowspan;
+    var tailD4LogicRowspan = 0;
+    FINA_FIXED_ASSETS_GROWTH_METRIC_OPTIONS.forEach(function (opt) {
+        if (growthMetricVisible[opt.key] !== false) tailD4LogicRowspan += 1;
+    });
+    var tailD4LogicStartRow = tailD3LogicStartRow + tailD3LogicRowspan;
+    var tailD5LogicRowspan = 1;
+    var tailD5LogicStartRow = tailD4LogicStartRow + tailD4LogicRowspan;
     var bodyRows = specs
-        .map(function (sp) {
+        .map(function (sp, rowIdx) {
             var parsed = rows.map(function (r) {
                 var raw = (r || {})[sp.key];
                 if (raw == null || raw === '') return null;
@@ -1025,36 +1619,224 @@ function renderFinaFixedAssetsOperatingDataTable(rows) {
                     }
                 }
             }
+            var preferLower = !!lowerIsBetterKeys[sp.key];
+            var goodCol = preferLower ? minCol : maxCol;
+            var badCol = preferLower ? maxCol : minCol;
             var medianCol = rowMedianHighlightCol(parsed);
+            var isArInvRecvMedianToneRow =
+                sp.key === 'ar_days_q' ||
+                sp.key === 'inv_days_q' ||
+                sp.key === 'recv_pct';
+            var rowMedianRefVal =
+                isArInvRecvMedianToneRow && finiteList.length > 0
+                    ? rowMedianRefValue(finiteList)
+                    : null;
             var cells = parsed
                 .map(function (ni, colIdx) {
                     if (ni === null) {
                         var dec0 =
                             typeof sp.decimals === 'number' ? sp.decimals : 2;
-                        return tdNumStyled(null, '', dec0, false, false);
+                        return tdNumStyled(null, '', dec0, false, false, false, false, null);
                     }
                     var dec =
                         typeof sp.decimals === 'number' ? sp.decimals : 2;
                     var band = '';
                     if (finiteList.length && rowMin !== null && rowMax !== null) {
-                        if (colIdx === maxCol) band = 'max';
-                        else if (colIdx === minCol) band = 'min';
+                        if (colIdx === goodCol) band = 'max';
+                        else if (colIdx === badCol) band = 'min';
                         else if (medianCol >= 0 && colIdx === medianCol) band = 'median';
                     }
+                    var meanTone = null;
+                    if (
+                        isArInvRecvMedianToneRow &&
+                        !band &&
+                        rowMedianRefVal !== null &&
+                        finiteList.length > 0
+                    ) {
+                        var epsMed = 1e-6 * (Math.abs(rowMedianRefVal) + 1);
+                        if (ni < rowMedianRefVal - epsMed) meanTone = 'below';
+                        else if (ni > rowMedianRefVal + epsMed) meanTone = 'above';
+                    }
                     var yoyHi =
-                        (sp.key === 'q_gr_yoy' || sp.key === 'q_op_yoy') &&
+                        (
+                            sp.key === 'q_gr_yoy' ||
+                            sp.key === 'q_gr_qoq' ||
+                            sp.key === 'q_op_yoy' ||
+                            sp.key === 'q_op_qoq' ||
+                            sp.key === 'q_netprofit_yoy' ||
+                            sp.key === 'q_netprofit_qoq'
+                        ) &&
                         ni > 30 &&
-                        band === '';
-                    var roeHi = sp.key === 'q_dt_roe' && ni > 4 && band === '';
-                    return tdNumStyled(ni, band, dec, yoyHi, roeHi);
+                        band === '' &&
+                        !meanTone;
+                    var roeHi =
+                        sp.key === 'q_dt_roe' && ni > 4 && band === '' && !meanTone;
+                    var cccNeg = sp.key === 'ccc_q' && ni < 0;
+                    var netdebtNeg = sp.key === 'netdebt_yi_q' && ni < 0;
+                    return tdNumStyled(ni, band, dec, yoyHi, roeHi, cccNeg, netdebtNeg, meanTone);
                 })
                 .join('');
+            var logicCell = '';
+            if (rowIdx === 0) {
+                logicCell =
+                    '<td rowspan="' +
+                    moduleALogicRowspan +
+                    '" class="fina-fa-opdata-logic-merge fina-fa-opdata-cash-merge fina-fa-opdata-logic-clickable" ' +
+                    'title="点击查看现金创造能力 25 季图表">' +
+                    escCellText(moduleALogicLabel) +
+                    '</td>';
+            } else if (rowIdx < moduleALogicRowspan) {
+                logicCell = '';
+            } else if (rowIdx === moduleBLogicStartRow) {
+                logicCell =
+                    '<td rowspan="' +
+                    moduleBLogicRowspan +
+                    '" class="fina-fa-opdata-logic-merge fina-fa-opdata-module-b-merge fina-fa-opdata-workingcap-merge fina-fa-opdata-logic-clickable"' +
+                    ' title="点击查看营运资本·周转天数 25 季图表">' +
+                    escCellText('营运资本') +
+                    '<br>' +
+                    escCellText('周转天数') +
+                    '</td>';
+            } else if (rowIdx < moduleBLogicStartRow + moduleBLogicRowspan) {
+                logicCell = '';
+            } else if (rowIdx === moduleCLogicStartRow) {
+                logicCell =
+                    '<td rowspan="' +
+                    moduleCLogicRowspan +
+                    '" class="fina-fa-opdata-logic-merge fina-fa-opdata-module-c-merge">' +
+                    escCellText('资本结构') +
+                    '<br>' +
+                    escCellText('杠杆') +
+                    '</td>';
+            } else if (rowIdx < moduleCLogicStartRow + moduleCLogicRowspan) {
+                logicCell = '';
+            } else if (rowIdx === tailD1LogicStartRow) {
+                logicCell =
+                    '<td rowspan="' +
+                    tailD1LogicRowspan +
+                    '" class="fina-fa-opdata-logic-merge fina-fa-opdata-module-b-merge fina-fa-opdata-capeff-merge fina-fa-opdata-logic-clickable" title="点击查看资本效率 25 季图表">' +
+                    escCellText('资本效率') +
+                    '</td>';
+            } else if (rowIdx < tailD1LogicStartRow + tailD1LogicRowspan) {
+                logicCell = '';
+            } else if (rowIdx === tailD2LogicStartRow) {
+                logicCell =
+                    '<td rowspan="' +
+                    tailD2LogicRowspan +
+                    '" class="fina-fa-opdata-logic-merge fina-fa-opdata-module-c-merge">' +
+                    escCellText('规模.损益') +
+                    '</td>';
+            } else if (rowIdx < tailD2LogicStartRow + tailD2LogicRowspan) {
+                logicCell = '';
+            } else if (rowIdx === tailD3LogicStartRow) {
+                logicCell =
+                    '<td rowspan="' +
+                    tailD3LogicRowspan +
+                    '" class="fina-fa-opdata-logic-merge fina-fa-opdata-module-b-merge">' +
+                    escCellText('盈利能力') +
+                    '</td>';
+            } else if (rowIdx < tailD3LogicStartRow + tailD3LogicRowspan) {
+                logicCell = '';
+            } else if (tailD4LogicRowspan > 0 && rowIdx === tailD4LogicStartRow) {
+                logicCell =
+                    '<td rowspan="' +
+                    tailD4LogicRowspan +
+                    '" class="fina-fa-opdata-logic-merge fina-fa-opdata-module-c-merge">' +
+                    escCellText('成长性') +
+                    '</td>';
+            } else if (
+                tailD4LogicRowspan > 0 &&
+                rowIdx < tailD4LogicStartRow + tailD4LogicRowspan
+            ) {
+                logicCell = '';
+            } else if (rowIdx === tailD5LogicStartRow) {
+                logicCell =
+                    '<td rowspan="' +
+                    tailD5LogicRowspan +
+                    '" class="fina-fa-opdata-logic-merge fina-fa-opdata-module-b-merge">' +
+                    escCellText('股东与筹码') +
+                    '</td>';
+            } else {
+                logicCell = '<td class="fina-fa-opdata-logic-cell"></td>';
+            }
+            var frameRowClass = '';
+            if (rowIdx < moduleALogicRowspan) {
+                frameRowClass = 'fina-fa-opdata-cash-row';
+                if (rowIdx === 0) frameRowClass += ' fina-fa-opdata-cash-row-start';
+                if (rowIdx === moduleALogicRowspan - 1) frameRowClass += ' fina-fa-opdata-cash-row-end';
+            } else if (
+                rowIdx >= moduleBLogicStartRow &&
+                rowIdx < moduleBLogicStartRow + moduleBLogicRowspan
+            ) {
+                frameRowClass = 'fina-fa-opdata-module-b-row';
+                if (rowIdx === moduleBLogicStartRow) frameRowClass += ' fina-fa-opdata-module-b-row-start';
+                if (rowIdx === moduleBLogicStartRow + moduleBLogicRowspan - 1) {
+                    frameRowClass += ' fina-fa-opdata-module-b-row-end';
+                }
+            } else if (
+                rowIdx >= moduleCLogicStartRow &&
+                rowIdx < moduleCLogicStartRow + moduleCLogicRowspan
+            ) {
+                frameRowClass = 'fina-fa-opdata-module-c-row';
+                if (rowIdx === moduleCLogicStartRow) frameRowClass += ' fina-fa-opdata-module-c-row-start';
+                if (rowIdx === moduleCLogicStartRow + moduleCLogicRowspan - 1) {
+                    frameRowClass += ' fina-fa-opdata-module-c-row-end';
+                }
+            } else if (
+                rowIdx >= tailD1LogicStartRow &&
+                rowIdx < tailD1LogicStartRow + tailD1LogicRowspan
+            ) {
+                frameRowClass = 'fina-fa-opdata-module-b-row';
+                if (rowIdx === tailD1LogicStartRow) frameRowClass += ' fina-fa-opdata-module-b-row-start';
+                if (rowIdx === tailD1LogicStartRow + tailD1LogicRowspan - 1) {
+                    frameRowClass += ' fina-fa-opdata-module-b-row-end';
+                }
+            } else if (
+                rowIdx >= tailD2LogicStartRow &&
+                rowIdx < tailD2LogicStartRow + tailD2LogicRowspan
+            ) {
+                frameRowClass = 'fina-fa-opdata-module-c-row';
+                if (rowIdx === tailD2LogicStartRow) frameRowClass += ' fina-fa-opdata-module-c-row-start';
+                if (rowIdx === tailD2LogicStartRow + tailD2LogicRowspan - 1) {
+                    frameRowClass += ' fina-fa-opdata-module-c-row-end';
+                }
+            } else if (
+                rowIdx >= tailD3LogicStartRow &&
+                rowIdx < tailD3LogicStartRow + tailD3LogicRowspan
+            ) {
+                frameRowClass = 'fina-fa-opdata-module-b-row';
+                if (rowIdx === tailD3LogicStartRow) frameRowClass += ' fina-fa-opdata-module-b-row-start';
+                if (rowIdx === tailD3LogicStartRow + tailD3LogicRowspan - 1) {
+                    frameRowClass += ' fina-fa-opdata-module-b-row-end';
+                }
+            } else if (
+                rowIdx >= tailD4LogicStartRow &&
+                rowIdx < tailD4LogicStartRow + tailD4LogicRowspan
+            ) {
+                frameRowClass = 'fina-fa-opdata-module-c-row';
+                if (rowIdx === tailD4LogicStartRow) frameRowClass += ' fina-fa-opdata-module-c-row-start';
+                if (rowIdx === tailD4LogicStartRow + tailD4LogicRowspan - 1) {
+                    frameRowClass += ' fina-fa-opdata-module-c-row-end';
+                }
+            } else if (
+                rowIdx >= tailD5LogicStartRow &&
+                rowIdx < tailD5LogicStartRow + tailD5LogicRowspan
+            ) {
+                frameRowClass = 'fina-fa-opdata-module-b-row';
+                if (rowIdx === tailD5LogicStartRow) frameRowClass += ' fina-fa-opdata-module-b-row-start';
+                if (rowIdx === tailD5LogicStartRow + tailD5LogicRowspan - 1) {
+                    frameRowClass += ' fina-fa-opdata-module-b-row-end';
+                }
+            }
+            var trTag = frameRowClass ? '<tr class="' + frameRowClass + '">' : '<tr>';
             return (
-                '<tr>' +
+                trTag +
                 cells +
                 '<th scope="row" class="fina-fa-opdata-rowhead">' +
                 escCellText(sp.label) +
-                '</th></tr>'
+                '</th>' +
+                logicCell +
+                '</tr>'
             );
         })
         .join('');
@@ -1063,7 +1845,8 @@ function renderFinaFixedAssetsOperatingDataTable(rows) {
         '<table class="fina-fa-opdata-table">' +
         '<thead><tr>' +
         headCols +
-        '<th scope="col" class="fina-fa-opdata-corner">指标</th></tr></thead>' +
+        '<th scope="col" class="fina-fa-opdata-corner">指标</th>' +
+        '<th scope="col" class="fina-fa-opdata-logic-head">业务逻辑</th></tr></thead>' +
         '<tbody>' +
         bodyRows +
         '</tbody></table></div>';
@@ -1085,6 +1868,7 @@ function renderFinaFixedAssetsChart(rows, tsCode) {
     var labels = [];
     var fixAssets = [];
     var cipValues = [];
+    var inventories = [];
     var qRevenue = [];
     var contractLiab = [];
     for (var i = 0; i < rows.length; i++) {
@@ -1092,33 +1876,39 @@ function renderFinaFixedAssetsChart(rows, tsCode) {
         labels.push(formatFinaQuarterLabel(r.end_date));
         var f = parseFloat(r.fix_assets_yi);
         var p = parseFloat(r.cip_yi);
+        var iv = parseFloat(r.inventories_yi);
         var q = parseFloat(r.q_revenue_yi);
         var c = parseFloat(r.contract_liab_yi);
         fixAssets.push(isNaN(f) ? null : f);
         cipValues.push(isNaN(p) ? null : p);
+        inventories.push(isNaN(iv) ? null : iv);
         qRevenue.push(isNaN(q) ? null : q);
         contractLiab.push(isNaN(c) ? null : c);
     }
+    var textPreset = getFinaFixedAssetsChartTextPreset(labels.length);
     if (finaFixedAssetsChartInstance) {
         finaFixedAssetsChartInstance.destroy();
         finaFixedAssetsChartInstance = null;
     }
     var pal = FINA_FIXED_ASSETS_DUAL_PAL;
     var faPal = {
-        fixFill: pal.fixFill,
-        fixBorder: pal.fixBorder,
-        revFill: pal.revenueFill,
-        revBorder: pal.revenueBorder,
-        refFill: pal.revenueRefFill,
-        refBorder: pal.revenueRefBorder,
-        cipFill: pal.cipFill,
-        cipBorder: pal.cipBorder,
+        fixFill: 'rgba(37, 99, 235, 0.88)',
+        fixBorder: 'rgba(29, 78, 216, 1)',
+        revFill: 'rgba(147, 51, 234, 0.82)',
+        revBorder: 'rgba(126, 34, 206, 1)',
+        refFill: 'rgba(6, 182, 212, 0.86)',
+        refBorder: 'rgba(14, 116, 144, 1)',
+        cipFill: 'rgba(16, 185, 129, 0.82)',
+        cipBorder: 'rgba(5, 150, 105, 1)',
+        invFill: 'rgba(245, 158, 11, 0.9)',
+        invBorder: 'rgba(180, 83, 9, 1)',
         lineMain: pal.contractLine,
         lineFillSoft: pal.contractFillSoft,
         lineGlow: pal.contractGlow,
         lblFix: '#1d4ed8',
-        lblCip: '#b45309',
-        lblRev: '#6d28d9',
+        lblCip: '#047857',
+        lblInv: '#b45309',
+        lblRev: '#7e22ce',
         lblRef: '#0e7490',
         lblLine: '#be185d',
     };
@@ -1151,6 +1941,8 @@ function renderFinaFixedAssetsChart(rows, tsCode) {
                     borderColor: faPal.cipBorder,
                     borderWidth: 1,
                     borderRadius: 4,
+                    maxBarThickness: 11,
+                    barPercentage: 0.72,
                 },
                 {
                     type: 'bar',
@@ -1160,19 +1952,36 @@ function renderFinaFixedAssetsChart(rows, tsCode) {
                     order: 1,
                     backgroundColor: faPal.fixFill,
                     borderColor: faPal.fixBorder,
-                    borderWidth: 1,
+                    borderWidth: 1.2,
                     borderRadius: 4,
+                    maxBarThickness: 11,
+                    barPercentage: 0.72,
+                },
+                {
+                    type: 'bar',
+                    label: '存货（亿）',
+                    data: inventories,
+                    yAxisID: 'y',
+                    order: 2,
+                    backgroundColor: faPal.invFill,
+                    borderColor: faPal.invBorder,
+                    borderWidth: 1.2,
+                    borderRadius: 4,
+                    maxBarThickness: 11,
+                    barPercentage: 0.72,
                 },
                 {
                     type: 'bar',
                     label: '营收（亿）',
                     data: qRevenue,
                     yAxisID: 'y',
-                    order: 2,
+                    order: 3,
                     backgroundColor: qRevenueBgColors,
                     borderColor: qRevenueBorderColors,
                     borderWidth: qRevenueBorderWidths,
                     borderRadius: 4,
+                    maxBarThickness: 11,
+                    barPercentage: 0.72,
                 },
                 {
                     type: 'line',
@@ -1198,14 +2007,15 @@ function renderFinaFixedAssetsChart(rows, tsCode) {
             animation: false,
             responsive: true,
             maintainAspectRatio: false,
+            devicePixelRatio: getFinaFixedAssetsChartDpr(),
             layout: {
                 padding: { top: 2, right: 8, bottom: 2, left: 2 },
             },
             interaction: { mode: 'index', intersect: false },
             datasets: {
                 bar: {
-                    categoryPercentage: 0.65,
-                    barPercentage: 0.85,
+                    categoryPercentage: 0.6,
+                    barPercentage: 0.72,
                 },
                 line: {
                     borderWidth: 3,
@@ -1236,7 +2046,7 @@ function renderFinaFixedAssetsChart(rows, tsCode) {
                         minRotation: 0,
                         autoSkip: true,
                         color: '#64748b',
-                        font: { size: 10, family: FINA_CHART_PAGE_FONT },
+                        font: { size: textPreset.axisFontSize, family: FINA_CHART_PAGE_FONT },
                     },
                     grid: { display: false },
                 },
@@ -1247,7 +2057,7 @@ function renderFinaFixedAssetsChart(rows, tsCode) {
                     title: { display: false },
                     ticks: {
                         color: '#64748b',
-                        font: { size: 10, family: FINA_CHART_PAGE_FONT },
+                        font: { size: textPreset.axisFontSize, family: FINA_CHART_PAGE_FONT },
                         callback: function (val) {
                             return finaFixedAssetsAxisInt(val);
                         },
@@ -1267,7 +2077,7 @@ function renderFinaFixedAssetsChart(rows, tsCode) {
                     },
                     ticks: {
                         color: '#64748b',
-                        font: { size: 10, family: FINA_CHART_PAGE_FONT },
+                        font: { size: textPreset.axisFontSize, family: FINA_CHART_PAGE_FONT },
                         callback: function (val) {
                             return finaFixedAssetsAxisOneDecimal(val);
                         },
@@ -1321,19 +2131,106 @@ function renderFinaFixedAssetsChart(rows, tsCode) {
                 id: 'finaFixedAssetsBarValueLabels',
                 afterDatasetsDraw: function (chart) {
                     var ctx = chart.ctx;
+                    var chartArea = chart.chartArea || {};
+                    var placedLabelBoxes = [];
+                    var occupiedByX = {};
                     /** 白描边 + 深色填字，柱线重叠区数字仍可读 */
                     function drawHaloLabel(txt, x, y, fillStyle) {
-                        ctx.font = '600 11px ' + FINA_CHART_PAGE_FONT;
+                        ctx.font = '600 ' + textPreset.labelFontSize + 'px ' + FINA_CHART_PAGE_FONT;
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'bottom';
                         ctx.lineJoin = 'round';
-                        ctx.lineWidth = 4;
+                        ctx.lineWidth = textPreset.labelStrokeWidth;
                         ctx.strokeStyle = 'rgba(255,255,255,0.96)';
                         ctx.fillStyle = fillStyle;
                         ctx.strokeText(txt, x, y);
                         ctx.fillText(txt, x, y);
                     }
-                    chart.data.datasets.forEach(function (dataset, di) {
+                    function canPlaceLabelAt(txt, x, y) {
+                        ctx.save();
+                        ctx.font = '600 ' + textPreset.labelFontSize + 'px ' + FINA_CHART_PAGE_FONT;
+                        var textWidth = ctx.measureText(txt).width;
+                        ctx.restore();
+                        var padX = 4;
+                        var padY = 2;
+                        var labelHeight = textPreset.labelFontSize + 2;
+                        var box = {
+                            left: x - textWidth / 2 - padX,
+                            right: x + textWidth / 2 + padX,
+                            top: y - labelHeight - padY,
+                            bottom: y + padY,
+                        };
+                        if (box.top < (chartArea.top || 0) + 2 || box.bottom > (chartArea.bottom || chart.height) - 2) {
+                            return false;
+                        }
+                        var minGap = 2;
+                        var i = 0;
+                        for (; i < placedLabelBoxes.length; i += 1) {
+                            var b = placedLabelBoxes[i];
+                            var overlapX = !(box.right + minGap < b.left || box.left - minGap > b.right);
+                            var overlapY = !(box.bottom + minGap < b.top || box.top - minGap > b.bottom);
+                            if (overlapX && overlapY) return false;
+                        }
+                        placedLabelBoxes.push(box);
+                        var xKey = String(Math.round(x));
+                        if (!occupiedByX[xKey]) occupiedByX[xKey] = [];
+                        occupiedByX[xKey].push(box);
+                        return true;
+                    }
+                    function overlapsWithColumn(box, x) {
+                        var xKey = String(Math.round(x));
+                        var col = occupiedByX[xKey] || [];
+                        var i = 0;
+                        for (; i < col.length; i += 1) {
+                            var b = col[i];
+                            var overlapY = !(box.bottom + 2 < b.top || box.top - 2 > b.bottom);
+                            if (overlapY) return true;
+                        }
+                        return false;
+                    }
+                    /**
+                     * 先尝试多档上下避让，再决定是否隐藏。
+                     * 这样既避免重叠，也尽量保留更多字段值。
+                     */
+                    function placeLabelWithAvoidance(txt, x, baseY) {
+                        var offsets = [0, -11, 11, -22, 22, -33, 33, -44, 44, -55, 55, -66, 66];
+                        var oi = 0;
+                        for (; oi < offsets.length; oi += 1) {
+                            var y = baseY + offsets[oi];
+                            ctx.save();
+                            ctx.font = '600 ' + textPreset.labelFontSize + 'px ' + FINA_CHART_PAGE_FONT;
+                            var textWidth = ctx.measureText(txt).width;
+                            ctx.restore();
+                            var candidate = {
+                                left: x - textWidth / 2 - 4,
+                                right: x + textWidth / 2 + 4,
+                                top: y - (textPreset.labelFontSize + 4),
+                                bottom: y + 2,
+                            };
+                            if (!overlapsWithColumn(candidate, x) && canPlaceLabelAt(txt, x, y)) return y;
+                        }
+                        // 极端拥挤时：顺轴向上堆叠，确保不漏标
+                        var fallbackY = baseY;
+                        var tryCount = 0;
+                        while (tryCount < 14) {
+                            if (canPlaceLabelAt(txt, x, fallbackY)) return fallbackY;
+                            fallbackY -= 10;
+                            tryCount += 1;
+                        }
+                        return Math.max((chartArea.top || 0) + textPreset.labelFontSize + 2, baseY - 80);
+                    }
+                    var datasetOrder = ['合同负债（亿）', '固定资产（亿）', '营收（亿）', '存货（亿）', '在建工程（亿）'];
+                    datasetOrder.forEach(function (datasetName) {
+                        var di = -1;
+                        var i = 0;
+                        for (; i < chart.data.datasets.length; i += 1) {
+                            if ((chart.data.datasets[i] && chart.data.datasets[i].label) === datasetName) {
+                                di = i;
+                                break;
+                            }
+                        }
+                        if (di < 0) return;
+                        var dataset = chart.data.datasets[di];
                         var meta = chart.getDatasetMeta(di);
                         if (!meta || meta.hidden) return;
                         if (dataset.type === 'line') {
@@ -1346,11 +2243,14 @@ function renderFinaFixedAssetsChart(rows, tsCode) {
                                 var x = pt.x;
                                 var y = pt.y;
                                 if (x == null || y == null) return;
+                                var txt = v.toFixed(1);
+                                var ty = placeLabelWithAvoidance(txt, x, y - 9);
+                                if (ty == null) return;
                                 ctx.save();
                                 drawHaloLabel(
-                                    v.toFixed(1),
+                                    txt,
                                     x,
-                                    y - 9,
+                                    ty,
                                     faPal.lblLine
                                 );
                                 ctx.restore();
@@ -1374,12 +2274,25 @@ function renderFinaFixedAssetsChart(rows, tsCode) {
                             var fill =
                                 dataset.label === '固定资产（亿）'
                                     ? faPal.lblFix
+                                    : dataset.label === '存货（亿）'
+                                      ? faPal.lblInv
                                     : dataset.label === '在建工程（亿）'
                                       ? faPal.lblCip
                                       : isRefRev
                                       ? faPal.lblRef
                                       : faPal.lblRev;
-                            drawHaloLabel(v.toFixed(1), x, top - 2, fill);
+                            var txt = v.toFixed(1);
+                            var baseTy = top - 2;
+                            if (dataset.label === '固定资产（亿）') baseTy = top - 2;
+                            else if (dataset.label === '营收（亿）') baseTy = top - 14;
+                            else if (dataset.label === '存货（亿）') baseTy = top - 26;
+                            else if (dataset.label === '在建工程（亿）') baseTy = top - 38;
+                            var ty = placeLabelWithAvoidance(txt, x, baseTy);
+                            if (ty == null) {
+                                ctx.restore();
+                                return;
+                            }
+                            drawHaloLabel(txt, x, ty, fill);
                             ctx.restore();
                         });
                     });
@@ -1397,6 +2310,1069 @@ function renderFinaFixedAssetsChart(rows, tsCode) {
             }
         }
     });
+}
+
+function closeFinaCashCreateModal() {
+    var overlay = document.getElementById('fina-cash-create-modal-overlay');
+    if (!overlay) return;
+    var wasOpen = overlay.classList.contains('is-open');
+    var modal = overlay.querySelector('.fina-cash-create-modal-shell');
+    if (wasOpen && modal) saveFinaCashCreateModalLayout(modal);
+    overlay.classList.remove('is-open');
+    showFinaCashCreateMsg('');
+    if (finaCashCreateChartInstance) {
+        finaCashCreateChartInstance.destroy();
+        finaCashCreateChartInstance = null;
+    }
+    if (wasOpen) _modalClosed();
+}
+
+function renderFinaCashCreateChart(rows) {
+    var canvas = document.getElementById('fina-cash-create-chart');
+    if (!canvas) return;
+    if (!window.Chart) {
+        showFinaCashCreateMsg('图表组件未加载，请 Ctrl+F5 后重试。');
+        return;
+    }
+    if (!Array.isArray(rows) || rows.length === 0) {
+        showFinaCashCreateMsg('暂无可用现金创造能力数据');
+        return;
+    }
+    var labels = [];
+    var ocf = [];
+    var capex = [];
+    var fcf = [];
+    var cashConv = [];
+    rows.forEach(function (r) {
+        r = r || {};
+        labels.push(formatFinaQuarterLabel(r.end_date));
+        var ocfV = parseFloat(r.q_ocf_yi);
+        var capexV = parseFloat(r.q_capex_yi);
+        var fcfV = parseFloat(r.q_fcf_star_yi);
+        var convV = parseFloat(r.q_ocf_to_or_pct);
+        ocf.push(isNaN(ocfV) ? null : ocfV);
+        capex.push(isNaN(capexV) ? null : capexV);
+        fcf.push(isNaN(fcfV) ? null : fcfV);
+        cashConv.push(isNaN(convV) ? null : convV);
+    });
+    var textPreset = getFinaFixedAssetsChartTextPreset(labels.length);
+    if (finaCashCreateChartInstance) {
+        finaCashCreateChartInstance.destroy();
+        finaCashCreateChartInstance = null;
+    }
+    var pal = {
+        ocfFill: 'rgba(59, 130, 246, 0.78)',
+        ocfBorder: 'rgba(37, 99, 235, 1)',
+        /* 负值：靛青冷蓝，与正蓝同系、一眼区隔 */
+        ocfNegFill: 'rgba(12, 74, 110, 0.78)',
+        ocfNegBorder: 'rgba(6, 58, 88, 1)',
+        capexFill: 'rgba(245, 158, 11, 0.78)',
+        capexBorder: 'rgba(180, 83, 9, 1)',
+        /* 负值：深土橙/褐，与正橙同系 */
+        capexNegFill: 'rgba(154, 52, 18, 0.76)',
+        capexNegBorder: 'rgba(92, 32, 12, 1)',
+        fcfFill: 'rgba(139, 92, 246, 0.76)',
+        fcfBorder: 'rgba(124, 58, 237, 1)',
+        /* 与经营宽表 .fina-fa-opdata-negative 同系「绿示负」，与正 FCF 紫柱区分 */
+        fcfNegFill: 'rgba(4, 120, 87, 0.78)',
+        fcfNegBorder: 'rgba(6, 95, 70, 1)',
+        line: 'rgba(219, 39, 119, 1)',
+        lineSoft: 'rgba(219, 39, 119, 0.12)',
+        /* 折线点负值边：与 fcf 负/宽表负值翡翠同系；正值仍用 line 玫红 */
+        cashConvPointNeg: 'rgba(6, 95, 70, 1)',
+    };
+    function buildFinaCashBarPosNegColors(values, posFill, posBorder, negFill, negBorder) {
+        var fills = [];
+        var borders = [];
+        values.forEach(function (v) {
+            if (v == null || v === '' || (typeof v === 'number' && isNaN(v))) {
+                fills.push(posFill);
+                borders.push(posBorder);
+                return;
+            }
+            var nv = typeof v === 'number' ? v : parseFloat(v);
+            if (isNaN(nv)) {
+                fills.push(posFill);
+                borders.push(posBorder);
+                return;
+            }
+            if (nv < 0) {
+                fills.push(negFill);
+                borders.push(negBorder);
+            } else {
+                fills.push(posFill);
+                borders.push(posBorder);
+            }
+        });
+        return { fills: fills, borders: borders };
+    }
+    var ocfB = buildFinaCashBarPosNegColors(
+        ocf,
+        pal.ocfFill,
+        pal.ocfBorder,
+        pal.ocfNegFill,
+        pal.ocfNegBorder
+    );
+    var ocfBarFills = ocfB.fills;
+    var ocfBarBorders = ocfB.borders;
+    var capexB = buildFinaCashBarPosNegColors(
+        capex,
+        pal.capexFill,
+        pal.capexBorder,
+        pal.capexNegFill,
+        pal.capexNegBorder
+    );
+    var capexBarFills = capexB.fills;
+    var capexBarBorders = capexB.borders;
+    var fcfB = buildFinaCashBarPosNegColors(
+        fcf,
+        pal.fcfFill,
+        pal.fcfBorder,
+        pal.fcfNegFill,
+        pal.fcfNegBorder
+    );
+    var fcfBarFills = fcfB.fills;
+    var fcfBarBorders = fcfB.borders;
+    var cashConvPointBgs = [];
+    var cashConvPointBorders = [];
+    cashConv.forEach(function (v) {
+        if (v == null || v === '' || (typeof v === 'number' && isNaN(v))) {
+            cashConvPointBgs.push('rgba(255,255,255,1)');
+            cashConvPointBorders.push(pal.line);
+            return;
+        }
+        var nv = typeof v === 'number' ? v : parseFloat(v);
+        if (isNaN(nv)) {
+            cashConvPointBgs.push('rgba(255,255,255,1)');
+            cashConvPointBorders.push(pal.line);
+            return;
+        }
+        cashConvPointBgs.push('rgba(255,255,255,1)');
+        cashConvPointBorders.push(nv < 0 ? pal.cashConvPointNeg : pal.line);
+    });
+    var labelFontSize = Math.max(10, Math.min(12, textPreset.labelFontSize - 1));
+    var cashLabelPlugin = {
+        id: 'finaCashCreateValueLabels',
+        afterDatasetsDraw: function (chart) {
+            var ctx = chart.ctx;
+            var chartArea = chart.chartArea || {};
+            var placed = [];
+            function labelText(v, unit) {
+                var n = typeof v === 'number' ? v : parseFloat(v);
+                if (isNaN(n)) return '';
+                return n.toFixed(1) + (unit || '');
+            }
+            function measureBox(txt, x, y) {
+                ctx.save();
+                ctx.font = '700 ' + labelFontSize + 'px ' + FINA_CHART_PAGE_FONT;
+                var w = ctx.measureText(txt).width;
+                ctx.restore();
+                var padX = 4;
+                var padY = 2;
+                var h = labelFontSize + 3;
+                return {
+                    left: x - w / 2 - padX,
+                    right: x + w / 2 + padX,
+                    top: y - h - padY,
+                    bottom: y + padY,
+                };
+            }
+            function fits(box) {
+                var leftBound = (chartArea.left || 0) - 8;
+                var rightBound = (chartArea.right || chart.width) + 8;
+                var topBound = (chartArea.top || 0) - 2;
+                var bottomBound = (chartArea.bottom || chart.height) + 2;
+                if (box.left < leftBound || box.right > rightBound || box.top < topBound || box.bottom > bottomBound) {
+                    return false;
+                }
+                for (var i = 0; i < placed.length; i += 1) {
+                    var b = placed[i];
+                    var overlapX = !(box.right + 2 < b.left || box.left - 2 > b.right);
+                    var overlapY = !(box.bottom + 2 < b.top || box.top - 2 > b.bottom);
+                    if (overlapX && overlapY) return false;
+                }
+                return true;
+            }
+            function drawLabel(txt, x, y, fillStyle) {
+                ctx.save();
+                ctx.font = '700 ' + labelFontSize + 'px ' + FINA_CHART_PAGE_FONT;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                ctx.lineJoin = 'round';
+                ctx.lineWidth = 3.5;
+                ctx.strokeStyle = 'rgba(255,255,255,0.98)';
+                ctx.fillStyle = fillStyle;
+                ctx.strokeText(txt, x, y);
+                ctx.fillText(txt, x, y);
+                ctx.restore();
+            }
+            function placeLabel(txt, x, baseY, fillStyle, offsets) {
+                for (var i = 0; i < offsets.length; i += 1) {
+                    var y = baseY + offsets[i];
+                    var box = measureBox(txt, x, y);
+                    if (!fits(box)) continue;
+                    placed.push(box);
+                    drawLabel(txt, x, y, fillStyle);
+                    return true;
+                }
+                return false;
+            }
+            var drawOrder = [
+                '现金转化率',
+                '自由现金流FCF（亿）',
+                '经营现金流净额（亿）',
+                '资本开支（亿）',
+            ];
+            drawOrder.forEach(function (name) {
+                var di = -1;
+                for (var i = 0; i < chart.data.datasets.length; i += 1) {
+                    if ((chart.data.datasets[i] || {}).label === name) {
+                        di = i;
+                        break;
+                    }
+                }
+                if (di < 0) return;
+                var ds = chart.data.datasets[di];
+                var meta = chart.getDatasetMeta(di);
+                if (!meta || meta.hidden || !meta.data) return;
+                meta.data.forEach(function (elem, idx) {
+                    if (!elem || elem.skip) return;
+                    var raw = ds.data[idx];
+                    var n = typeof raw === 'number' ? raw : parseFloat(raw);
+                    if (isNaN(n)) return;
+                    if (ds.type === 'line') {
+                        var lineLblC = n < 0 ? pal.cashConvPointNeg : pal.line;
+                        placeLabel(labelText(n, ''), elem.x, elem.y - 8, lineLblC, [0, -12, 12, -24, 24, -36, 36]);
+                        return;
+                    }
+                    var top = Math.min(elem.y, elem.base);
+                    var bottom = Math.max(elem.y, elem.base);
+                    var positive = n >= 0;
+                    var fill =
+                        ds.label === '经营现金流净额（亿）'
+                            ? (positive ? pal.ocfBorder : pal.ocfNegBorder)
+                            : ds.label === '资本开支（亿）'
+                              ? (positive ? pal.capexBorder : pal.capexNegBorder)
+                              : ds.label === '自由现金流FCF（亿）'
+                                ? (positive ? pal.fcfBorder : pal.fcfNegBorder)
+                                : pal.fcfBorder;
+                    var baseY = positive ? top - 2 : bottom + labelFontSize + 4;
+                    var offsets = positive
+                        ? [0, -12, 12, -24, 24, -36, 36]
+                        : [0, 12, -12, 24, -24, 36, -36];
+                    placeLabel(labelText(n, ''), elem.x, baseY, fill, offsets);
+                });
+            });
+        },
+    };
+    finaCashCreateChartInstance = new Chart(canvas, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    type: 'bar',
+                    label: '经营现金流净额（亿）',
+                    data: ocf,
+                    yAxisID: 'y',
+                    backgroundColor: ocfBarFills,
+                    borderColor: ocfBarBorders,
+                    borderWidth: 1,
+                    borderRadius: 4,
+                    order: 1,
+                },
+                {
+                    type: 'bar',
+                    label: '资本开支（亿）',
+                    data: capex,
+                    yAxisID: 'y',
+                    backgroundColor: capexBarFills,
+                    borderColor: capexBarBorders,
+                    borderWidth: 1,
+                    borderRadius: 4,
+                    order: 2,
+                },
+                {
+                    type: 'bar',
+                    label: '自由现金流FCF（亿）',
+                    data: fcf,
+                    yAxisID: 'y',
+                    backgroundColor: fcfBarFills,
+                    borderColor: fcfBarBorders,
+                    borderWidth: 1,
+                    borderRadius: 4,
+                    order: 3,
+                },
+                {
+                    type: 'line',
+                    label: '现金转化率',
+                    data: cashConv,
+                    yAxisID: 'y1',
+                    borderColor: pal.line,
+                    backgroundColor: pal.lineSoft,
+                    borderWidth: 3,
+                    fill: false,
+                    tension: 0,
+                    pointRadius: 4,
+                    pointHoverRadius: 7,
+                    pointBackgroundColor: cashConvPointBgs,
+                    pointBorderColor: cashConvPointBorders,
+                    pointBorderWidth: 2,
+                    spanGaps: false,
+                    order: 10,
+                },
+            ],
+        },
+        options: {
+            animation: false,
+            responsive: true,
+            maintainAspectRatio: false,
+            devicePixelRatio: getFinaFixedAssetsChartDpr(),
+            layout: { padding: { top: 18, right: 8, bottom: 6, left: 2 } },
+            interaction: { mode: 'index', intersect: false },
+            datasets: {
+                bar: { categoryPercentage: 0.68, barPercentage: 0.86 },
+                line: { borderWidth: 3 },
+            },
+            plugins: {
+                legend: finaFixedAssetsLegendOptions(),
+                tooltip: {
+                    displayColors: false,
+                    callbacks: {
+                        title: function (items) {
+                            return items.length ? String(items[0].label || '') : '';
+                        },
+                        label: function (ctx) {
+                            var v = ctx.raw;
+                            var n = typeof v === 'number' ? v : parseFloat(v);
+                            var name = ctx.dataset.label || '';
+                            if (isNaN(n)) return name + ': --';
+                            var unit = ctx.dataset.yAxisID === 'y1' ? '' : '亿';
+                            return name + ': ' + n.toFixed(1) + unit;
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        maxRotation: 45,
+                        minRotation: 0,
+                        autoSkip: true,
+                        color: '#64748b',
+                        font: { size: textPreset.axisFontSize, family: FINA_CHART_PAGE_FONT },
+                    },
+                    grid: { display: false },
+                },
+                y: {
+                    type: 'linear',
+                    position: 'left',
+                    title: { display: false },
+                    ticks: {
+                        color: '#64748b',
+                        font: { size: textPreset.axisFontSize, family: FINA_CHART_PAGE_FONT },
+                        callback: function (val) {
+                            return finaFixedAssetsAxisInt(val);
+                        },
+                    },
+                    grid: {
+                        color: function (ctx) {
+                            return Number(ctx.tick && ctx.tick.value) === 0 ? '#90a4ae' : 'rgba(226, 232, 240, 0.95)';
+                        },
+                        lineWidth: function (ctx) {
+                            return Number(ctx.tick && ctx.tick.value) === 0 ? 2.25 : 0.5;
+                        },
+                    },
+                },
+                y1: {
+                    type: 'linear',
+                    position: 'right',
+                    title: { display: false },
+                    grid: { drawOnChartArea: false },
+                    ticks: {
+                        color: '#64748b',
+                        font: { size: textPreset.axisFontSize, family: FINA_CHART_PAGE_FONT },
+                        callback: function (val) {
+                            return finaFixedAssetsAxisOneDecimal(val);
+                        },
+                    },
+                },
+            },
+        },
+        plugins: [cashLabelPlugin],
+    });
+    showFinaCashCreateMsg('');
+    requestAnimationFrame(function () {
+        if (finaCashCreateChartInstance && typeof finaCashCreateChartInstance.resize === 'function') {
+            try {
+                finaCashCreateChartInstance.resize();
+            } catch (e) {
+                /* ignore */
+            }
+        }
+    });
+}
+
+function openFinaCashCreateModal() {
+    var overlay = document.getElementById('fina-cash-create-modal-overlay');
+    var titleEl = document.getElementById('fina-cash-create-modal-title');
+    if (!overlay) return;
+    finaCashCreateModalLayoutOpenTs = Date.now();
+    var rows = Array.isArray(finaFixedAssetsCurrentRows) ? finaFixedAssetsCurrentRows : [];
+    if (titleEl) {
+        titleEl.textContent = finaFixedAssetsCurrentTitle
+            ? finaFixedAssetsCurrentTitle + ' · 现金创造能力'
+            : '现金创造能力';
+    }
+    overlay.classList.add('is-open');
+    _modalOpened();
+    applyFinaCashCreateModalSavedLayout();
+    if (!rows.length) {
+        showFinaCashCreateMsg('当前弹窗尚未加载到 25 季经营数据');
+        return;
+    }
+    renderFinaCashCreateChart(rows);
+}
+
+function closeFinaWorkingCapModal() {
+    var overlay = document.getElementById('fina-working-cap-modal-overlay');
+    if (!overlay) return;
+    var wasOpen = overlay.classList.contains('is-open');
+    var modal = overlay.querySelector('.fina-working-cap-modal-shell');
+    if (wasOpen && modal) saveFinaWorkingCapModalLayout(modal);
+    overlay.classList.remove('is-open');
+    showFinaWorkingCapMsg('');
+    if (finaWorkingCapTurnoverChartInstance) {
+        finaWorkingCapTurnoverChartInstance.destroy();
+        finaWorkingCapTurnoverChartInstance = null;
+    }
+    if (wasOpen) _modalClosed();
+}
+
+function renderFinaWorkingCapTurnoverChart(rows) {
+    var canvas = document.getElementById('fina-working-cap-chart');
+    if (!canvas) return;
+    if (!window.Chart) {
+        showFinaWorkingCapMsg('图表组件未加载，请 Ctrl+F5 后重试。');
+        return;
+    }
+    if (!Array.isArray(rows) || rows.length === 0) {
+        showFinaWorkingCapMsg('暂无可用营运资本周转数据');
+        return;
+    }
+    var labels = [];
+    var arDays = [];
+    var invDays = [];
+    var apDays = [];
+    var cccDays = [];
+    var recvPct = [];
+    rows.forEach(function (r) {
+        r = r || {};
+        labels.push(formatFinaQuarterLabel(r.end_date));
+        var arV = parseFloat(r.ar_days_q);
+        var invV = parseFloat(r.inv_days_q);
+        var apV = parseFloat(r.ap_days_q);
+        var cccV = parseFloat(r.ccc_q);
+        var recvV = parseFloat(r.recv_pct);
+        arDays.push(isNaN(arV) ? null : arV);
+        invDays.push(isNaN(invV) ? null : invV);
+        apDays.push(isNaN(apV) ? null : apV);
+        cccDays.push(isNaN(cccV) ? null : cccV);
+        recvPct.push(isNaN(recvV) ? null : recvV);
+    });
+    var textPreset = getFinaFixedAssetsChartTextPreset(labels.length);
+    var labelFontSize = Math.max(10, Math.min(12, textPreset.labelFontSize - 1));
+    if (finaWorkingCapTurnoverChartInstance) finaWorkingCapTurnoverChartInstance.destroy();
+    var pal = {
+        arLine: 'rgba(37, 99, 235, 1)',
+        invLine: 'rgba(234, 88, 12, 1)',
+        apLine: 'rgba(5, 150, 105, 1)',
+        cccLine: 'rgba(219, 39, 119, 1)',
+        recvBarFill: 'rgba(14, 165, 233, 0.28)',
+        recvBarBorder: 'rgba(2, 132, 199, 0.96)',
+    };
+    var wcValueLabelPlugin = {
+        id: 'finaWorkingCapValueLabels',
+        afterDatasetsDraw: function (chart) {
+            var ctx = chart.ctx;
+            var chartArea = chart.chartArea || {};
+            var placed = [];
+            function labelText(v) {
+                var n = typeof v === 'number' ? v : parseFloat(v);
+                if (isNaN(n)) return '';
+                return n.toFixed(1);
+            }
+            function measureBox(txt, x, y) {
+                ctx.save();
+                ctx.font = '700 ' + labelFontSize + 'px ' + FINA_CHART_PAGE_FONT;
+                var w = ctx.measureText(txt).width;
+                ctx.restore();
+                var padX = 4;
+                var padY = 2;
+                var h = labelFontSize + 3;
+                return {
+                    left: x - w / 2 - padX,
+                    right: x + w / 2 + padX,
+                    top: y - h - padY,
+                    bottom: y + padY,
+                };
+            }
+            function fits(box) {
+                var leftBound = (chartArea.left || 0) - 8;
+                var rightBound = (chartArea.right || chart.width) + 8;
+                var topBound = (chartArea.top || 0) - 2;
+                var bottomBound = (chartArea.bottom || chart.height) + 2;
+                if (box.left < leftBound || box.right > rightBound || box.top < topBound || box.bottom > bottomBound) {
+                    return false;
+                }
+                for (var i = 0; i < placed.length; i += 1) {
+                    var b = placed[i];
+                    var overlapX = !(box.right + 2 < b.left || box.left - 2 > b.right);
+                    var overlapY = !(box.bottom + 2 < b.top || box.top - 2 > b.bottom);
+                    if (overlapX && overlapY) return false;
+                }
+                return true;
+            }
+            function drawLabel(txt, x, y, fillStyle) {
+                ctx.save();
+                ctx.font = '700 ' + labelFontSize + 'px ' + FINA_CHART_PAGE_FONT;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                ctx.lineJoin = 'round';
+                ctx.lineWidth = 3.6;
+                ctx.strokeStyle = 'rgba(255,255,255,0.98)';
+                ctx.fillStyle = fillStyle;
+                ctx.strokeText(txt, x, y);
+                ctx.fillText(txt, x, y);
+                ctx.restore();
+            }
+            function placeLabel(txt, x, baseY, fillStyle, offsets) {
+                for (var i = 0; i < offsets.length; i += 1) {
+                    var y = baseY + offsets[i];
+                    var box = measureBox(txt, x, y);
+                    if (!fits(box)) continue;
+                    placed.push(box);
+                    drawLabel(txt, x, y, fillStyle);
+                    return true;
+                }
+                return false;
+            }
+            var drawOrder = ['现金循环天数（天）', '应付天数（天）', '应收天数（天）', '存货天数（天）', '应收占收入比'];
+            drawOrder.forEach(function (name) {
+                var di = -1;
+                for (var i = 0; i < chart.data.datasets.length; i += 1) {
+                    if ((chart.data.datasets[i] || {}).label === name) {
+                        di = i;
+                        break;
+                    }
+                }
+                if (di < 0) return;
+                var ds = chart.data.datasets[di];
+                var meta = chart.getDatasetMeta(di);
+                if (!meta || meta.hidden || !meta.data) return;
+                meta.data.forEach(function (elem, idx) {
+                    if (!elem || elem.skip) return;
+                    var raw = ds.data[idx];
+                    var n = typeof raw === 'number' ? raw : parseFloat(raw);
+                    if (isNaN(n)) return;
+                    var txt = labelText(n);
+                    if (!txt) return;
+                    if (ds.type === 'bar') {
+                        var top = Math.min(elem.y, elem.base);
+                        placeLabel(txt, elem.x, top - 2, pal.recvBarBorder, [0, -10, 10, -20, 20]);
+                        return;
+                    }
+                    var c = ds.label === '应收天数（天）'
+                        ? pal.arLine
+                        : ds.label === '存货天数（天）'
+                          ? pal.invLine
+                          : ds.label === '应付天数（天）'
+                            ? pal.apLine
+                            : pal.cccLine;
+                    placeLabel(txt, elem.x, elem.y - 8, c, [0, -12, 12, -24, 24, -36, 36]);
+                });
+            });
+        },
+    };
+    finaWorkingCapTurnoverChartInstance = new Chart(canvas, {
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    type: 'line',
+                    label: '应收天数（天）',
+                    data: arDays,
+                    yAxisID: 'y',
+                    borderColor: pal.arLine,
+                    backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                    pointBackgroundColor: '#fff',
+                    pointBorderColor: pal.arLine,
+                    pointRadius: 3.6,
+                    pointHoverRadius: 6.6,
+                    pointStyle: 'circle',
+                    borderWidth: 2.6,
+                    tension: 0,
+                    order: 1,
+                },
+                {
+                    type: 'line',
+                    label: '存货天数（天）',
+                    data: invDays,
+                    yAxisID: 'y',
+                    borderColor: pal.invLine,
+                    backgroundColor: 'rgba(234, 88, 12, 0.1)',
+                    pointBackgroundColor: '#fff',
+                    pointBorderColor: pal.invLine,
+                    pointRadius: 3.6,
+                    pointHoverRadius: 6.6,
+                    pointStyle: 'rectRounded',
+                    borderWidth: 2.5,
+                    tension: 0,
+                    order: 2,
+                },
+                {
+                    type: 'line',
+                    label: '应付天数（天）',
+                    data: apDays,
+                    yAxisID: 'y',
+                    borderColor: pal.apLine,
+                    backgroundColor: 'rgba(5, 150, 105, 0.12)',
+                    pointBackgroundColor: '#fff',
+                    pointBorderColor: pal.apLine,
+                    pointRadius: 3.8,
+                    pointHoverRadius: 6.8,
+                    pointStyle: 'triangle',
+                    borderWidth: 2.8,
+                    tension: 0,
+                    order: 3,
+                },
+                {
+                    type: 'line',
+                    label: '现金循环天数（天）',
+                    data: cccDays,
+                    yAxisID: 'y',
+                    borderColor: pal.cccLine,
+                    backgroundColor: 'rgba(219, 39, 119, 0.1)',
+                    pointBackgroundColor: '#fff',
+                    pointBorderColor: pal.cccLine,
+                    pointRadius: 4,
+                    pointHoverRadius: 7,
+                    pointStyle: 'star',
+                    borderWidth: 2.8,
+                    tension: 0,
+                    order: 4,
+                },
+                {
+                    type: 'bar',
+                    label: '应收占收入比',
+                    data: recvPct,
+                    yAxisID: 'y1',
+                    backgroundColor: pal.recvBarFill,
+                    borderColor: pal.recvBarBorder,
+                    borderWidth: 0.8,
+                    borderRadius: 3,
+                    barPercentage: 0.48,
+                    categoryPercentage: 0.56,
+                    maxBarThickness: 12,
+                    order: 10,
+                },
+            ],
+        },
+        options: {
+            animation: false,
+            responsive: true,
+            maintainAspectRatio: false,
+            devicePixelRatio: getFinaFixedAssetsChartDpr(),
+            layout: { padding: { top: 18, right: 8, bottom: 6, left: 2 } },
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: finaFixedAssetsLegendOptions(),
+                tooltip: {
+                    displayColors: false,
+                    callbacks: {
+                        title: function (items) {
+                            return items.length ? String(items[0].label || '') : '';
+                        },
+                        label: function (ctx) {
+                            var n = parseFloat(ctx.raw);
+                            var name = ctx.dataset.label || '';
+                            if (isNaN(n)) return name + ': --';
+                            var unit = ctx.dataset.yAxisID === 'y1' ? '' : '天';
+                            return name + ': ' + n.toFixed(1) + unit;
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        maxRotation: 45,
+                        minRotation: 0,
+                        autoSkip: true,
+                        color: '#64748b',
+                        font: { size: textPreset.axisFontSize, family: FINA_CHART_PAGE_FONT },
+                    },
+                    grid: { display: false },
+                },
+                y: {
+                    type: 'linear',
+                    position: 'left',
+                    ticks: {
+                        color: '#64748b',
+                        font: { size: textPreset.axisFontSize, family: FINA_CHART_PAGE_FONT },
+                        callback: function (v) {
+                            return finaFixedAssetsAxisOneDecimal(v);
+                        },
+                    },
+                    grid: {
+                        color: function (c) {
+                            return Number(c.tick && c.tick.value) === 0 ? '#90a4ae' : 'rgba(226,232,240,0.95)';
+                        },
+                        lineWidth: function (c) {
+                            return Number(c.tick && c.tick.value) === 0 ? 2 : 0.5;
+                        },
+                    },
+                },
+                y1: {
+                    type: 'linear',
+                    position: 'right',
+                    grid: { drawOnChartArea: false },
+                    grace: '12%',
+                    ticks: {
+                        color: '#64748b',
+                        font: { size: textPreset.axisFontSize, family: FINA_CHART_PAGE_FONT },
+                        callback: function (v) {
+                            return finaFixedAssetsAxisOneDecimal(v);
+                        },
+                    },
+                },
+            },
+        },
+        plugins: [wcValueLabelPlugin],
+    });
+    showFinaWorkingCapMsg('');
+    requestAnimationFrame(function(){try{if(finaWorkingCapTurnoverChartInstance&&finaWorkingCapTurnoverChartInstance.resize)finaWorkingCapTurnoverChartInstance.resize();}catch(e){}});
+}
+
+function openFinaWorkingCapModal() {
+    var overlay = document.getElementById('fina-working-cap-modal-overlay');
+    var titleEl = document.getElementById('fina-working-cap-modal-title');
+    if (!overlay) return;
+    finaWorkingCapModalLayoutOpenTs = Date.now();
+    var rows = Array.isArray(finaFixedAssetsCurrentRows) ? finaFixedAssetsCurrentRows : [];
+    if (titleEl) titleEl.textContent = finaFixedAssetsCurrentTitle ? finaFixedAssetsCurrentTitle + ' · 营运资本周转天数' : '营运资本周转天数';
+    overlay.classList.add('is-open');
+    _modalOpened();
+    applyFinaWorkingCapModalSavedLayout();
+    if (!rows.length) {
+        showFinaWorkingCapMsg('当前弹窗尚未加载到 25 季经营数据');
+        return;
+    }
+    renderFinaWorkingCapTurnoverChart(rows);
+}
+
+function closeFinaCapEffModal() {
+    var overlay = document.getElementById('fina-cap-eff-modal-overlay');
+    if (!overlay) return;
+    var wasOpen = overlay.classList.contains('is-open');
+    var modal = overlay.querySelector('.fina-cap-eff-modal-shell');
+    if (wasOpen && modal) saveFinaCapEffModalLayout(modal);
+    overlay.classList.remove('is-open');
+    showFinaCapEffMsg('');
+    if (finaCapEffChartInstance) {
+        finaCapEffChartInstance.destroy();
+        finaCapEffChartInstance = null;
+    }
+    if (wasOpen) _modalClosed();
+}
+
+function renderFinaCapEffChart(rows) {
+    var canvas = document.getElementById('fina-cap-eff-chart');
+    if (!canvas) return;
+    if (!window.Chart) {
+        showFinaCapEffMsg('图表组件未加载，请 Ctrl+F5 后重试。');
+        return;
+    }
+    if (!Array.isArray(rows) || rows.length === 0) {
+        showFinaCapEffMsg('暂无可用资本效率数据');
+        return;
+    }
+    var labels = [];
+    var roicArr = [];
+    var roeArr = [];
+    rows.forEach(function (r) {
+        r = r || {};
+        labels.push(formatFinaQuarterLabel(r.end_date));
+        var roicV = parseFloat(r.roic_sq_pct_avg_ic_q);
+        var roeV = parseFloat(r.q_dt_roe);
+        roicArr.push(isNaN(roicV) ? null : roicV);
+        roeArr.push(isNaN(roeV) ? null : roeV);
+    });
+    if (finaCapEffChartInstance) finaCapEffChartInstance.destroy();
+    var textPreset = getFinaFixedAssetsChartTextPreset(labels.length);
+    var pal = {
+        roicLine: 'rgba(30, 136, 229, 1)',
+        roicSoft: 'rgba(30, 136, 229, 0.14)',
+        roicNeg: 'rgba(230, 81, 0, 1)',
+        roicNegSoft: 'rgba(230, 81, 0, 0.14)',
+        roeLine: 'rgba(171, 71, 188, 1)',
+        roeSoft: 'rgba(171, 71, 188, 0.14)',
+        roeNeg: 'rgba(198, 40, 40, 1)',
+        roeNegSoft: 'rgba(198, 40, 40, 0.14)',
+    };
+    var capEffLabelPlugin = {
+        id: 'finaCapEffValueLabels',
+        afterDatasetsDraw: function (chart) {
+            var ctx = chart.ctx;
+            var chartArea = chart.chartArea || {};
+            var labelFontSize = Math.max(10, Math.min(12, textPreset.labelFontSize - 1));
+            var placed = [];
+            var slotByIndex = {};
+            function drawLabel(txt, x, y, color) {
+                ctx.save();
+                ctx.font = '700 ' + labelFontSize + 'px ' + FINA_CHART_PAGE_FONT;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                ctx.lineJoin = 'round';
+                ctx.lineWidth = 3.4;
+                ctx.strokeStyle = 'rgba(255,255,255,0.98)';
+                ctx.fillStyle = color;
+                ctx.strokeText(txt, x, y);
+                ctx.fillText(txt, x, y);
+                ctx.restore();
+            }
+            function hasOverlap(box) {
+                if (
+                    box.left < (chartArea.left || 0) - 8 ||
+                    box.right > (chartArea.right || chart.width) + 8 ||
+                    box.top < (chartArea.top || 0) - 2 ||
+                    box.bottom > (chartArea.bottom || chart.height) + 2
+                ) {
+                    return true;
+                }
+                for (var i = 0; i < placed.length; i += 1) {
+                    var b = placed[i];
+                    var overlapX = !(box.right + 2 < b.left || box.left - 2 > b.right);
+                    var overlapY = !(box.bottom + 2 < b.top || box.top - 2 > b.bottom);
+                    if (overlapX && overlapY) return true;
+                }
+                return false;
+            }
+            chart.data.datasets.forEach(function (ds, di) {
+                var meta = chart.getDatasetMeta(di);
+                if (!meta || meta.hidden || !meta.data) return;
+                var isRoic = ds.label === 'ROIC';
+                meta.data.forEach(function (elem, idx) {
+                    if (!elem || elem.skip) return;
+                    var n = parseFloat(ds.data[idx]);
+                    if (isNaN(n)) return;
+                    var txt = n.toFixed(2);
+                    var x = elem.x;
+                    var yBase = elem.y - 8;
+                    var color = isRoic
+                        ? (n < 0 ? pal.roicNeg : pal.roicLine)
+                        : (n < 0 ? pal.roeNeg : pal.roeLine);
+                    var slot = slotByIndex[idx] || 0;
+                    slotByIndex[idx] = slot + 1;
+                    var isEdgePoint = idx === 0 || idx === ds.data.length - 1;
+                    var preferredOffsets = slot % 2 === 0
+                        ? [-10, -22, -34, 12, 24, 36]
+                        : [14, 26, 38, -8, -20, -32];
+                    var offsets = isEdgePoint
+                        ? preferredOffsets.concat([48, -44, 56, -52])
+                        : preferredOffsets;
+                    var xJitter = isEdgePoint
+                        ? (idx === ds.data.length - 1
+                            ? (slot % 2 === 0 ? -14 : 14)
+                            : (slot % 2 === 0 ? -8 : 8))
+                        : 0;
+                    var oi;
+                    var placedOk = false;
+                    for (oi = 0; oi < offsets.length; oi += 1) {
+                        var y = yBase + offsets[oi];
+                        var drawX = x + xJitter;
+                        ctx.save();
+                        ctx.font = '700 ' + labelFontSize + 'px ' + FINA_CHART_PAGE_FONT;
+                        var w = ctx.measureText(txt).width;
+                        ctx.restore();
+                        var box = {
+                            left: drawX - w / 2 - 4,
+                            right: drawX + w / 2 + 4,
+                            top: y - (labelFontSize + 5),
+                            bottom: y + 2,
+                        };
+                        if (hasOverlap(box)) continue;
+                        placed.push(box);
+                        drawLabel(txt, drawX, y, color);
+                        placedOk = true;
+                        break;
+                    }
+                    if (!placedOk && isEdgePoint) {
+                        var fallbackY = yBase + (slot % 2 === 0 ? -44 : 44);
+                        drawLabel(txt, x + xJitter, fallbackY, color);
+                    }
+                });
+            });
+        },
+    };
+    finaCapEffChartInstance = new Chart(canvas, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    type: 'line',
+                    label: 'ROIC',
+                    data: roicArr,
+                    yAxisID: 'y',
+                    borderColor: pal.roicLine,
+                    backgroundColor: pal.roicSoft,
+                    segment: {
+                        borderColor: function (ctx) {
+                            var y0 = ctx.p0 && ctx.p0.parsed ? ctx.p0.parsed.y : NaN;
+                            var y1 = ctx.p1 && ctx.p1.parsed ? ctx.p1.parsed.y : NaN;
+                            return (y0 < 0 || y1 < 0) ? pal.roicNeg : pal.roicLine;
+                        },
+                        backgroundColor: function (ctx) {
+                            var y0 = ctx.p0 && ctx.p0.parsed ? ctx.p0.parsed.y : NaN;
+                            var y1 = ctx.p1 && ctx.p1.parsed ? ctx.p1.parsed.y : NaN;
+                            return (y0 < 0 || y1 < 0) ? pal.roicNegSoft : pal.roicSoft;
+                        },
+                    },
+                    pointBackgroundColor: function (ctx) {
+                        var v = parseFloat(ctx.raw);
+                        return !isNaN(v) && v < 0 ? '#ffe9dc' : '#fff';
+                    },
+                    pointBorderColor: function (ctx) {
+                        var v = parseFloat(ctx.raw);
+                        return !isNaN(v) && v < 0 ? pal.roicNeg : pal.roicLine;
+                    },
+                    pointRadius: 3.8,
+                    pointHoverRadius: 6.8,
+                    pointStyle: 'circle',
+                    borderWidth: 2.8,
+                    tension: 0,
+                    order: 1,
+                },
+                {
+                    type: 'line',
+                    label: 'ROE(扣非)',
+                    data: roeArr,
+                    yAxisID: 'y',
+                    borderColor: pal.roeLine,
+                    backgroundColor: pal.roeSoft,
+                    segment: {
+                        borderColor: function (ctx) {
+                            var y0 = ctx.p0 && ctx.p0.parsed ? ctx.p0.parsed.y : NaN;
+                            var y1 = ctx.p1 && ctx.p1.parsed ? ctx.p1.parsed.y : NaN;
+                            return (y0 < 0 || y1 < 0) ? pal.roeNeg : pal.roeLine;
+                        },
+                        backgroundColor: function (ctx) {
+                            var y0 = ctx.p0 && ctx.p0.parsed ? ctx.p0.parsed.y : NaN;
+                            var y1 = ctx.p1 && ctx.p1.parsed ? ctx.p1.parsed.y : NaN;
+                            return (y0 < 0 || y1 < 0) ? pal.roeNegSoft : pal.roeSoft;
+                        },
+                    },
+                    pointBackgroundColor: function (ctx) {
+                        var v = parseFloat(ctx.raw);
+                        return !isNaN(v) && v < 0 ? '#fde7e7' : '#fff';
+                    },
+                    pointBorderColor: function (ctx) {
+                        var v = parseFloat(ctx.raw);
+                        return !isNaN(v) && v < 0 ? pal.roeNeg : pal.roeLine;
+                    },
+                    pointRadius: 3.8,
+                    pointHoverRadius: 6.8,
+                    pointStyle: 'rectRounded',
+                    borderWidth: 2.8,
+                    tension: 0,
+                    order: 2,
+                },
+            ],
+        },
+        options: {
+            animation: false,
+            responsive: true,
+            maintainAspectRatio: false,
+            devicePixelRatio: getFinaFixedAssetsChartDpr(),
+            layout: { padding: { top: 18, right: 8, bottom: 6, left: 2 } },
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: finaFixedAssetsLegendOptions(),
+                tooltip: {
+                    displayColors: false,
+                    callbacks: {
+                        title: function (items) {
+                            return items.length ? String(items[0].label || '') : '';
+                        },
+                        label: function (ctx) {
+                            var n = parseFloat(ctx.raw);
+                            var name = ctx.dataset.label || '';
+                            if (isNaN(n)) return name + ': --';
+                            return name + ': ' + n.toFixed(2);
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        maxRotation: 45,
+                        minRotation: 0,
+                        autoSkip: true,
+                        color: '#64748b',
+                        font: { size: textPreset.axisFontSize, family: FINA_CHART_PAGE_FONT },
+                    },
+                    grid: { display: false },
+                },
+                y: {
+                    type: 'linear',
+                    position: 'left',
+                    ticks: {
+                        color: '#64748b',
+                        font: { size: textPreset.axisFontSize, family: FINA_CHART_PAGE_FONT },
+                        callback: function (v) {
+                            return finaFixedAssetsAxisOneDecimal(v);
+                        },
+                    },
+                    grid: {
+                        color: function (c) {
+                            return Number(c.tick && c.tick.value) === 0 ? '#90a4ae' : 'rgba(226,232,240,0.95)';
+                        },
+                        lineWidth: function (c) {
+                            return Number(c.tick && c.tick.value) === 0 ? 2 : 0.5;
+                        },
+                    },
+                },
+            },
+        },
+        plugins: [capEffLabelPlugin],
+    });
+    showFinaCapEffMsg('');
+    requestAnimationFrame(function () {
+        try {
+            if (finaCapEffChartInstance && finaCapEffChartInstance.resize) finaCapEffChartInstance.resize();
+        } catch (e) {
+            /* ignore */
+        }
+    });
+}
+
+function openFinaCapEffModal() {
+    var overlay = document.getElementById('fina-cap-eff-modal-overlay');
+    var titleEl = document.getElementById('fina-cap-eff-modal-title');
+    if (!overlay) return;
+    finaCapEffModalLayoutOpenTs = Date.now();
+    var rows = Array.isArray(finaFixedAssetsCurrentRows) ? finaFixedAssetsCurrentRows : [];
+    if (titleEl) titleEl.textContent = finaFixedAssetsCurrentTitle ? finaFixedAssetsCurrentTitle + ' · 资本效率' : '资本效率';
+    overlay.classList.add('is-open');
+    _modalOpened();
+    applyFinaCapEffModalSavedLayout();
+    if (!rows.length) {
+        showFinaCapEffMsg('当前弹窗尚未加载到 25 季经营数据');
+        return;
+    }
+    renderFinaCapEffChart(rows);
 }
 
 /** 全角数字转 ASCII，避免输入法全角下 6 位无法匹配 */
@@ -1451,6 +3427,21 @@ function normalizeFinaFixedAssetsTsCode(raw) {
     return '';
 }
 
+/** 固定资产弹窗输入框：仅展示 6 位，不显示 .SH/.SZ/.BJ（与 normalize 后完整 ts_code 配合使用） */
+function formatFinaFixedAssetsTsCodeDisplay(tsCodeAny) {
+    var s = finaTsCodeAsciiDigits(String(tsCodeAny || ''))
+        .trim()
+        .replace(/\s/g, '')
+        .toUpperCase();
+    if (!s) return '';
+    var mDot = /^(\d{6})(\.(SH|SZ|BJ))$/.exec(s);
+    if (mDot) return mDot[1];
+    var mJoin = /^(\d{6})(SH|SZ|BJ)$/.exec(s);
+    if (mJoin) return mJoin[1];
+    if (/^\d{6}$/.test(s)) return s;
+    return s;
+}
+
 /** 表头单行：仅输入框显示代码；名称与主题文案分列，整体居中（不重复代码） */
 function updateFinaFixedAssetsHeaderLine(_tsCode, secName) {
     var secEl = document.getElementById('fina-fixed-assets-modal-sec-name');
@@ -1475,7 +3466,7 @@ function switchFinaFixedAssetsModalRow(tsCode, secName) {
     var raw = String(tsCode || '').trim();
     var normalized = normalizeFinaFixedAssetsTsCode(raw);
     var inp = document.getElementById('fina-fixed-assets-ts-input');
-    if (inp) inp.value = normalized || raw.toUpperCase();
+    if (inp) inp.value = formatFinaFixedAssetsTsCodeDisplay(normalized || raw);
     updateFinaFixedAssetsHeaderLine(normalized || raw, secName || '');
     fetchFinaFixedAssetsSeries(inp ? inp.value : raw);
 }
@@ -1532,7 +3523,7 @@ function fetchFinaFixedAssetsSeries(tsCodeRaw) {
         return;
     }
     var inp = document.getElementById('fina-fixed-assets-ts-input');
-    if (inp) inp.value = normalized;
+    if (inp) inp.value = formatFinaFixedAssetsTsCodeDisplay(normalized);
     var selectedEndDate = String(_finaMetricState().selectedEndDate || '').trim();
     if (!selectedEndDate) {
         showFinaFixedAssetsMsg('当前报告期为空，无法加载图表');
@@ -1543,31 +3534,66 @@ function fetchFinaFixedAssetsSeries(tsCodeRaw) {
     clearFinaFixedAssetsMetricsBar();
     clearFinaFixedAssetsMainbzTable();
     clearFinaFixedAssetsOperatingDataTable();
+    finaFixedAssetsCurrentRows = [];
+    finaFixedAssetsCurrentTitle = '';
+    var cb = encodeURIComponent(String(Date.now()));
     var url = rtMonitorApiUrl(
         '/api/fina_fixed_assets_revenue_series?ts_code=' +
             encodeURIComponent(normalized) +
             '&end_date=' +
             encodeURIComponent(selectedEndDate) +
             '&limit=' +
-            encodeURIComponent(String(FINA_FIXED_ASSETS_SERIES_LIMIT))
+            encodeURIComponent(String(FINA_FIXED_ASSETS_SERIES_LIMIT)) +
+            '&_cb=' +
+            cb
     );
-    fetch(url, { cache: 'no-store' })
-        .then(function (res) {
+    var actUrl = rtMonitorApiUrl(
+        '/api/fina_stock_basic_act?ts_code=' + encodeURIComponent(normalized) + '&_cb=' + cb
+    );
+    /* 实控人/企业性质：与序列并行拉取专用接口再合并，避免「主包缺字段/缓存/条件判断漏补」导致顶栏恒为 -- */
+    Promise.all([
+        fetch(url, { cache: 'no-store' }).then(function (res) {
             return res.json().then(function (data) {
                 return { ok: res.ok, data: data };
             });
-        })
-        .then(function (o) {
+        }),
+        fetch(actUrl, { cache: 'no-store' })
+            .then(function (res) {
+                return res.json().then(function (data) {
+                    return { ok: res.ok, data: data };
+                });
+            })
+            .catch(function () {
+                return { ok: false, data: null };
+            }),
+    ])
+        .then(function (pair) {
+            var o = pair[0];
+            var actPack = pair[1];
             if (!o.ok || !o.data || o.data.error) {
                 var err = o && o.data && o.data.error ? String(o.data.error) : '加载失败';
                 clearFinaFixedAssetsMetricsBar();
                 clearFinaFixedAssetsMainbzTable();
                 clearFinaFixedAssetsOperatingDataTable();
+                finaFixedAssetsCurrentRows = [];
+                finaFixedAssetsCurrentTitle = '';
                 showFinaFixedAssetsMsg(err);
                 syncFinaFixedAssetsNavButtons();
                 return;
             }
-            var sn = o.data.sec_name != null ? String(o.data.sec_name) : '';
+            /* 先收起「加载中…」避免遮罩盖住指标条；_cb 已在 URL 上削弱中间层缓存 */
+            showFinaFixedAssetsMsg('');
+            var merged = o.data;
+            if (actPack && actPack.ok && actPack.data && !actPack.data.error) {
+                var aj = actPack.data;
+                if (aj.act_name != null && String(aj.act_name).trim() !== '') {
+                    merged.act_name = aj.act_name;
+                }
+                if (aj.act_ent_type != null && String(aj.act_ent_type).trim() !== '') {
+                    merged.act_ent_type = aj.act_ent_type;
+                }
+            }
+            var sn = merged.sec_name != null ? String(merged.sec_name) : '';
             var arturnRows = Array.isArray(_finaMetricState().rows) ? _finaMetricState().rows : [];
             var arturnRow = null;
             for (var ri = 0; ri < arturnRows.length; ri += 1) {
@@ -1578,9 +3604,11 @@ function fetchFinaFixedAssetsSeries(tsCodeRaw) {
                 }
             }
             updateFinaFixedAssetsHeaderLine(normalized, sn);
-            renderFinaFixedAssetsMetricsBar(o.data, arturnRow);
-            renderFinaFixedAssetsMainbzTable(o.data);
-            var rowArr = Array.isArray(o.data.rows) ? o.data.rows : [];
+            renderFinaFixedAssetsMetricsBar(merged, arturnRow);
+            renderFinaFixedAssetsMainbzTable(merged);
+            var rowArr = Array.isArray(merged.rows) ? merged.rows : [];
+            finaFixedAssetsCurrentRows = rowArr;
+            finaFixedAssetsCurrentTitle = (sn || normalized || '').trim();
             renderFinaFixedAssetsChart(rowArr, normalized);
             renderFinaFixedAssetsOperatingDataTable(rowArr);
             syncFinaFixedAssetsNavButtons();
@@ -1589,6 +3617,8 @@ function fetchFinaFixedAssetsSeries(tsCodeRaw) {
             clearFinaFixedAssetsMetricsBar();
             clearFinaFixedAssetsMainbzTable();
             clearFinaFixedAssetsOperatingDataTable();
+            finaFixedAssetsCurrentRows = [];
+            finaFixedAssetsCurrentTitle = '';
             showFinaFixedAssetsMsg('请求失败：' + String(err && err.message ? err.message : err));
             syncFinaFixedAssetsNavButtons();
         });
@@ -1602,7 +3632,7 @@ function openFinaFixedAssetsModal(tsCode, secName) {
     var normalized = normalizeFinaFixedAssetsTsCode(raw);
     var inp = document.getElementById('fina-fixed-assets-ts-input');
     if (inp) {
-        inp.value = normalized || raw.toUpperCase();
+        inp.value = formatFinaFixedAssetsTsCodeDisplay(normalized || raw);
     }
     updateFinaFixedAssetsHeaderLine(normalized || raw, secName || '');
     overlay.classList.add('is-open');
@@ -1632,6 +3662,57 @@ function formatFinaArturnAnnDate(v) {
     if (/^\d{8}$/.test(s)) return s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8);
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
     return s;
+}
+
+/** 上市日至「今天」的日历年、月数（与弹窗指标「已上市…」同口径） */
+function finaListingTenureZhFromNow(listDateRaw) {
+    var s = String(listDateRaw == null ? '' : listDateRaw).trim();
+    if (!s) return '';
+    var y;
+    var mo;
+    var d;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+        y = parseInt(s.slice(0, 4), 10);
+        mo = parseInt(s.slice(5, 7), 10);
+        d = parseInt(s.slice(8, 10), 10);
+    } else if (/^\d{8}$/.test(s)) {
+        y = parseInt(s.slice(0, 4), 10);
+        mo = parseInt(s.slice(4, 6), 10);
+        d = parseInt(s.slice(6, 8), 10);
+    } else {
+        return '';
+    }
+    if (isNaN(y) || isNaN(mo) || isNaN(d)) return '';
+    var start = new Date(y, mo - 1, d);
+    if (isNaN(start.getTime())) return '';
+    var end = new Date();
+    end.setHours(0, 0, 0, 0);
+    start.setHours(0, 0, 0, 0);
+    if (end < start) return '';
+    var yy = end.getFullYear() - start.getFullYear();
+    var mm = end.getMonth() - start.getMonth();
+    var dd = end.getDate() - start.getDate();
+    if (dd < 0) {
+        mm -= 1;
+    }
+    if (mm < 0) {
+        yy -= 1;
+        mm += 12;
+    }
+    if (yy < 0) {
+        yy = 0;
+        mm = 0;
+    }
+    if (yy === 0 && mm === 0) {
+        return '已上市不足1个月';
+    }
+    if (yy === 0) {
+        return '已上市' + mm + '个月';
+    }
+    if (mm === 0) {
+        return '已上市' + yy + '年';
+    }
+    return '已上市' + yy + '年' + mm + '个月';
 }
 
 /** 财务数值列为负时加类名，供绿色字色（ROE / 经营现金流两组） */
@@ -1729,6 +3810,7 @@ function renderFinaMetricSchemeOptions(panelKey) {
         html.push('<option value="' + escapeHtmlAttr(name) + '">' + escapeHtmlAttr(name) + '</option>');
     });
     sel.innerHTML = html.join('');
+    refreshFinaMetricSchemeSummary(panelKey);
 }
 
 function renderFinaArturnSchemeOptions() {
@@ -1750,6 +3832,9 @@ function buildFinaMetricFilterShapeFrom(src) {
         free_mv_yi: String(s.free_mv_yi || ''),
         a0: String(s.a0 || ''),
         listDate: String(s.listDate || ''),
+        money_cap_ratio_pct: String(s.money_cap_ratio_pct || ''),
+        fqm_debt_to_assets: String(s.fqm_debt_to_assets || ''),
+        fqm_interestdebt_ratio: String(s.fqm_interestdebt_ratio || ''),
         ttm_revenue_yi: String(s.ttm_revenue_yi || ''),
         pe_ttm: String(s.pe_ttm || ''),
         ar_pct: String(s.ar_pct || ''),
@@ -1870,6 +3955,18 @@ function buildFinaMetricFilterShapeFrom(src) {
         t6: String(s.t6 || ''),
         t7: String(s.t7 || ''),
         t8: String(s.t8 || ''),
+        invchg: String(s.invchg || ''),
+        inv_revenue_pct: String(s.inv_revenue_pct || ''),
+        inv_high: String(s.inv_high || ''),
+        inv0: String(s.inv0 || ''),
+        inv1: String(s.inv1 || ''),
+        inv2: String(s.inv2 || ''),
+        inv3: String(s.inv3 || ''),
+        inv4: String(s.inv4 || ''),
+        inv5: String(s.inv5 || ''),
+        inv6: String(s.inv6 || ''),
+        inv7: String(s.inv7 || ''),
+        inv8: String(s.inv8 || ''),
         kchg: String(s.kchg || ''),
         k_revenue_pct: String(s.k_revenue_pct || ''),
         k_high: String(s.k_high || ''),
@@ -1900,7 +3997,16 @@ function buildFinaMetricFilterShapeFrom(src) {
         u5: String(s.u5 || ''),
         u6: String(s.u6 || ''),
         u7: String(s.u7 || ''),
-        u8: String(s.u8 || '')
+        u8: String(s.u8 || ''),
+        v0: String(s.v0 || ''),
+        v1: String(s.v1 || ''),
+        v2: String(s.v2 || ''),
+        v3: String(s.v3 || ''),
+        v4: String(s.v4 || ''),
+        v5: String(s.v5 || ''),
+        v6: String(s.v6 || ''),
+        v7: String(s.v7 || ''),
+        v8: String(s.v8 || '')
     };
 }
 
@@ -1923,8 +4029,13 @@ function setCurrentFinaArturnFilters(filters) {
 function renderFinaMetricHeaderFilterButtons(panelKey) {
     var cfg = FINA_METRIC_PANEL[panelKey];
     if (!cfg) return;
-    var btns = document.querySelectorAll('#' + cfg.ids.thead + ' .fina-filter-btn');
     var filters = getFinaMetricFilters(panelKey);
+    /* 同时更新可滚动面板和冻结面板的筛选按钮激活状态 */
+    var selectors = '#' + cfg.ids.thead + ' .fina-filter-btn';
+    if (panelKey === 'arturn') {
+        selectors += ', #fina-arturn-frozen-thead .fina-filter-btn';
+    }
+    var btns = document.querySelectorAll(selectors);
     btns.forEach(function (btn) {
         var key = btn.getAttribute('data-filter-key') || '';
         var hasVal = String(filters[key] || '').trim() !== '';
@@ -2051,12 +4162,43 @@ function finaArturnQuarterLabel(periodStr) {
     return yy + q;
 }
 
+function finaArturnDigitsOnly(v) {
+    return String(v == null ? '' : v).replace(/\D+/g, '');
+}
+
+function finaArturnDateTextMatch(rawVal, kwRaw) {
+    var valTxt = String(rawVal || '').trim().toLowerCase();
+    var kwTxt = String(kwRaw || '').trim().toLowerCase();
+    if (!kwTxt) return true;
+    if (valTxt.indexOf(kwTxt) >= 0) return true;
+    var valDigits = finaArturnDigitsOnly(rawVal);
+    var kwDigits = finaArturnDigitsOnly(kwRaw);
+    if (kwDigits && valDigits && valDigits.indexOf(kwDigits) >= 0) return true;
+    return false;
+}
+
 function computeContractLiabChg(row) {
     var cur = parseFloat(row && row.k0);
     if (isNaN(cur)) return null;
     var histVals = [];
     for (var i = 1; i <= 8; i += 1) {
         var hv = parseFloat(row && row['k' + i]);
+        if (!isNaN(hv)) histVals.push(hv);
+    }
+    if (!histVals.length) return null;
+    var sum = 0;
+    for (var j = 0; j < histVals.length; j += 1) sum += histVals[j];
+    var avg = sum / histVals.length;
+    if (!isFinite(avg) || avg === 0) return null;
+    return ((cur / avg) - 1) * 100;
+}
+
+function computeInventoryChg(row) {
+    var cur = parseFloat(row && row.inv0);
+    if (isNaN(cur)) return null;
+    var histVals = [];
+    for (var i = 1; i <= 8; i += 1) {
+        var hv = parseFloat(row && row['inv' + i]);
         if (!isNaN(hv)) histVals.push(hv);
     }
     if (!histVals.length) return null;
@@ -2091,6 +4233,9 @@ function finaArturnGetSortCell(row, key) {
     if (key === 'free_mv_yi') return row.free_mv_yi;
     if (key === 'a0') return row.a0;
     if (key === 'listDate') return row.list_date;
+    if (key === 'money_cap_ratio_pct') return row.money_cap_ratio_pct;
+    if (key === 'fqm_debt_to_assets') return row.fqm_debt_to_assets;
+    if (key === 'fqm_interestdebt_ratio') return row.fqm_interestdebt_ratio;
     if (key === 'ttm_revenue_yi') return row.ttm_revenue_yi;
     if (key === 'pe_ttm') return row.pe_ttm;
     if (key === 'ar_pct') return row.ar_pct;
@@ -2221,6 +4366,18 @@ function finaArturnGetSortCell(row, key) {
     if (key === 't6') return row.t6;
     if (key === 't7') return row.t7;
     if (key === 't8') return row.t8;
+    if (key === 'invchg') return computeInventoryChg(row);
+    if (key === 'inv_revenue_pct') return row.inv_revenue_pct;
+    if (key === 'inv_high') return row.inv_high;
+    if (key === 'inv0') return row.inv0;
+    if (key === 'inv1') return row.inv1;
+    if (key === 'inv2') return row.inv2;
+    if (key === 'inv3') return row.inv3;
+    if (key === 'inv4') return row.inv4;
+    if (key === 'inv5') return row.inv5;
+    if (key === 'inv6') return row.inv6;
+    if (key === 'inv7') return row.inv7;
+    if (key === 'inv8') return row.inv8;
     if (key === 'kchg') return computeContractLiabChg(row);
     if (key === 'k_revenue_pct') return row.k_revenue_pct;
     if (key === 'k0') return row.k0;
@@ -2251,6 +4408,15 @@ function finaArturnGetSortCell(row, key) {
     if (key === 'u6') return row.u6;
     if (key === 'u7') return row.u7;
     if (key === 'u8') return row.u8;
+    if (key === 'v0') return row.v0;
+    if (key === 'v1') return row.v1;
+    if (key === 'v2') return row.v2;
+    if (key === 'v3') return row.v3;
+    if (key === 'v4') return row.v4;
+    if (key === 'v5') return row.v5;
+    if (key === 'v6') return row.v6;
+    if (key === 'v7') return row.v7;
+    if (key === 'v8') return row.v8;
     return '';
 }
 
@@ -2273,7 +4439,8 @@ function finaArturnCompareRows(a, b, key, dir) {
         var db = String(finaArturnGetSortCell(b, key) || '');
         return mult * da.localeCompare(db, 'zh-CN', { numeric: true, sensitivity: 'base' });
     }
-    if (key === 'ar_pct' || key === 'ttm_revenue_yi' || key === 'pe_ttm' ||
+    if (key === 'ar_pct' || key === 'money_cap_ratio_pct' || key === 'fqm_debt_to_assets' ||
+            key === 'fqm_interestdebt_ratio' || key === 'ttm_revenue_yi' || key === 'pe_ttm' ||
             key === 'total_mv_yi' || key === 'free_mv_yi' ||
             key === 'roe0' || key === 'roe1' || key === 'roe2' || key === 'roe3' ||
             key === 'p0' || key === 'p1' || key === 'p2' || key === 'p3' ||
@@ -2310,6 +4477,11 @@ function finaArturnCompareRows(a, b, key, dir) {
             key === 'n5' || key === 'n6' || key === 'n7' || key === 'n8' ||
             key === 't0' || key === 't1' || key === 't2' || key === 't3' || key === 't4' ||
             key === 't5' || key === 't6' || key === 't7' || key === 't8' ||
+            key === 'invchg' ||
+            key === 'inv_revenue_pct' ||
+            key === 'inv_high' ||
+            key === 'inv0' || key === 'inv1' || key === 'inv2' || key === 'inv3' ||
+            key === 'inv4' || key === 'inv5' || key === 'inv6' || key === 'inv7' || key === 'inv8' ||
             key === 'kchg' ||
             key === 'k_revenue_pct' ||
             key === 'k0' || key === 'k1' || key === 'k2' || key === 'k3' ||
@@ -2318,7 +4490,9 @@ function finaArturnCompareRows(a, b, key, dir) {
             key === 'f0' || key === 'f1' || key === 'f2' || key === 'f3' ||
             key === 'f4' || key === 'f5' || key === 'f6' || key === 'f7' || key === 'f8' ||
             key === 'u0' || key === 'u1' || key === 'u2' || key === 'u3' || key === 'u4' ||
-            key === 'u5' || key === 'u6' || key === 'u7' || key === 'u8') {
+            key === 'u5' || key === 'u6' || key === 'u7' || key === 'u8' ||
+            key === 'v0' || key === 'v1' || key === 'v2' || key === 'v3' || key === 'v4' ||
+            key === 'v5' || key === 'v6' || key === 'v7' || key === 'v8') {
         var pa = finaArturnNumSortProxy(finaArturnGetSortCell(a, key), dir);
         var pb = finaArturnNumSortProxy(finaArturnGetSortCell(b, key), dir);
         return mult * (pa - pb);
@@ -2333,6 +4507,9 @@ function finaArturnIsSortableColumnKey(key) {
         key === 'listDate' ||
         key === 'total_mv_yi' ||
         key === 'free_mv_yi' ||
+        key === 'money_cap_ratio_pct' ||
+        key === 'fqm_debt_to_assets' ||
+        key === 'fqm_interestdebt_ratio' ||
         key === 'ttm_revenue_yi' ||
         key === 'pe_ttm' ||
         key === 'ar_pct' ||
@@ -2371,6 +4548,11 @@ function finaArturnIsSortableColumnKey(key) {
         key === 'n5' || key === 'n6' || key === 'n7' || key === 'n8' ||
         key === 't0' || key === 't1' || key === 't2' || key === 't3' || key === 't4' ||
         key === 't5' || key === 't6' || key === 't7' || key === 't8' ||
+        key === 'invchg' ||
+        key === 'inv_revenue_pct' ||
+        key === 'inv_high' ||
+        key === 'inv0' || key === 'inv1' || key === 'inv2' || key === 'inv3' ||
+        key === 'inv4' || key === 'inv5' || key === 'inv6' || key === 'inv7' || key === 'inv8' ||
         key === 'kchg' ||
         key === 'k_revenue_pct' ||
         key === 'k0' || key === 'k1' || key === 'k2' || key === 'k3' ||
@@ -2379,7 +4561,9 @@ function finaArturnIsSortableColumnKey(key) {
         key === 'f0' || key === 'f1' || key === 'f2' || key === 'f3' ||
         key === 'f4' || key === 'f5' || key === 'f6' || key === 'f7' || key === 'f8' ||
         key === 'u0' || key === 'u1' || key === 'u2' || key === 'u3' || key === 'u4' ||
-        key === 'u5' || key === 'u6' || key === 'u7' || key === 'u8';
+        key === 'u5' || key === 'u6' || key === 'u7' || key === 'u8' ||
+        key === 'v0' || key === 'v1' || key === 'v2' || key === 'v3' || key === 'v4' ||
+        key === 'v5' || key === 'v6' || key === 'v7' || key === 'v8';
 }
 
 /** 单列排序按钮：无 → 升序 → 降序 → 无；换列则从升序开始 */
@@ -2411,120 +4595,169 @@ function _finaArturnEscCellText(s) {
         .replace(/>/g, '&gt;');
 }
 
-/** 财报宽表：横向滚动由视口根元素承担，与 thead 纵向/横向 sticky 共用同一滚动盒，避免容器 overflow-x:auto 切断吸顶 */
-function finaArturnHorizScrollRoot() {
-    return document.scrollingElement || document.documentElement;
-}
-
-/** 测量 thead 第一行高度，写入表 CSS 变量，供第二行 position:sticky 的 top 偏移（双行表头垂直锁定） */
+/**
+ * 同步两个面板 thead 各行的高度（取最大值写入两边），再更新 CSS 变量供第二行 sticky top 使用。
+ * 分栏架构中，冻结面板 metric-cell 与可滚动面板 group-header 的自然高度不同，
+ * 不同步则两行表头垂直错位。
+ */
 function syncFinaArturnTheadStickyHeights() {
-    var table = document.getElementById('fina-arturn-table');
-    var thead = document.getElementById('fina-arturn-thead');
-    if (!table || !thead) return;
-    var r1 = thead.querySelector('tr.fina-arturn-thead-group');
-    if (!r1) return;
-    var h = r1.getBoundingClientRect().height;
-    if (h && h > 0) {
-        table.style.setProperty('--fina-arturn-thead-row1-height', Math.ceil(h) + 'px');
+    var frozenThead = document.getElementById('fina-arturn-frozen-thead');
+    var scrollThead = document.getElementById('fina-arturn-thead');
+    if (!frozenThead || !scrollThead) return;
+
+    /* 先清除上次设置的 height，让浏览器按内容重新计算自然高度 */
+    [frozenThead, scrollThead].forEach(function (thead) {
+        Array.from(thead.querySelectorAll('tr')).forEach(function (tr) {
+            tr.style.height = '';
+        });
+    });
+
+    /* 强制 reflow：读取高度前确保 style 已应用 */
+    var fRows = Array.from(frozenThead.querySelectorAll('tr'));
+    var sRows = Array.from(scrollThead.querySelectorAll('tr'));
+    var maxLen = Math.min(fRows.length, sRows.length);
+
+    for (var i = 0; i < maxLen; i++) {
+        var fH = fRows[i].getBoundingClientRect().height;
+        var sH = sRows[i].getBoundingClientRect().height;
+        var maxH = Math.ceil(Math.max(fH, sH));
+        if (maxH > 0) {
+            fRows[i].style.height = maxH + 'px';
+            sRows[i].style.height = maxH + 'px';
+            /* 第一行：更新 CSS 变量（供第二行 sticky top 定位） */
+            if (i === 0) {
+                var val = maxH + 'px';
+                var ft = document.getElementById('fina-arturn-frozen-table');
+                var st = document.getElementById('fina-arturn-table');
+                if (ft) ft.style.setProperty('--fina-arturn-thead-row1-height', val);
+                if (st) st.style.setProperty('--fina-arturn-thead-row1-height', val);
+            }
+        }
     }
 }
 
-/** 宽表横向仅用视口底部滚动条；绑定滚轮横向推进 + resize 时重测 thead 高度变量 */
+/**
+ * 冻结表列宽由 CSS 变量直接驱动（table-layout:fixed）；
+ * 可滚动表测量 thead 第二行各 th 实际宽度写入 colgroup，锁 table-layout:fixed。
+ */
+function syncFinaArturnColumnWidths() {
+    /* 冻结表：CSS 变量已定义宽度，只需锁定 table-layout:fixed */
+    var frozenTable = document.getElementById('fina-arturn-frozen-table');
+    if (frozenTable) {
+        frozenTable.style.tableLayout = 'fixed';
+    }
+    /* 可滚动表：测量第二行 th 宽度，写入 colgroup */
+    var scrollTable = document.getElementById('fina-arturn-table');
+    if (!scrollTable) return;
+    var colRow = scrollTable.querySelector('thead tr.fina-arturn-thead-cols');
+    if (!colRow) return;
+    var ths = Array.from(colRow.querySelectorAll('th'));
+    if (!ths.length) return;
+    var colHtml = ths.map(function (th) {
+        var w = Math.ceil(th.getBoundingClientRect().width);
+        if (w < 4) w = 48;
+        return '<col style="width:' + w + 'px;min-width:' + w + 'px">';
+    }).join('');
+    var cg = document.getElementById('fina-arturn-colgroup');
+    if (cg) cg.innerHTML = colHtml;
+    scrollTable.style.tableLayout = 'fixed';
+}
+
+/**
+ * 分栏辅助初始化（split-pane 架构 2026-04）：
+ *  - scrollPane（右）原生 overflow:auto，横向 compositor-thread，零卡顿。
+ *  - 纵向 scroll 同步 frozenPane.scrollTop（低频，无 sticky 重算）。
+ *  - 行悬停高亮：mouseover/out 同步两面板同行。
+ *  - 冻结 thead 的 sort/filter 点击同主 thead 处理。
+ *  - Shift+纵轮 → 横向。resize 防抖。
+ */
 function initFinaArturnHorizScrollHelpers() {
-    var wrapEl = document.querySelector('#fina-arturn-section .fina-arturn-table-wrap');
-    if (!wrapEl) return;
-    if (wrapEl.dataset.finaHorizHelpers === '1') {
+    var scrollPane = document.getElementById('fina-arturn-scroll-pane');
+    if (!scrollPane) return;
+    if (scrollPane.dataset.finaHorizHelpers === '1') {
         syncFinaArturnTheadStickyHeights();
         return;
     }
-    wrapEl.dataset.finaHorizHelpers = '1';
-    /**
-     * 高精度滚轮事件极密；逐次写 scrollLeft 会逼 sticky 大表反复布局。
-     * 用 rAF 对齐刷新；并对单帧 applied delta 设上限，避免同一帧吃掉几百 px 造成「画面相对光标猛跳」。
-     * pointerleave 时取消队列：避免手已离开表区、积压仍在下一帧写入导致「停手后还在蹭」。
-     */
-    var pendingHorizWheel = 0;
-    var horizWheelRaf = null;
-    var MAX_HORIZ_WHEEL_PER_FRAME = 420;
-    /** resize 时同步 thead 高度：拖拽窗口会高频触发，防抖避免叠多次 getBoundingClientRect */
-    var theadResizeTimer = null;
+    scrollPane.dataset.finaHorizHelpers = '1';
 
-    function applyPendingHorizScroll() {
-        horizWheelRaf = null;
-        var rootEl = finaArturnHorizScrollRoot();
-        var maxLeft = Math.max(0, rootEl.scrollWidth - rootEl.clientWidth);
-        if (maxLeft <= 0) {
-            pendingHorizWheel = 0;
-            return;
-        }
-        if (!pendingHorizWheel) return;
+    var frozenPane = document.getElementById('fina-arturn-frozen-pane');
+    var frozenTbody = document.getElementById('fina-arturn-frozen-tbody');
+    var scrollTbody = document.getElementById('fina-arturn-tbody');
 
-        var chunk = pendingHorizWheel;
-        var lim = MAX_HORIZ_WHEEL_PER_FRAME;
-        if (Math.abs(chunk) > lim) {
-            chunk = chunk > 0 ? lim : -lim;
-            pendingHorizWheel -= chunk;
-        } else {
-            pendingHorizWheel = 0;
-        }
+    /* 纵向：同步冻结面板 scrollTop */
+    scrollPane.addEventListener('scroll', function () {
+        if (frozenPane) frozenPane.scrollTop = scrollPane.scrollTop;
+    }, { passive: true });
 
-        var before = rootEl.scrollLeft;
-        var nextLeft = Math.max(0, Math.min(maxLeft, before + chunk));
-        rootEl.scrollLeft = nextLeft;
-        /* 已在左右尽头无法再吃增量：丢弃剩余 pending，避免边界上空转 rAF */
-        if (nextLeft === before && chunk !== 0) {
-            pendingHorizWheel = 0;
-            return;
+    /* 行悬停高亮：两面板同行互相同步；
+       用 data-row-index（原始行索引）+ trMap 精确查找，不依赖 sectionRowIndex，
+       与「DOM 永不销毁、仅 display + 节点重排」的新渲染方案配套 */
+    function syncRowHover(srcTbody, ev, isEnter) {
+        var tr = ev.target.closest ? ev.target.closest('tr') : null;
+        if (!tr || tr.parentElement !== srcTbody) return;
+        var origAttr = tr.getAttribute('data-row-index');
+        var st = _finaMetricState();
+        var fTr = null;
+        var sTr = null;
+        if (origAttr != null && st._frozenTrMap && st._scrollTrMap) {
+            var idxNum = parseInt(origAttr, 10);
+            if (idxNum >= 0) {
+                fTr = st._frozenTrMap[idxNum] || null;
+                sTr = st._scrollTrMap[idxNum] || null;
+            }
         }
-
-        if (pendingHorizWheel !== 0) {
-            horizWheelRaf = requestAnimationFrame(applyPendingHorizScroll);
+        if (!fTr && !sTr) {
+            /* 兜底：trMap 尚未建立（极早期初始化阶段），按 sectionRowIndex 回退 */
+            var idx = tr.sectionRowIndex;
+            fTr = frozenTbody && frozenTbody.rows[idx];
+            sTr = scrollTbody && scrollTbody.rows[idx];
         }
+        if (fTr) fTr.classList.toggle('fina-arturn-row-hover', isEnter);
+        if (sTr) sTr.classList.toggle('fina-arturn-row-hover', isEnter);
+    }
+    if (frozenTbody) {
+        frozenTbody.addEventListener('mouseover', function (ev) { syncRowHover(frozenTbody, ev, true); }, { passive: true });
+        frozenTbody.addEventListener('mouseout', function (ev) { syncRowHover(frozenTbody, ev, false); }, { passive: true });
+    }
+    if (scrollTbody) {
+        scrollTbody.addEventListener('mouseover', function (ev) { syncRowHover(scrollTbody, ev, true); }, { passive: true });
+        scrollTbody.addEventListener('mouseout', function (ev) { syncRowHover(scrollTbody, ev, false); }, { passive: true });
     }
 
-    wrapEl.addEventListener('wheel', function (ev) {
-        var dx = ev.deltaX || 0;
-        var dy = ev.deltaY || 0;
-        /* 触控板明确横向滑动：交给浏览器滚 document.scrollingElement（多数走合成线程），勿 preventDefault + rAF。
-           Shift+纵轴仍走下方映射（业务：纵滚映射为横移）。 */
-        if (!ev.shiftKey && Math.abs(dx) >= Math.abs(dy) && Math.abs(dx) > 0.5) {
-            return;
-        }
-        var horizontalDelta = 0;
-        if (Math.abs(dx) > 0) {
-            horizontalDelta = dx;
-        } else if (Math.abs(dy) > 0) {
-            horizontalDelta = dy;
-        }
-        if (ev.shiftKey && Math.abs(dy) > Math.abs(dx)) {
-            horizontalDelta = dy;
-        }
-        if (!horizontalDelta) return;
+    /* 冻结 thead 的排序/筛选点击 */
+    var frozenThead = document.getElementById('fina-arturn-frozen-thead');
+    if (frozenThead) {
+        frozenThead.addEventListener('click', function (ev) {
+            var t = ev.target;
+            if (!t || !t.classList) return;
+            if (t.classList.contains('fina-sort-btn')) {
+                var sk = t.getAttribute('data-sort-key') || '';
+                if (sk) { finaMetricCycleSort(sk); renderFinaArturnTable(); saveFinaMetricViewState('arturn'); }
+                return;
+            }
+            if (!t.classList.contains('fina-filter-btn')) return;
+            openFinaMetricFilterPopover('arturn', t.getAttribute('data-filter-key') || '', t, ev);
+        });
+    }
 
-        pendingHorizWheel += horizontalDelta;
-        ev.preventDefault();
-
-        if (horizWheelRaf !== null) return;
-        horizWheelRaf = requestAnimationFrame(applyPendingHorizScroll);
+    /* Shift+纵轮 → 横向 */
+    scrollPane.addEventListener('wheel', function (ev) {
+        if (ev.shiftKey && Math.abs(ev.deltaY) > 0.5) {
+            ev.preventDefault();
+            scrollPane.scrollLeft = Math.max(0,
+                Math.min(scrollPane.scrollWidth - scrollPane.clientWidth, scrollPane.scrollLeft + ev.deltaY));
+        }
     }, { passive: false });
 
-    wrapEl.addEventListener(
-        'pointerleave',
-        function () {
-            pendingHorizWheel = 0;
-            if (horizWheelRaf !== null) {
-                cancelAnimationFrame(horizWheelRaf);
-                horizWheelRaf = null;
-            }
-        },
-        { passive: true }
-    );
+    /* resize 防抖 */
+    var resizeTimer = null;
     window.addEventListener('resize', function () {
-        if (theadResizeTimer) clearTimeout(theadResizeTimer);
-        theadResizeTimer = setTimeout(function () {
-            theadResizeTimer = null;
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () {
+            resizeTimer = null;
             syncFinaArturnTheadStickyHeights();
-        }, 120);
+            syncFinaArturnColumnWidths();
+        }, 150);
     });
     syncFinaArturnTheadStickyHeights();
 }
@@ -2555,6 +4788,14 @@ function renderFinaMetricTable(panelKey) {
     var q6 = finaArturnQuarterLabel(cps[6]);
     var q7 = finaArturnQuarterLabel(cps[7]);
     var q8 = finaArturnQuarterLabel(cps[8]);
+    /* thead 缓存：只要 periods / contractPeriods 未变，跳过整块 thead.innerHTML 重建
+       filter / sort 时通常 periods 不变，省去 185 列 HTML 拼接 + DOM 写入 + 强制 layout */
+    var theadKey = periods.join(',') + '|' + cps.join(',');
+    var skipTheadRebuild = (theadKey === st._theadKey) &&
+        !!document.getElementById('fina-arturn-frozen-thead') &&
+        !!document.getElementById(cfg.ids.thead);
+    if (!skipTheadRebuild) { st._theadKey = theadKey; }
+    if (!skipTheadRebuild) {
     var prevU = '更新：--';
     var elU = document.getElementById(cfg.ids.headUpdated);
     if (elU && elU.textContent) prevU = elU.textContent;
@@ -2590,11 +4831,27 @@ function renderFinaMetricTable(panelKey) {
         '<span id="' + cfg.ids.headUpdated + '" class="fina-arturn-head-updated">' + _finaArturnEscCellText(prevU) + '</span>' +
         '<span id="' + cfg.ids.msg + '" class="fina-arturn-msg-line"></span>' +
         '</div></th>';
+    /* 冻结面板 thead：metric-cell(colspan=5) + 公告日组(colspan=1) + 6 个列头 */
+    var frozenThead = document.getElementById('fina-arturn-frozen-thead');
+    if (frozenThead) {
+        frozenThead.innerHTML =
+            '<tr class="fina-arturn-thead-group">' +
+            metricHead +
+            '<th colspan="1" class="fina-arturn-th-group" scope="colgroup"></th>' +
+            '</tr>' +
+            '<tr class="fina-arturn-thead-cols">' +
+            buildTh('股票代码', 'tsCode') +
+            buildTh('股票名称', 'secName') +
+            buildTh('申万二级行业', 'swName') +
+            buildTh('总市值', 'total_mv_yi') +
+            buildTh('自由市值', 'free_mv_yi') +
+            buildTh('公告日', 'a0') +
+            '</tr>';
+    }
+    /* 可滚动面板 thead：从上市日开始（原第3格起） */
     thead.innerHTML =
         '<tr class="fina-arturn-thead-group">' +
-        metricHead +
-        '<th colspan="1" class="fina-arturn-th-group" scope="colgroup"></th>' +
-        '<th colspan="1" class="fina-arturn-th-group" scope="colgroup"></th>' +
+        '<th colspan="4" class="fina-arturn-th-group" scope="colgroup"></th>' +
         '<th colspan="3" class="fina-arturn-th-group" scope="colgroup">TTM</th>' +
         '<th colspan="4" class="fina-arturn-th-group" scope="colgroup">ROE（扣非）</th>' +
         '<th colspan="4" class="fina-arturn-th-group" scope="colgroup">应收账款周转天数</th>' +
@@ -2610,20 +4867,19 @@ function renderFinaMetricTable(panelKey) {
         '<th colspan="9" class="fina-arturn-th-group" scope="colgroup">单季度 经营现金流净额/经营活动净收益(%)</th>' +
         '<th colspan="9" class="fina-arturn-th-group" scope="colgroup">单季度 营业收入同比增速(%)</th>' +
         '<th colspan="9" class="fina-arturn-th-group" scope="colgroup">单季度 营业利润同比增长率(%)</th>' +
+        '<th colspan="9" class="fina-arturn-th-group" scope="colgroup">单季度 利润增速高于收入增速(百分点)</th>' +
         '<th colspan="9" class="fina-arturn-th-group" scope="colgroup">单季度 毛利率(%)</th>' +
         '<th colspan="9" class="fina-arturn-th-group" scope="colgroup">单季度 净利率(%)</th>' +
         '<th colspan="9" class="fina-arturn-th-group" scope="colgroup">单季度 ROE(扣非)</th>' +
+        '<th colspan="12" class="fina-arturn-th-group" scope="colgroup">存货（亿）</th>' +
         '<th colspan="12" class="fina-arturn-th-group" scope="colgroup">合同负债（亿）</th>' +
         '<th colspan="10" class="fina-arturn-th-group" scope="colgroup">固定资产（亿）</th>' +
         '</tr>' +
         '<tr class="fina-arturn-thead-cols">' +
-        buildTh('股票代码', 'tsCode') +
-        buildTh('股票名称', 'secName') +
-        buildTh('申万二级行业', 'swName') +
-        buildTh('总市值', 'total_mv_yi') +
-        buildTh('自由市值', 'free_mv_yi') +
-        buildTh('公告日', 'a0') +
         buildTh('上市日', 'listDate') +
+        buildTh('市值/货币', 'money_cap_ratio_pct') +
+        buildTh('资产负债率', 'fqm_debt_to_assets') +
+        buildTh('带息负债率', 'fqm_interestdebt_ratio') +
         buildTh('营收', 'ttm_revenue_yi') +
         buildTh('PE', 'pe_ttm') +
         buildTh('应收%', 'ar_pct') +
@@ -2735,6 +4991,15 @@ function renderFinaMetricTable(panelKey) {
         buildTh(q6, 'u6') +
         buildTh(q7, 'u7') +
         buildTh(q8, 'u8') +
+        buildTh(q0, 'v0') +
+        buildTh(q1, 'v1') +
+        buildTh(q2, 'v2') +
+        buildTh(q3, 'v3') +
+        buildTh(q4, 'v4') +
+        buildTh(q5, 'v5') +
+        buildTh(q6, 'v6') +
+        buildTh(q7, 'v7') +
+        buildTh(q8, 'v8') +
         buildTh(q0, 'm0') +
         buildTh(q1, 'm1') +
         buildTh(q2, 'm2') +
@@ -2762,6 +5027,18 @@ function renderFinaMetricTable(panelKey) {
         buildTh(q6, 't6') +
         buildTh(q7, 't7') +
         buildTh(q8, 't8') +
+        buildTh('Chg%', 'invchg') +
+        buildTh('营收%', 'inv_revenue_pct') +
+        buildTh('新高', 'inv_high') +
+        buildTh(q0, 'inv0') +
+        buildTh(q1, 'inv1') +
+        buildTh(q2, 'inv2') +
+        buildTh(q3, 'inv3') +
+        buildTh(q4, 'inv4') +
+        buildTh(q5, 'inv5') +
+        buildTh(q6, 'inv6') +
+        buildTh(q7, 'inv7') +
+        buildTh(q8, 'inv8') +
         buildTh('Chg%', 'kchg') +
         buildTh('营收%', 'k_revenue_pct') +
         buildTh('新高', 'k_high') +
@@ -2785,8 +5062,24 @@ function renderFinaMetricTable(panelKey) {
         buildTh(q7, 'f7') +
         buildTh(q8, 'f8') +
         '</tr>';
-    var bootHint = document.getElementById('fina-boot-hint');
-    if (bootHint) bootHint.style.display = 'none';
+    } else {
+        /* thead 内容未变（periods/contractPeriods 一致），仅原地更新排序按钮 class / 字符 */
+        ['fina-arturn-thead', 'fina-arturn-frozen-thead'].forEach(function (theadId) {
+            var tel = document.getElementById(theadId);
+            if (!tel) return;
+            tel.querySelectorAll('.fina-sort-btn').forEach(function (btn) {
+                var k = btn.getAttribute('data-sort-key') || '';
+                var ascOn = k === st.sortKey && st.sortDir === 'asc';
+                var descOn = k === st.sortKey && st.sortDir === 'desc';
+                btn.classList.toggle('is-asc', ascOn);
+                btn.classList.toggle('is-desc', descOn);
+                btn.textContent = ascOn ? '▲' : descOn ? '▼' : '↕';
+                btn.setAttribute('title', ascOn ? '当前升序，点击改为降序' :
+                    descOn ? '当前降序，点击取消排序' : '点击按升序排列');
+            });
+        });
+    }
+    hideFinaBootHint();
 
     var filters = getFinaMetricFilters(panelKey);
     var codeKw = filters.tsCode.toLowerCase();
@@ -2796,6 +5089,9 @@ function renderFinaMetricTable(panelKey) {
     var listDateKw = String(filters.listDate || '').trim().toLowerCase();
     var mTotalMv = buildNumericFilterMatcher(filters.total_mv_yi);
     var mFreeMv = buildNumericFilterMatcher(filters.free_mv_yi);
+    var mMoneyCapRatio = buildNumericFilterMatcher(filters.money_cap_ratio_pct);
+    var mFqmDebtToAssets = buildNumericFilterMatcher(filters.fqm_debt_to_assets);
+    var mFqmInterestdebtRatio = buildNumericFilterMatcher(filters.fqm_interestdebt_ratio);
     var mttmYi = buildNumericFilterMatcher(filters.ttm_revenue_yi);
     var mPe = buildNumericFilterMatcher(filters.pe_ttm);
     var mar_pct = buildNumericFilterMatcher(filters.ar_pct);
@@ -2929,6 +5225,15 @@ function renderFinaMetricTable(panelKey) {
     var mu6 = buildNumericFilterMatcher(filters.u6);
     var mu7 = buildNumericFilterMatcher(filters.u7);
     var mu8 = buildNumericFilterMatcher(filters.u8);
+    var mv0 = buildNumericFilterMatcher(filters.v0);
+    var mv1 = buildNumericFilterMatcher(filters.v1);
+    var mv2 = buildNumericFilterMatcher(filters.v2);
+    var mv3 = buildNumericFilterMatcher(filters.v3);
+    var mv4 = buildNumericFilterMatcher(filters.v4);
+    var mv5 = buildNumericFilterMatcher(filters.v5);
+    var mv6 = buildNumericFilterMatcher(filters.v6);
+    var mv7 = buildNumericFilterMatcher(filters.v7);
+    var mv8 = buildNumericFilterMatcher(filters.v8);
     var mm0 = buildNumericFilterMatcher(filters.m0);
     var mm1 = buildNumericFilterMatcher(filters.m1);
     var mm2 = buildNumericFilterMatcher(filters.m2);
@@ -2956,6 +5261,18 @@ function renderFinaMetricTable(panelKey) {
     var mt6 = buildNumericFilterMatcher(filters.t6);
     var mt7 = buildNumericFilterMatcher(filters.t7);
     var mt8 = buildNumericFilterMatcher(filters.t8);
+    var minv0 = buildNumericFilterMatcher(filters.inv0);
+    var minv1 = buildNumericFilterMatcher(filters.inv1);
+    var minv2 = buildNumericFilterMatcher(filters.inv2);
+    var minv3 = buildNumericFilterMatcher(filters.inv3);
+    var minv4 = buildNumericFilterMatcher(filters.inv4);
+    var minv5 = buildNumericFilterMatcher(filters.inv5);
+    var minv6 = buildNumericFilterMatcher(filters.inv6);
+    var minv7 = buildNumericFilterMatcher(filters.inv7);
+    var minv8 = buildNumericFilterMatcher(filters.inv8);
+    var minvchg = buildNumericFilterMatcher(filters.invchg);
+    var minvRevPct = buildNumericFilterMatcher(filters.inv_revenue_pct);
+    var minv_high = buildNumericFilterMatcher(filters.inv_high);
 
     var rows = Array.isArray(st.rows) ? st.rows : [];
     var filtered = rows.filter(function (row) {
@@ -2977,8 +5294,11 @@ function renderFinaMetricTable(panelKey) {
         }
         if (mTotalMv && !mTotalMv(row.total_mv_yi)) return false;
         if (mFreeMv && !mFreeMv(row.free_mv_yi)) return false;
-        if (ma0 && a0.toLowerCase().indexOf(ma0) < 0) return false;
-        if (listDateKw && listDate.toLowerCase().indexOf(listDateKw) < 0) return false;
+        if (ma0 && !finaArturnDateTextMatch(a0, ma0)) return false;
+        if (listDateKw && !finaArturnDateTextMatch(listDate, listDateKw)) return false;
+        if (mMoneyCapRatio && !mMoneyCapRatio(row.money_cap_ratio_pct)) return false;
+        if (mFqmDebtToAssets && !mFqmDebtToAssets(row.fqm_debt_to_assets)) return false;
+        if (mFqmInterestdebtRatio && !mFqmInterestdebtRatio(row.fqm_interestdebt_ratio)) return false;
         if (mttmYi && !mttmYi(row.ttm_revenue_yi)) return false;
         if (mPe && !mPe(row.pe_ttm)) return false;
         if (mar_pct && !mar_pct(row.ar_pct)) return false;
@@ -3108,6 +5428,15 @@ function renderFinaMetricTable(panelKey) {
         if (mu6 && !mu6(row.u6)) return false;
         if (mu7 && !mu7(row.u7)) return false;
         if (mu8 && !mu8(row.u8)) return false;
+        if (mv0 && !mv0(row.v0)) return false;
+        if (mv1 && !mv1(row.v1)) return false;
+        if (mv2 && !mv2(row.v2)) return false;
+        if (mv3 && !mv3(row.v3)) return false;
+        if (mv4 && !mv4(row.v4)) return false;
+        if (mv5 && !mv5(row.v5)) return false;
+        if (mv6 && !mv6(row.v6)) return false;
+        if (mv7 && !mv7(row.v7)) return false;
+        if (mv8 && !mv8(row.v8)) return false;
         if (mm0 && !mm0(row.m0)) return false;
         if (mm1 && !mm1(row.m1)) return false;
         if (mm2 && !mm2(row.m2)) return false;
@@ -3135,6 +5464,18 @@ function renderFinaMetricTable(panelKey) {
         if (mt6 && !mt6(row.t6)) return false;
         if (mt7 && !mt7(row.t7)) return false;
         if (mt8 && !mt8(row.t8)) return false;
+        if (minv0 && !minv0(row.inv0)) return false;
+        if (minv1 && !minv1(row.inv1)) return false;
+        if (minv2 && !minv2(row.inv2)) return false;
+        if (minv3 && !minv3(row.inv3)) return false;
+        if (minv4 && !minv4(row.inv4)) return false;
+        if (minv5 && !minv5(row.inv5)) return false;
+        if (minv6 && !minv6(row.inv6)) return false;
+        if (minv7 && !minv7(row.inv7)) return false;
+        if (minv8 && !minv8(row.inv8)) return false;
+        if (minvchg && !minvchg(computeInventoryChg(row))) return false;
+        if (minvRevPct && !minvRevPct(row.inv_revenue_pct)) return false;
+        if (minv_high && !minv_high(row.inv_high)) return false;
         if (mkchg && !mkchg(computeContractLiabChg(row))) return false;
         if (mkRevPct && !mkRevPct(row.k_revenue_pct)) return false;
         if (mk_high && !mk_high(row.k_high)) return false;
@@ -3159,23 +5500,39 @@ function renderFinaMetricTable(panelKey) {
             st._renderChunkRaf = 0;
         }
         st._renderToken = (st._renderToken || 0) + 1;
-        tbody.innerHTML = '<tr><td colspan="167" class="median-table-cat">无匹配数据</td></tr>';
+        var _ftb = document.getElementById('fina-arturn-frozen-tbody');
+        if (_ftb) _ftb.innerHTML = '<tr><td colspan="6" class="median-table-cat">无匹配数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="185" class="median-table-cat">无匹配数据</td></tr>';
+        /* 占位已写入 tbody，trMap 已失效；下次非空时必须走全量重建 */
+        st._domBuiltRowsVersion = -1;
+        st._frozenTrMap = null;
+        st._scrollTrMap = null;
     } else {
-        /* 分批渲染：首批立即显示，剩余按帧追加，防止 167 列 × N 行一次注入阻塞主线程。
-           _renderToken 作为取消标记；用户切换报告期/筛选/排序时旧任务自动失效。 */
-        var buildRowHtml = function (row, i) {
-            var trClass = (i % 2 === 1) ? ' median-table-zebra' : '';
+        /* 终极方案：DOM 一次建好、永不销毁
+           - 首次按 st.rows 原始顺序全量 build（data-row-index=原始索引）
+           - 筛选：只切换 display + DocumentFragment 重排，不销毁任何节点
+           - 排序：同样是节点重排（appendChild = move）
+           fetch 新数据时 _rowsVersion++ → 触发下次全量重建 */
+        var buildRowHtml = function (row, origIdx, zebraPos) {
+            var trClass = (zebraPos % 2 === 1) ? ' median-table-zebra' : '';
             var swRaw = row.sw_name != null ? String(row.sw_name) : '';
             var swTitle = swRaw ? ' title="' + escapeHtmlAttr(swRaw) + '"' : '';
-            return '<tr class="median-table-row' + trClass + '">' +
+            var trOpen = '<tr class="median-table-row' + trClass + '" data-row-index="' + origIdx + '">';
+            /* 冻结面板：前 6 列（股票代码/名称/申万/总市值/自由市值/公告日） */
+            var fHtml = trOpen +
                 '<td class="median-table-cat">' + escapeHtmlAttr(row.ts_code || '--') + '</td>' +
                 '<td class="median-table-cat">' + escapeHtmlAttr(row.sec_name || '--') + '</td>' +
-                '<td class="median-table-cat fina-arturn-sw-cell"' + swTitle + '>' +
-                escapeHtmlAttr(swRaw || '--') + '</td>' +
+                '<td class="median-table-cat fina-arturn-sw-cell"' + swTitle + '>' + escapeHtmlAttr(swRaw || '--') + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.total_mv_yi, 1) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.free_mv_yi, 1) + '</td>' +
                 '<td class="median-table-num">' + escapeHtmlAttr(formatFinaArturnAnnDate(row.a0)) + '</td>' +
+                '</tr>';
+            /* 可滚动面板：第 7 列起（上市日…固定资产） */
+            var sHtml = trOpen +
                 '<td class="median-table-num">' + escapeHtmlAttr(formatFinaArturnAnnDate(row.list_date)) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.money_cap_ratio_pct, 1) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.fqm_debt_to_assets, 2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.fqm_interestdebt_ratio, 2) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.ttm_revenue_yi, 1) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.pe_ttm, 1) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.ar_pct, 1) + '</td>' +
@@ -3287,6 +5644,15 @@ function renderFinaMetricTable(panelKey) {
                 '<td class="median-table-num' + finaArturnNegClass(row.u6) + '">' + formatFinaArturnValue(row.u6) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.u7) + '">' + formatFinaArturnValue(row.u7) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.u8) + '">' + formatFinaArturnValue(row.u8) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.v0, 2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.v1, 2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.v2, 2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.v3, 2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.v4, 2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.v5, 2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.v6, 2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.v7, 2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.v8, 2) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.m0) + '">' + formatFinaArturnValue(row.m0) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.m1) + '">' + formatFinaArturnValue(row.m1) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.m2) + '">' + formatFinaArturnValue(row.m2) + '</td>' +
@@ -3314,6 +5680,18 @@ function renderFinaMetricTable(panelKey) {
                 '<td class="median-table-num' + finaArturnNegClass(row.t6) + '">' + formatFinaArturnValue(row.t6) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.t7) + '">' + formatFinaArturnValue(row.t7) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.t8) + '">' + formatFinaArturnValue(row.t8) + '</td>' +
+                '<td class="median-table-num' + finaArturnNegClass(computeInventoryChg(row)) + '">' + formatFinaArturnValue(computeInventoryChg(row)) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.inv_revenue_pct) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.inv_high, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.inv0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.inv1) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.inv2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.inv3) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.inv4) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.inv5) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.inv6) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.inv7) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.inv8) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(computeContractLiabChg(row)) + '">' + formatFinaArturnValue(computeContractLiabChg(row)) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.k_revenue_pct) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.k_high, 0) + '</td>' +
@@ -3337,6 +5715,7 @@ function renderFinaMetricTable(panelKey) {
                 '<td class="median-table-num">' + formatFinaArturnValue(row.f7) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.f8) + '</td>' +
                 '</tr>';
+            return { f: fHtml, s: sHtml };
         };
         if (st._renderChunkRaf) {
             cancelAnimationFrame(st._renderChunkRaf);
@@ -3344,34 +5723,134 @@ function renderFinaMetricTable(panelKey) {
         }
         var renderToken = (st._renderToken || 0) + 1;
         st._renderToken = renderToken;
-        var CHUNK_FIRST = 600;
-        var CHUNK_NEXT = 1200;
-        var total = filtered.length;
-        var buildFinaRowsChunk = function (start, end) {
-            var parts = new Array(end - start);
-            for (var idxFR = start; idxFR < end; idxFR++) {
-                parts[idxFR - start] = buildRowHtml(filtered[idxFR], idxFR);
-            }
-            return parts.join('');
-        };
-        var firstEnd = Math.min(CHUNK_FIRST, total);
-        tbody.innerHTML = buildFinaRowsChunk(0, firstEnd);
-        var renderIdx = firstEnd;
-        var finaRenderStep = function () {
+        var frozenTbody = document.getElementById('fina-arturn-frozen-tbody');
+        var totalAll = rows.length;
+        /* 判断是否需要全量重建 DOM：
+           - rows 已更新（_rowsVersion 不等于 _domBuiltRowsVersion）
+           - trMap 缺失
+           - tbody 容器状态异常（被"无匹配"占位替换过 / 初次加载） */
+        var hasPlaceholder = false;
+        var firstScrollTr = tbody.firstElementChild;
+        if (firstScrollTr && firstScrollTr.querySelector &&
+            firstScrollTr.querySelector('td[colspan]')) {
+            hasPlaceholder = true;
+        }
+        var needRebuild = (st._domBuiltRowsVersion !== st._rowsVersion) ||
+            !st._frozenTrMap || !st._scrollTrMap ||
+            !frozenTbody || frozenTbody.children.length === 0 ||
+            !firstScrollTr || hasPlaceholder;
+
+        /* 快路径：DOM 已就绪时，仅 display 切换 + DocumentFragment 重排，不创建/销毁任何节点 */
+        var applyFinaMetricFilterSort = function () {
             if (st._renderToken !== renderToken) return;
-            if (renderIdx >= total) {
-                st._renderChunkRaf = 0;
-                return;
+            var fMap = st._frozenTrMap;
+            var sMap = st._scrollTrMap;
+            if (!fMap || !sMap) return;
+            var fTb = document.getElementById('fina-arturn-frozen-tbody');
+            var sTb = document.getElementById(cfg.ids.tbody);
+            if (!fTb || !sTb) return;
+            var visible = Object.create(null);
+            var fFrag = document.createDocumentFragment();
+            var sFrag = document.createDocumentFragment();
+            for (var vi = 0; vi < filtered.length; vi++) {
+                var rv = filtered[vi];
+                var idx = rv && rv._origIdx;
+                if (idx == null) continue;
+                visible[idx] = 1;
+                var ftr = fMap[idx];
+                var str = sMap[idx];
+                var zebra = (vi % 2 === 1);
+                if (ftr) {
+                    if (ftr.style.display) ftr.style.display = '';
+                    ftr.classList.toggle('median-table-zebra', zebra);
+                    fFrag.appendChild(ftr);
+                }
+                if (str) {
+                    if (str.style.display) str.style.display = '';
+                    str.classList.toggle('median-table-zebra', zebra);
+                    sFrag.appendChild(str);
+                }
             }
-            var nextEnd = Math.min(renderIdx + CHUNK_NEXT, total);
-            tbody.insertAdjacentHTML('beforeend', buildFinaRowsChunk(renderIdx, nextEnd));
-            renderIdx = nextEnd;
-            st._renderChunkRaf = requestAnimationFrame(finaRenderStep);
+            for (var hi = 0; hi < totalAll; hi++) {
+                if (visible[hi]) continue;
+                var fh = fMap[hi];
+                var sh = sMap[hi];
+                if (fh) {
+                    if (fh.style.display !== 'none') fh.style.display = 'none';
+                    fFrag.appendChild(fh);
+                }
+                if (sh) {
+                    if (sh.style.display !== 'none') sh.style.display = 'none';
+                    sFrag.appendChild(sh);
+                }
+            }
+            fTb.appendChild(fFrag);
+            sTb.appendChild(sFrag);
         };
-        if (renderIdx < total) {
-            st._renderChunkRaf = requestAnimationFrame(finaRenderStep);
+
+        if (needRebuild) {
+            /* 全量重建：按 st.rows 原始顺序分块渲染（不做筛选/排序），
+               完成后一次性建立 tr Map，最后调用 applyFinaMetricFilterSort 应用当前筛选/排序 */
+            var CHUNK_FIRST = 60;
+            var CHUNK_NEXT = totalAll > 1000 ? 120 : 180;
+            var buildFinaRowsChunk = function (start, end) {
+                var fParts = new Array(end - start);
+                var sParts = new Array(end - start);
+                for (var bi = start; bi < end; bi++) {
+                    /* origIdx=bi（全量顺序），zebraPos=bi（重建后即刻被 apply 覆盖，临时值无视觉副作用） */
+                    var r = buildRowHtml(rows[bi], bi, bi);
+                    fParts[bi - start] = r.f;
+                    sParts[bi - start] = r.s;
+                }
+                return { f: fParts.join(''), s: sParts.join('') };
+            };
+            var firstEnd = Math.min(CHUNK_FIRST, totalAll);
+            var firstChunk = buildFinaRowsChunk(0, firstEnd);
+            if (frozenTbody) frozenTbody.innerHTML = firstChunk.f;
+            tbody.innerHTML = firstChunk.s;
+            var renderIdx = firstEnd;
+            var finalizeRebuild = function () {
+                if (st._renderToken !== renderToken) return;
+                var fMap = new Array(totalAll);
+                var sMap = new Array(totalAll);
+                if (frozenTbody) {
+                    var ftrs = frozenTbody.children;
+                    for (var fi = 0; fi < ftrs.length; fi++) {
+                        var origF = parseInt(ftrs[fi].getAttribute('data-row-index') || '-1', 10);
+                        if (origF >= 0) fMap[origF] = ftrs[fi];
+                    }
+                }
+                var strs = tbody.children;
+                for (var si = 0; si < strs.length; si++) {
+                    var origS = parseInt(strs[si].getAttribute('data-row-index') || '-1', 10);
+                    if (origS >= 0) sMap[origS] = strs[si];
+                }
+                st._frozenTrMap = fMap;
+                st._scrollTrMap = sMap;
+                st._domBuiltRowsVersion = st._rowsVersion;
+                st._renderChunkRaf = 0;
+                applyFinaMetricFilterSort();
+            };
+            var finaRenderStep = function () {
+                if (st._renderToken !== renderToken) return;
+                if (renderIdx >= totalAll) {
+                    finalizeRebuild();
+                    return;
+                }
+                var nextEnd = Math.min(renderIdx + CHUNK_NEXT, totalAll);
+                var chunk = buildFinaRowsChunk(renderIdx, nextEnd);
+                if (frozenTbody) frozenTbody.insertAdjacentHTML('beforeend', chunk.f);
+                tbody.insertAdjacentHTML('beforeend', chunk.s);
+                renderIdx = nextEnd;
+                st._renderChunkRaf = requestAnimationFrame(finaRenderStep);
+            };
+            if (renderIdx < totalAll) {
+                st._renderChunkRaf = requestAnimationFrame(finaRenderStep);
+            } else {
+                finalizeRebuild();
+            }
         } else {
-            st._renderChunkRaf = 0;
+            applyFinaMetricFilterSort();
         }
     }
 
@@ -3382,9 +5861,14 @@ function renderFinaMetricTable(panelKey) {
     }
     renderFinaMetricHeaderFilterButtons(panelKey);
     if (panelKey === 'arturn') {
-        requestAnimationFrame(function () {
-            requestAnimationFrame(syncFinaArturnTheadStickyHeights);
-        });
+        if (!skipTheadRebuild) {
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
+                    syncFinaArturnTheadStickyHeights();
+                    syncFinaArturnColumnWidths();
+                });
+            });
+        }
         var faOv = document.getElementById('fina-fixed-assets-modal-overlay');
         if (faOv && faOv.classList.contains('is-open')) {
             syncFinaFixedAssetsNavButtons();
@@ -3404,7 +5888,21 @@ function fetchFinaMetricTable(panelKey, endDate) {
     if (msgEl) msgEl.textContent = '加载中...';
     var url = cfg.apiPath;
     if (endDate) url += '?end_date=' + encodeURIComponent(endDate);
-    return fetch(rtMonitorApiUrl(url), { cache: 'no-store' })
+    var fullUrl = rtMonitorApiUrl(url);
+    var ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var to = null;
+    if (ac && FINA_METRIC_TABLE_FETCH_TIMEOUT_MS > 0) {
+        to = setTimeout(function () {
+            try {
+                ac.abort();
+            } catch (eAb) {
+                /* ignore */
+            }
+        }, FINA_METRIC_TABLE_FETCH_TIMEOUT_MS);
+    }
+    var fetchOpts = { cache: 'no-store' };
+    if (ac) fetchOpts.signal = ac.signal;
+    return fetch(fullUrl, fetchOpts)
         .then(function (res) {
             if (!res.ok) {
                 throw new Error('HTTP ' + res.status);
@@ -3424,6 +5922,7 @@ function fetchFinaMetricTable(panelKey, endDate) {
             saveFinaMetricViewState(panelKey);
             if (data.error) {
                 st.rows = Array.isArray(data.rows) ? data.rows : [];
+                markFinaMetricRowsChanged(st);
                 renderFinaMetricTable(panelKey);
                 var updatedErr = document.getElementById(cfg.ids.headUpdated);
                 if (updatedErr) updatedErr.textContent = '更新：--';
@@ -3432,6 +5931,7 @@ function fetchFinaMetricTable(panelKey, endDate) {
                 return { ok: false };
             }
             st.rows = Array.isArray(data.rows) ? data.rows : [];
+            markFinaMetricRowsChanged(st);
             renderFinaMetricTable(panelKey);
             var updatedEl = document.getElementById(cfg.ids.headUpdated);
             if (updatedEl) updatedEl.textContent = '更新：' + finaArturnFormatHeadDate(data.last_update);
@@ -3441,10 +5941,22 @@ function fetchFinaMetricTable(panelKey, endDate) {
         .catch(function (err) {
             logError(cfg.logLabel + ' 请求失败', err);
             st.rows = [];
+            markFinaMetricRowsChanged(st);
+            var isAbort =
+                err &&
+                (err.name === 'AbortError' ||
+                    (typeof err.message === 'string' && err.message.toLowerCase().indexOf('aborted') >= 0));
+            var errText = isAbort
+                ? '请求超时（' + String(FINA_METRIC_TABLE_FETCH_TIMEOUT_MS / 1000) + 's），请检查 MySQL/网络或稍后重试'
+                : String(err && err.message ? err.message : err);
             renderFinaMetricTable(panelKey);
-            if (msgEl) msgEl.textContent = '加载失败：' + String(err && err.message ? err.message : err);
+            if (msgEl) msgEl.textContent = '加载失败：' + errText;
             saveFinaMetricViewState(panelKey);
             return { ok: false };
+        })
+        .finally(function () {
+            if (to !== null) clearTimeout(to);
+            hideFinaBootHint();
         });
 }
 
@@ -3648,13 +6160,12 @@ function initFinaArturnSchemeModal() {
     initFinaMetricSchemeModal('arturn');
 }
 
-function openFinaMetricFilterPopover(panelKey, filterKey, btnEl) {
-    var cfg = FINA_METRIC_PANEL[panelKey];
-    if (!cfg) return;
-    var pop = document.getElementById(cfg.ids.filterPopover);
-    var titleEl = document.getElementById(cfg.ids.filterTitle);
-    var inputEl = document.getElementById(cfg.ids.filterInput);
-    if (!pop || !titleEl || !inputEl || !btnEl) return;
+/**
+ * 与列筛选弹窗标题同源：供已保存方案摘要展示（依赖当前 periods / contractPeriods）。
+ * panelKey 预留与 FINA_METRIC_PANEL 对齐；当前仅 arturn。
+ */
+function computeFinaMetricFilterKeyTitle(panelKey, filterKey) {
+    void panelKey;
     var numHint = '（支持 >=30、<50、30-80）';
     var labelMap = {
         tsCode: '股票代码（包含匹配）',
@@ -3682,6 +6193,12 @@ function openFinaMetricFilterPopover(panelKey, filterKey, btnEl) {
         title = '总市值（亿元，stk_factor_pro.total_mv 万元/10000；表头不显示单位）' + numHint;
     } else if (!title && filterKey === 'free_mv_yi') {
         title = '自由市值（亿元，free_share×rt_k.close；表头不显示单位）' + numHint;
+    } else if (!title && filterKey === 'money_cap_ratio_pct') {
+        title = '市值/货币（最新报告期 money_cap_opt ÷ 总市值 ×100）' + numHint;
+    } else if (!title && filterKey === 'fqm_debt_to_assets') {
+        title = '资产负债率（fina_quarter_metrics.debt_to_assets，与表头所选报告期 end_date 对齐）' + numHint;
+    } else if (!title && filterKey === 'fqm_interestdebt_ratio') {
+        title = '带息负债率（fina_quarter_metrics.interestdebt_ratio，与表头所选报告期 end_date 对齐）' + numHint;
     } else if (!title && filterKey === 'pe_ttm') {
         title = 'PE（stk_factor_pro.pe_ttm，最新 trade_date）' + numHint;
     } else if (!title && filterKey === 'ttm_revenue_yi') {
@@ -3689,11 +6206,15 @@ function openFinaMetricFilterPopover(panelKey, filterKey, btnEl) {
     } else if (!title && filterKey === 'ar_pct') {
         title = '应收%·TTM 单季营收' + numHint;
     } else if (!title && /^kchg$/.test(filterKey)) {
-        title = '合同负债 Chg%（当期/历史8季均值-1）' + numHint;
+        title = '合同负债（亿）·Chg%（当期÷近8季已有值算术均值-1）' + numHint;
+    } else if (!title && /^invchg$/.test(filterKey)) {
+        title = '存货（亿）·Chg%（当期÷近8季已有值算术均值-1）' + numHint;
+    } else if (!title && filterKey === 'inv_revenue_pct') {
+        title = '营收%（当期存货 inv0 / 营收 TTM，亿口径相除×100）' + numHint;
     } else if (!title && filterKey === 'k_revenue_pct') {
         title = '营收%（当期合同负债 k0 / 营收 TTM，亿口径相除×100）' + numHint;
     } else if (!title && /^fchg$/.test(filterKey)) {
-        title = '固定资产 Chg%（当期/历史8季均值-1）' + numHint;
+        title = '固定资产（亿）·Chg%（当期÷近8季已有值算术均值-1）' + numHint;
     } else if (!title && /^k[0-8]$/.test(filterKey)) {
         var idxK = parseInt(filterKey.charAt(1), 10);
         var cpsK = Array.isArray(_finaMetricState().contractPeriods) ? _finaMetricState().contractPeriods : [];
@@ -3725,6 +6246,8 @@ function openFinaMetricFilterPopover(panelKey, filterKey, btnEl) {
         title = '新高（1=最新季 ocs0 在已有值的展示季中为最大，0=否；不要求 9 季全有值）' + numHint;
     } else if (!title && filterKey === 'ocs_wqcv') {
         title = '加权离散（WQCV）：九季 ocs 的加权变异系数，最新季权重最大（衰减默认 0.88/季）；数值越小相对波动越小；有效季少于 2 为空；均值近 0 时为加权标准差' + numHint;
+    } else if (!title && filterKey === 'inv_high') {
+        title = '新高（1=最新季 inv0 在已有值的展示季中为最大，0=否；不要求 9 季全有值）' + numHint;
     } else if (!title && filterKey === 'k_high') {
         title = '新高（1=最新季 k0 在已有值的展示季中为最大，0=否；不要求 9 季全有值）' + numHint;
     } else if (!title && /^cf[0-8]$/.test(filterKey)) {
@@ -3762,55 +6285,212 @@ function openFinaMetricFilterPopover(panelKey, filterKey, btnEl) {
         var cpsOco = Array.isArray(_finaMetricState().contractPeriods) ? _finaMetricState().contractPeriods : [];
         var rawOco = cpsOco[idxOco];
         title = '单季度经营现金流净额/经营活动净收益(%)·' + finaArturnQuarterLabel(rawOco) + numHint;
-    } else if (!title && /^(p|g|c|o)[0-3]$/.test(filterKey)) {
-        var idx = parseInt(filterKey.charAt(1), 10);
-        var isG = filterKey.charAt(0) === 'g';
-        var isC = filterKey.charAt(0) === 'c';
-        var isO = filterKey.charAt(0) === 'o';
-        var periods = Array.isArray(_finaMetricState().periods) ? _finaMetricState().periods : [];
-        var raw = periods[idx];
-        var periodLabel;
-        if (raw && /^\d{8}$/.test(String(raw))) {
-            periodLabel = finaArturnPeriodDisplayYear(raw);
+    } else if (!title && /^r[0-8]$/.test(filterKey)) {
+        var idxGr = parseInt(filterKey.charAt(1), 10);
+        var cpsGr = Array.isArray(_finaMetricState().contractPeriods) ? _finaMetricState().contractPeriods : [];
+        var rawGr = cpsGr[idxGr];
+        title = '单季度营业收入同比增速(%)·fina_indicator.q_gr_yoy·' + finaArturnQuarterLabel(rawGr) + numHint;
+    } else if (!title && /^u[0-8]$/.test(filterKey)) {
+        var idxOp = parseInt(filterKey.charAt(1), 10);
+        var cpsOp = Array.isArray(_finaMetricState().contractPeriods) ? _finaMetricState().contractPeriods : [];
+        var rawOp = cpsOp[idxOp];
+        title = '单季度营业利润同比增长率(%)·fina_indicator.q_op_yoy·' + finaArturnQuarterLabel(rawOp) + numHint;
+    } else if (!title && /^v[0-8]$/.test(filterKey)) {
+        var idxVx = parseInt(filterKey.charAt(1), 10);
+        var cpsVx = Array.isArray(_finaMetricState().contractPeriods) ? _finaMetricState().contractPeriods : [];
+        var rawVx = cpsVx[idxVx];
+        title = '单季度利润增速高于收入增速(百分点)·q_op_yoy−q_gr_yoy（单季营业利润为负时为空）·' + finaArturnQuarterLabel(rawVx) + numHint;
+    } else if (!title && /^[pgco][0-3]$/.test(filterKey)) {
+        var idxPg = parseInt(filterKey.charAt(1), 10);
+        var chPg = filterKey.charAt(0);
+        var isP = chPg === 'p';
+        var isG = chPg === 'g';
+        var isC = chPg === 'c';
+        var isO = chPg === 'o';
+        var periodsPg = Array.isArray(_finaMetricState().periods) ? _finaMetricState().periods : [];
+        var rawPg = periodsPg[idxPg];
+        var periodLabelPg;
+        if (rawPg && /^\d{8}$/.test(String(rawPg))) {
+            periodLabelPg = finaArturnPeriodDisplayYear(rawPg);
         } else {
-            var fb = ['当期', '上一年', '前两年', '前三年'];
-            periodLabel = fb[idx] || filterKey;
+            var fbPg = ['当期', '上一年', '前两年', '前三年'];
+            periodLabelPg = fbPg[idxPg] || filterKey;
         }
-        title = (isG ? '毛利率·' : isC ? '经营现金流净额/经营活动净收益·' : isO ? '经营现金流净额/营业收入·' : '') + periodLabel + numHint;
+        title = (isP ? '应收账款周转天数（天）·' : isG ? '销售毛利率·' : isC ? '经营现金流净额/经营活动净收益·' : isO ? '经营现金流净额/营业收入(%)·' : '') + periodLabelPg + numHint;
     }
-    if (!title) title = '筛选';
+    if (!title) {
+        title = '未映射列（键 ' + filterKey + '，请对照表头或硬刷新脚本）';
+    }
+    return title;
+}
+
+/** 方案摘要里去掉弹窗尾部的输入格式提示，缩短行宽 */
+function shortenFinaMetricFilterTitleForSchemeSummary(fullTitle) {
+    return String(fullTitle || '')
+        .replace(/（支持[^）]*）\s*$/g, '')
+        .trim();
+}
+
+/** 下拉选中已保存方案时，展示其列筛选条件、排序与保存的报告期 */
+function refreshFinaMetricSchemeSummary(panelKey) {
+    var cfg = FINA_METRIC_PANEL[panelKey];
+    if (!cfg || !cfg.ids.schemePreviewWrap || !cfg.ids.schemePreviewBody) return;
+    var wrap = document.getElementById(cfg.ids.schemePreviewWrap);
+    var body = document.getElementById(cfg.ids.schemePreviewBody);
+    var sel = document.getElementById(cfg.ids.schemeSelect);
+    if (!wrap || !body) return;
+    var name = sel ? String(sel.value || '').trim() : '';
+    if (!name) {
+        wrap.hidden = true;
+        body.innerHTML = '';
+        return;
+    }
+    var schemes = loadFinaMetricSchemes(panelKey);
+    var scheme = schemes[name];
+    if (!scheme) {
+        wrap.hidden = true;
+        body.innerHTML = '';
+        return;
+    }
+    wrap.hidden = false;
+    var filters = normalizeFinaMetricFilterShape(scheme.filters || {});
+    var keys = Object.keys(filters).filter(function (k) {
+        return String(filters[k] || '').trim() !== '';
+    }).sort();
+    var lines = [];
+    keys.forEach(function (k) {
+        var fieldTitle = shortenFinaMetricFilterTitleForSchemeSummary(computeFinaMetricFilterKeyTitle(panelKey, k));
+        var cond = String(filters[k] || '').trim();
+        lines.push(
+            '<div class="fina-arturn-scheme-preview-line">' +
+                '<span class="fina-arturn-scheme-preview-field">' + escapeHtmlAttr(fieldTitle) + '</span>' +
+                '<span class="fina-arturn-scheme-preview-sep">：</span>' +
+                '<code class="fina-arturn-scheme-preview-val">' + escapeHtmlAttr(cond) + '</code>' +
+            '</div>'
+        );
+    });
+    var sk = String(scheme.sortKey || '').trim();
+    if (sk && finaArturnIsSortableColumnKey(sk)) {
+        var sortLabel = shortenFinaMetricFilterTitleForSchemeSummary(computeFinaMetricFilterKeyTitle(panelKey, sk));
+        var dirZh = scheme.sortDir === 'desc' ? '降序' : '升序';
+        lines.push(
+            '<div class="fina-arturn-scheme-preview-line fina-arturn-scheme-preview-meta">' +
+                '<span class="fina-arturn-scheme-preview-field">排序</span>' +
+                '<span class="fina-arturn-scheme-preview-sep">：</span>' +
+                '<code class="fina-arturn-scheme-preview-val">' + escapeHtmlAttr(sortLabel + ' · ' + dirZh) + '</code>' +
+            '</div>'
+        );
+    }
+    var ed = String(scheme.endDate || '').trim();
+    if (ed) {
+        lines.push(
+            '<div class="fina-arturn-scheme-preview-line fina-arturn-scheme-preview-meta">' +
+                '<span class="fina-arturn-scheme-preview-field">保存的报告期</span>' +
+                '<span class="fina-arturn-scheme-preview-sep">：</span>' +
+                '<code class="fina-arturn-scheme-preview-val">' + escapeHtmlAttr(ed) + '</code>' +
+            '</div>'
+        );
+    }
+    if (!lines.length) {
+        body.innerHTML =
+            '<div class="fina-arturn-scheme-preview-empty">该方案未保存列筛选条件（可与排序、报告期一并使用）。</div>';
+    } else {
+        body.innerHTML = lines.join('');
+    }
+}
+
+function openFinaMetricFilterPopover(panelKey, filterKey, btnEl, anchorEvt) {
+    var cfg = FINA_METRIC_PANEL[panelKey];
+    if (!cfg) return;
+    var pop = document.getElementById(cfg.ids.filterPopover);
+    var titleEl = document.getElementById(cfg.ids.filterTitle);
+    var inputEl = document.getElementById(cfg.ids.filterInput);
+    if (!pop || !titleEl || !inputEl || !btnEl) return;
+
+    /* Portal：首次使用时把 popover（及其配套 datalist）提升到 <body> 顶层。
+       原位置位于 <section class="fina-arturn-wrap"> 内，此 section 子树含 6000 行 × 185 列 tr，
+       Chrome 在 click/focus/样式匹配时会沿 DOM 树做祖先/子树评估，大子树会引起显著卡顿。
+       position:fixed 只解决布局，不解决 DOM 树位置；必须手动搬到 body 才能彻底隔离。 */
+    if (pop.parentElement !== document.body) {
+        document.body.appendChild(pop);
+    }
+    var dlHoist = document.getElementById('fina-filter-popover-dl');
+    if (dlHoist && dlHoist.parentElement !== document.body) {
+        document.body.appendChild(dlHoist);
+    }
+    var title = computeFinaMetricFilterKeyTitle(panelKey, filterKey);
     var filters = getFinaMetricFilters(panelKey);
     titleEl.textContent = title;
-    inputEl.value = String(filters[filterKey] || '');
+
+    /* 候选下拉：按列类型过滤历史值，写入共享 datalist
+       注意：<datalist> 仅 option 列表，浏览器会做模糊匹配 + 键盘导航，不抢焦点 */
+    var dl = document.getElementById('fina-filter-popover-dl');
+    if (dl) {
+        var histList = getFinaFilterHistoryFor(filterKey);
+        if (!dl._boundKey || dl._boundKey !== filterKey ||
+            (dl.children.length !== histList.length)) {
+            /* 仅在 key 或数量变化时重建，避免频繁 innerHTML */
+            var html = '';
+            for (var hi = 0; hi < histList.length; hi++) {
+                html += '<option value="' + escapeHtmlAttr(histList[hi]) + '"></option>';
+            }
+            dl.innerHTML = html;
+            dl._boundKey = filterKey;
+        }
+    }
+
+    /* 默认值策略：
+        ① 已有当前筛选 → 填当前
+        ② 否则取最近一次符合类型的历史值
+        ③ 否则留空 */
+    var curVal = String(filters[filterKey] || '').trim();
+    var defaultVal = curVal;
+    if (!defaultVal) {
+        var hist = getFinaFilterHistoryFor(filterKey);
+        if (hist.length) defaultVal = hist[0];
+    }
+    inputEl.value = defaultVal;
     _finaMetricState().activeFilterKey = filterKey;
 
-    /* 用视口坐标 fixed 定位：避免宽表在 document 横滚 + thead 多列 sticky 时，相对 section 的 left 与可见列错位 */
-    var btnRect = btnEl.getBoundingClientRect();
+    /* 性能优先：优先使用点击事件坐标锚定，避免每次点筛选都触发布局读取（getBoundingClientRect）。
+       无事件坐标时再退化到元素几何。 */
     var pad = 8;
     var vw = window.innerWidth || document.documentElement.clientWidth || 0;
     var vh = window.innerHeight || document.documentElement.clientHeight || 0;
     pop.style.position = 'fixed';
     pop.style.right = 'auto';
     pop.style.bottom = 'auto';
-    /* 与旧逻辑一致：弹窗左缘约在触发钮左侧 200px，便于对准列头 */
-    var desiredLeft = btnRect.left - 200;
-    var desiredTop = btnRect.bottom + 6;
+    var desiredLeft = 0;
+    var desiredTop = 0;
+    if (anchorEvt && typeof anchorEvt.clientX === 'number' && typeof anchorEvt.clientY === 'number') {
+        desiredLeft = anchorEvt.clientX - 200;
+        desiredTop = anchorEvt.clientY + 8;
+    } else {
+        var btnRect = btnEl.getBoundingClientRect();
+        desiredLeft = btnRect.left - 200;
+        desiredTop = btnRect.bottom + 6;
+    }
     pop.style.left = Math.max(pad, desiredLeft) + 'px';
     pop.style.top = Math.max(pad, desiredTop) + 'px';
+    pop.style.visibility = 'hidden';
     pop.hidden = false;
-    var popW = pop.offsetWidth || 280;
-    var popH = pop.offsetHeight || 120;
+    /* 固定近似尺寸做边界夹取，避免 offsetWidth/offsetHeight 造成二次强制回流。 */
+    var popW = 292;
+    var popH = 136;
     var maxLeft = Math.max(pad, vw - popW - pad);
     var leftClamped = Math.max(pad, Math.min(desiredLeft, maxLeft));
     var topClamped = Math.max(pad, Math.min(desiredTop, vh - popH - pad));
     pop.style.left = leftClamped + 'px';
     pop.style.top = topClamped + 'px';
-    inputEl.focus();
-    inputEl.select();
+    pop.style.visibility = '';
+    requestAnimationFrame(function () {
+        try { inputEl.focus({ preventScroll: true }); } catch (e) { inputEl.focus(); }
+        inputEl.select();
+    });
 }
 
-function openFinaFilterPopover(filterKey, btnEl) {
-    openFinaMetricFilterPopover('arturn', filterKey, btnEl);
+function openFinaFilterPopover(filterKey, btnEl, anchorEvt) {
+    openFinaMetricFilterPopover('arturn', filterKey, btnEl, anchorEvt);
 }
 
 function initFinaMetricPanel(panelKey) {
@@ -3822,6 +6502,7 @@ function initFinaMetricPanel(panelKey) {
     var applyBtn = document.getElementById(ids.schemeApply);
     var deleteBtn = document.getElementById(ids.schemeDelete);
     var resetFiltersBtn = document.getElementById(ids.schemeResetFilters);
+    var schemeSelectEl = document.getElementById(ids.schemeSelect);
     var applyModeSelect = document.getElementById(ids.schemeApplyEndDateMode);
     var applyManualSelect = document.getElementById(ids.schemeApplyEndDateSelect);
     var applyRememberCheckbox = document.getElementById(ids.schemeApplyRememberPref);
@@ -3861,6 +6542,12 @@ function initFinaMetricPanel(panelKey) {
             fetchFinaMetricTable(panelKey, val);
         });
     }
+    if (schemeSelectEl && !schemeSelectEl.dataset.boundSchemeSummary) {
+        schemeSelectEl.dataset.boundSchemeSummary = '1';
+        schemeSelectEl.addEventListener('change', function () {
+            refreshFinaMetricSchemeSummary(panelKey);
+        });
+    }
     var excludeBjCb = document.getElementById(ids.excludeBj);
     var excludeStCb = document.getElementById(ids.excludeSt);
     if (excludeBjCb && !excludeBjCb.dataset.boundStockScope) {
@@ -3895,7 +6582,7 @@ function initFinaMetricPanel(panelKey) {
             }
             if (!t.classList.contains('fina-filter-btn')) return;
             var key = t.getAttribute('data-filter-key') || '';
-            openFinaMetricFilterPopover(panelKey, key, t);
+            openFinaMetricFilterPopover(panelKey, key, t, ev);
         });
     }
     if (tbody && !tbody.dataset.fixedAssetsClickBound) {
@@ -3916,8 +6603,15 @@ function initFinaMetricPanel(panelKey) {
             var k = _finaMetricState().activeFilterKey || '';
             if (!k) return;
             var f = getFinaMetricFilters(panelKey);
-            f[k] = popInput ? String(popInput.value || '').trim() : '';
+            var val = popInput ? String(popInput.value || '').trim() : '';
+            f[k] = val;
             setFinaMetricFilters(panelKey, f);
+            /* 写入 per-key 历史（LRU 去重，上限 12 条）；仅在值符合列类型时写入，
+               避免把"申万列误用的纯数字"这类脏数据污染到数值列 */
+            if (val) {
+                var typeOk = isFinaFilterValueValid(val, finaMetricFilterKeyType(k));
+                if (typeOk) pushFinaFilterHistory(k, val);
+            }
             closeFinaMetricFilterPopover(panelKey);
             renderFinaMetricTable(panelKey);
             saveFinaMetricViewState(panelKey);
@@ -4074,8 +6768,12 @@ function initFinaMetricPanel(panelKey) {
     initFinaMetricSchemeModal(panelKey);
     (function initFixedAssetsModal() {
         var overlay = document.getElementById('fina-fixed-assets-modal-overlay');
+        var cashOverlay = document.getElementById('fina-cash-create-modal-overlay');
+        var capEffOverlay = document.getElementById('fina-cap-eff-modal-overlay');
         var navPrev = document.getElementById('fina-fixed-assets-nav-prev');
         var navNext = document.getElementById('fina-fixed-assets-nav-next');
+        var growthCfgBtn = document.getElementById('fina-fixed-assets-growth-config-btn');
+        var growthCfgPanel = document.getElementById('fina-fixed-assets-growth-config-panel');
         if (navPrev && !navPrev.dataset.boundNav) {
             navPrev.dataset.boundNav = '1';
             navPrev.addEventListener('click', function () {
@@ -4086,6 +6784,25 @@ function initFinaMetricPanel(panelKey) {
             navNext.dataset.boundNav = '1';
             navNext.addEventListener('click', function () {
                 navigateFinaFixedAssetsModalInList(1);
+            });
+        }
+        if (growthCfgBtn && !growthCfgBtn.dataset.boundGrowthConfig) {
+            growthCfgBtn.dataset.boundGrowthConfig = '1';
+            growthCfgBtn.addEventListener('click', function (ev) {
+                if (ev && ev.stopPropagation) ev.stopPropagation();
+                var panel = document.getElementById('fina-fixed-assets-growth-config-panel');
+                setFinaFixedAssetsGrowthConfigPanelOpen(!panel || panel.hidden);
+            });
+        }
+        if (growthCfgPanel && !growthCfgPanel.dataset.boundGrowthConfigPanel) {
+            growthCfgPanel.dataset.boundGrowthConfigPanel = '1';
+            growthCfgPanel.addEventListener('click', function (ev) {
+                if (ev && ev.stopPropagation) ev.stopPropagation();
+            });
+            growthCfgPanel.addEventListener('change', function (ev) {
+                var target = ev && ev.target;
+                if (!target || !target.getAttribute || !target.getAttribute('data-growth-key')) return;
+                applyFinaFixedAssetsGrowthConfigFromPanel();
             });
         }
         var closeBtn = document.getElementById('fina-fixed-assets-modal-close');
@@ -4103,8 +6820,80 @@ function initFinaMetricPanel(panelKey) {
             document.body.dataset.finaFixedAssetsEscBound = '1';
             document.addEventListener('keydown', function (ev) {
                 if (!ev || ev.key !== 'Escape') return;
+                var cashOvNow = document.getElementById('fina-cash-create-modal-overlay');
+                if (cashOvNow && cashOvNow.classList.contains('is-open')) {
+                    closeFinaCashCreateModal();
+                    return;
+                }
+                var wcOvNow = document.getElementById('fina-working-cap-modal-overlay');
+                if (wcOvNow && wcOvNow.classList.contains('is-open')) {
+                    closeFinaWorkingCapModal();
+                    return;
+                }
+                var ceOvNow = document.getElementById('fina-cap-eff-modal-overlay');
+                if (ceOvNow && ceOvNow.classList.contains('is-open')) {
+                    closeFinaCapEffModal();
+                    return;
+                }
+                setFinaFixedAssetsGrowthConfigPanelOpen(false);
                 if (!overlay || !overlay.classList.contains('is-open')) return;
                 closeFinaFixedAssetsModal();
+            });
+        }
+        var cashClose = document.getElementById('fina-cash-create-modal-close');
+        if (cashClose && !cashClose.dataset.boundCashClose) {
+            cashClose.dataset.boundCashClose = '1';
+            cashClose.addEventListener('click', closeFinaCashCreateModal);
+        }
+        if (cashOverlay && !cashOverlay.dataset.boundCashOverlay) {
+            cashOverlay.dataset.boundCashOverlay = '1';
+            cashOverlay.addEventListener('click', function (e) {
+                if (e.target === cashOverlay) closeFinaCashCreateModal();
+            });
+        }
+        var wcOverlay = document.getElementById('fina-working-cap-modal-overlay');
+        var wcClose = document.getElementById('fina-working-cap-modal-close');
+        if (wcClose && !wcClose.dataset.boundWorkingCapClose) {
+            wcClose.dataset.boundWorkingCapClose = '1';
+            wcClose.addEventListener('click', closeFinaWorkingCapModal);
+        }
+        if (wcOverlay && !wcOverlay.dataset.boundWorkingCapOverlay) {
+            wcOverlay.dataset.boundWorkingCapOverlay = '1';
+            wcOverlay.addEventListener('click', function (e) {
+                if (e.target === wcOverlay) closeFinaWorkingCapModal();
+            });
+        }
+        var capEffClose = document.getElementById('fina-cap-eff-modal-close');
+        if (capEffClose && !capEffClose.dataset.boundCapEffClose) {
+            capEffClose.dataset.boundCapEffClose = '1';
+            capEffClose.addEventListener('click', closeFinaCapEffModal);
+        }
+        if (capEffOverlay && !capEffOverlay.dataset.boundCapEffOverlay) {
+            capEffOverlay.dataset.boundCapEffOverlay = '1';
+            capEffOverlay.addEventListener('click', function (e) {
+                if (e.target === capEffOverlay) closeFinaCapEffModal();
+            });
+        }
+        var opDataWrap = document.getElementById('fina-fixed-assets-operating-data-wrap');
+        if (opDataWrap && !opDataWrap.dataset.boundCashCreateClick) {
+            opDataWrap.dataset.boundCashCreateClick = '1';
+            opDataWrap.addEventListener('click', function (ev) {
+                var t = ev.target;
+                if (!t || !t.closest) return;
+                if (t.closest('.fina-fa-opdata-cash-merge')) {
+                    ev.preventDefault();
+                    openFinaCashCreateModal();
+                    return;
+                }
+                if (t.closest('.fina-fa-opdata-workingcap-merge')) {
+                    ev.preventDefault();
+                    openFinaWorkingCapModal();
+                    return;
+                }
+                if (t.closest('.fina-fa-opdata-capeff-merge')) {
+                    ev.preventDefault();
+                    openFinaCapEffModal();
+                }
             });
         }
         /* 捕获阶段委托：避免仅 6 位补后缀逻辑更新后旧缓存脚本仍绑在过时节点上；与 input 解耦 */
@@ -4186,12 +6975,215 @@ function initFinaMetricPanel(panelKey) {
                     }
                 });
                 if (faChartWrap) roFaChart.observe(faChartWrap);
+                var cashChartWrap = document.getElementById('fina-cash-create-chart-wrap');
+                var roCashChart = new ResizeObserver(function () {
+                    if (finaCashCreateChartInstance && typeof finaCashCreateChartInstance.resize === 'function') {
+                        try {
+                            finaCashCreateChartInstance.resize();
+                        } catch (eCashRo) {
+                            /* ignore */
+                        }
+                    }
+                });
+                if (cashChartWrap) roCashChart.observe(cashChartWrap);
+                var wcChartWrap = document.getElementById('fina-working-cap-chart-wrap');
+                var roWcChart = new ResizeObserver(function () {
+                    if (finaWorkingCapTurnoverChartInstance && typeof finaWorkingCapTurnoverChartInstance.resize === 'function') {
+                        try { finaWorkingCapTurnoverChartInstance.resize(); } catch (eWcRo) { /* ignore */ }
+                    }
+                });
+                if (wcChartWrap) roWcChart.observe(wcChartWrap);
+                var ceChartWrap = document.getElementById('fina-cap-eff-chart-wrap');
+                var roCeChart = new ResizeObserver(function () {
+                    if (finaCapEffChartInstance && typeof finaCapEffChartInstance.resize === 'function') {
+                        try { finaCapEffChartInstance.resize(); } catch (eCeRo) { /* ignore */ }
+                    }
+                });
+                if (ceChartWrap) roCeChart.observe(ceChartWrap);
             }
             if (typeof ResizeObserver !== 'undefined') {
                 var roFaShell = new ResizeObserver(function () {
                     scheduleSaveFinaFixedAssetsModalLayout(faModal);
                 });
                 roFaShell.observe(faModal);
+            }
+        }
+        var cashModal = cashOverlay && cashOverlay.querySelector('.fina-cash-create-modal-shell');
+        var cashHeader = cashOverlay && cashOverlay.querySelector('.fina-cash-create-modal-header');
+        if (cashModal && cashHeader && cashOverlay && cashOverlay.dataset.finaCashCreateLayoutBound !== '1') {
+            cashOverlay.dataset.finaCashCreateLayoutBound = '1';
+            cashModal.style.position = 'fixed';
+            cashModal.style.left = '50%';
+            cashModal.style.top = '50%';
+            cashModal.style.transform = 'translate(-50%, -50%)';
+            var cashDragging = false;
+            var cashStartX = 0;
+            var cashStartY = 0;
+            var cashStartLeft = 0;
+            var cashStartTop = 0;
+            var cashDragW = 0;
+            var cashDragH = 0;
+            cashHeader.style.cursor = 'move';
+            cashHeader.addEventListener('mousedown', function (e) {
+                if (e.button !== 0) return;
+                var t = e.target;
+                if (t && t.closest && t.closest('input, button, label, select, textarea, a')) return;
+                cashDragging = true;
+                cashStartX = e.clientX;
+                cashStartY = e.clientY;
+                var rect = cashModal.getBoundingClientRect();
+                cashStartLeft = rect.left;
+                cashStartTop = rect.top;
+                cashDragW = rect.width;
+                cashDragH = rect.height;
+                cashModal.style.transform = '';
+                e.preventDefault();
+            });
+            document.addEventListener('mousemove', function (e) {
+                if (!cashDragging) return;
+                var dx = e.clientX - cashStartX;
+                var dy = e.clientY - cashStartY;
+                var newLeft = cashStartLeft + dx;
+                var newTop = cashStartTop + dy;
+                var vw = window.innerWidth || document.documentElement.clientWidth;
+                var vh = window.innerHeight || document.documentElement.clientHeight;
+                var maxLeft = vw - cashDragW;
+                var maxTop = vh - cashDragH;
+                if (newLeft < 0) newLeft = 0;
+                if (newTop < 0) newTop = 0;
+                if (newLeft > maxLeft) newLeft = maxLeft;
+                if (newTop > maxTop) newTop = maxTop;
+                cashModal.style.left = newLeft + 'px';
+                cashModal.style.top = newTop + 'px';
+            });
+            document.addEventListener('mouseup', function () {
+                if (cashDragging) saveFinaCashCreateModalLayout(cashModal);
+                cashDragging = false;
+            });
+            if (typeof ResizeObserver !== 'undefined') {
+                var roCashShell = new ResizeObserver(function () {
+                    scheduleSaveFinaCashCreateModalLayout(cashModal);
+                });
+                roCashShell.observe(cashModal);
+            }
+        }
+
+        var wcModal = wcOverlay && wcOverlay.querySelector('.fina-working-cap-modal-shell');
+        var wcHeader = wcOverlay && wcOverlay.querySelector('.fina-working-cap-modal-header');
+        if (wcModal && wcHeader && wcOverlay && wcOverlay.dataset.finaWorkingCapLayoutBound !== '1') {
+            wcOverlay.dataset.finaWorkingCapLayoutBound = '1';
+            wcModal.style.position = 'fixed';
+            wcModal.style.left = '50%';
+            wcModal.style.top = '50%';
+            wcModal.style.transform = 'translate(-50%, -50%)';
+            var wcDragging = false;
+            var wcStartX = 0;
+            var wcStartY = 0;
+            var wcStartLeft = 0;
+            var wcStartTop = 0;
+            var wcDragW = 0;
+            var wcDragH = 0;
+            wcHeader.style.cursor = 'move';
+            wcHeader.addEventListener('mousedown', function (e) {
+                if (e.button !== 0) return;
+                var t = e.target;
+                if (t && t.closest && t.closest('input, button, label, select, textarea, a')) return;
+                wcDragging = true;
+                wcStartX = e.clientX;
+                wcStartY = e.clientY;
+                var rect = wcModal.getBoundingClientRect();
+                wcStartLeft = rect.left;
+                wcStartTop = rect.top;
+                wcDragW = rect.width;
+                wcDragH = rect.height;
+                wcModal.style.transform = '';
+                e.preventDefault();
+            });
+            document.addEventListener('mousemove', function (e) {
+                if (!wcDragging) return;
+                var dx = e.clientX - wcStartX;
+                var dy = e.clientY - wcStartY;
+                var newLeft = wcStartLeft + dx;
+                var newTop = wcStartTop + dy;
+                var vw = window.innerWidth || document.documentElement.clientWidth;
+                var vh = window.innerHeight || document.documentElement.clientHeight;
+                var maxLeft = vw - wcDragW;
+                var maxTop = vh - wcDragH;
+                if (newLeft < 0) newLeft = 0;
+                if (newTop < 0) newTop = 0;
+                if (newLeft > maxLeft) newLeft = maxLeft;
+                if (newTop > maxTop) newTop = maxTop;
+                wcModal.style.left = newLeft + 'px';
+                wcModal.style.top = newTop + 'px';
+            });
+            document.addEventListener('mouseup', function () {
+                if (wcDragging) saveFinaWorkingCapModalLayout(wcModal);
+                wcDragging = false;
+            });
+            if (typeof ResizeObserver !== 'undefined') {
+                var roWcShell = new ResizeObserver(function () {
+                    scheduleSaveFinaWorkingCapModalLayout(wcModal);
+                });
+                roWcShell.observe(wcModal);
+            }
+        }
+        var capEffModal = capEffOverlay && capEffOverlay.querySelector('.fina-cap-eff-modal-shell');
+        var capEffHeader = capEffOverlay && capEffOverlay.querySelector('.fina-cap-eff-modal-header');
+        if (capEffModal && capEffHeader && capEffOverlay && capEffOverlay.dataset.finaCapEffLayoutBound !== '1') {
+            capEffOverlay.dataset.finaCapEffLayoutBound = '1';
+            capEffModal.style.position = 'fixed';
+            capEffModal.style.left = '50%';
+            capEffModal.style.top = '50%';
+            capEffModal.style.transform = 'translate(-50%, -50%)';
+            var ceDragging = false;
+            var ceStartX = 0;
+            var ceStartY = 0;
+            var ceStartLeft = 0;
+            var ceStartTop = 0;
+            var ceDragW = 0;
+            var ceDragH = 0;
+            capEffHeader.style.cursor = 'move';
+            capEffHeader.addEventListener('mousedown', function (e) {
+                if (e.button !== 0) return;
+                var t = e.target;
+                if (t && t.closest && t.closest('input, button, label, select, textarea, a')) return;
+                ceDragging = true;
+                ceStartX = e.clientX;
+                ceStartY = e.clientY;
+                var rect = capEffModal.getBoundingClientRect();
+                ceStartLeft = rect.left;
+                ceStartTop = rect.top;
+                ceDragW = rect.width;
+                ceDragH = rect.height;
+                capEffModal.style.transform = '';
+                e.preventDefault();
+            });
+            document.addEventListener('mousemove', function (e) {
+                if (!ceDragging) return;
+                var dx = e.clientX - ceStartX;
+                var dy = e.clientY - ceStartY;
+                var newLeft = ceStartLeft + dx;
+                var newTop = ceStartTop + dy;
+                var vw = window.innerWidth || document.documentElement.clientWidth;
+                var vh = window.innerHeight || document.documentElement.clientHeight;
+                var maxLeft = vw - ceDragW;
+                var maxTop = vh - ceDragH;
+                if (newLeft < 0) newLeft = 0;
+                if (newTop < 0) newTop = 0;
+                if (newLeft > maxLeft) newLeft = maxLeft;
+                if (newTop > maxTop) newTop = maxTop;
+                capEffModal.style.left = newLeft + 'px';
+                capEffModal.style.top = newTop + 'px';
+            });
+            document.addEventListener('mouseup', function () {
+                if (ceDragging) saveFinaCapEffModalLayout(capEffModal);
+                ceDragging = false;
+            });
+            if (typeof ResizeObserver !== 'undefined') {
+                var roCeShell = new ResizeObserver(function () {
+                    scheduleSaveFinaCapEffModalLayout(capEffModal);
+                });
+                roCeShell.observe(capEffModal);
             }
         }
     })();
@@ -4281,7 +7273,12 @@ window.addEventListener('load', function () {
 /* 代码更新时间：2026-04-19 17:27 先 band 再同比>30/ROE>4（仅 band 空）；tdNumStyled 极值类先于强调；RT_MONITOR_STATIC_VER 20260419-43 */
 /* 代码更新时间：2026-04-19 18:08 ocs/oco 筛选弹窗标题去掉 fina_indicator·直接取库表值；RT_MONITOR_STATIC_VER 20260419-44 */
 /* 代码更新时间：2026-04-19 20:00 配置弹窗「列表股票范围」排除 .BJ、ST；viewState 持久化；RT_MONITOR_STATIC_VER 20260419-47 */
-/* 代码更新时间：2026-04-19 20:09 财报表仅全屏遮罩二处：固定资产+筛选方案；列筛选为 #fina-arturn-filter-popover 小窗无灰底；RT_MONITOR_STATIC_VER 20260419-48 */
+/* 代码更新时间：2026-04-23 终极方案：DOM 一次建好永不销毁（按原始 rows 顺序全量 build + data-row-index 索引），
+   筛选/排序走快路径（display 切换 + DocumentFragment 节点重排），彻底消除筛选时的 GC/layout 冻结；
+   配套：markFinaMetricRowsChanged 打 _origIdx/_rowsVersion，syncRowHover 改用 dataset.rowIndex；
+   筛选弹窗：per-key 历史记录（localStorage，LRU max 12）+ 列类型过滤（number/date/binary01/text）
+   + 默认值策略（当前值 > 最近历史 > 空）+ 关闭浏览器 autofill；
+   RT_MONITOR_STATIC_VER 20260423-47 */
 /* 代码更新时间：2026-04-19 20:58 申万二级行业：英文单词 or 拆段、段间 OR 包含匹配；RT_MONITOR_STATIC_VER 20260419-49 */
 /* 代码更新时间：2026-04-19 23:22 经营宽表增「股东户数」行（holder_num 整数）；RT_MONITOR_STATIC_VER 20260419-50 */
 /* 代码更新时间：2026-04-19 23:30 股东户数行移至经营宽表最末行；RT_MONITOR_STATIC_VER 20260419-51 */
@@ -4291,3 +7288,49 @@ window.addEventListener('load', function () {
 /* 代码更新时间：2026-04-21 固定资产弹窗指标两行+FCF*TTM/净债务/资产负债率/CCC（API extras）；RT_MONITOR_STATIC_VER 20260421-4 */
 /* 代码更新时间：2026-04-21 净现金红色 .fina-fixed-assets-metric-netcash；RT_MONITOR_STATIC_VER 20260421-5 */
 /* 代码更新时间：2026-04-22 财报页流畅性：横向主导 wheel 交给原生；resize 防抖 thead 同步；拖拽弹窗 mousemove 免 getBoundingClientRect */
+/* 代码更新时间：2026-04-23 07:56 固定资产弹窗顶栏标题改「速览」；RT_MONITOR_STATIC_VER 20260423-1 */
+/* 代码更新时间：2026-04-23 经营宽表行序：现金转化率紧跟FCF*、ROE紧跟ROIC、应收%与股东户数互换；RT_MONITOR_STATIC_VER 20260423-2 */
+/* 代码更新时间：2026-04-23 经营宽表「指标」右侧「业务逻辑」列，模块A四行 rowspan 现金创造能力；RT_MONITOR_STATIC_VER 20260423-4 */
+/* 代码更新时间：2026-04-23 经营宽表前三行指标名去掉「模块A·」前缀；RT_MONITOR_STATIC_VER 20260423-5 */
+/* 代码更新时间：2026-04-23 修复经营宽表函数 JSDoc 注释内含「星号+斜杠」误结束块注释、整脚本无法解析致财报页白屏；RT_MONITOR_STATIC_VER 20260423-8 */
+/* 代码更新时间：2026-04-23 经营宽表 JSDoc 四行说明改为直接使用「FCF」表述；RT_MONITOR_STATIC_VER 20260423-9 */
+/* 代码更新时间：2026-04-23 经营宽表现金创造能力四行 tr 分组 class + 合并格 .fina-fa-opdata-cash-merge 粗框；RT_MONITOR_STATIC_VER 20260423-10 */
+/* 代码更新时间：2026-04-23 模块B/C 业务逻辑合并格（营运资本·周转天数／资本结构·杠杆）+ 黑框 tr；RT_MONITOR_STATIC_VER 20260423-11 */
+/* 代码更新时间：2026-04-23 经营宽表指标列去除「模块B·」「模块C·」前缀（业务逻辑列已分区）；RT_MONITOR_STATIC_VER 20260423-12 */
+/* 代码更新时间：2026-04-23 经营宽表 ROIC 行 label 改为「ROIC」；RT_MONITOR_STATIC_VER 20260423-13 */
+/* 代码更新时间：2026-04-23 经营宽表业务逻辑五组（资本效率/规模.损益/盈利能力/成长性/股东与筹码）+ 应收% 行序；RT_MONITOR_STATIC_VER 20260423-14 */
+/* 代码更新时间：2026-04-23 应收占收入比→模块B（应收天数后）；规模.损益改为三行；RT_MONITOR_STATIC_VER 20260423-15 */
+/* 代码更新时间：2026-04-23 CCC 行指标列「现金循环天数（天）」；RT_MONITOR_STATIC_VER 20260423-16 */
+/* 代码更新时间：2026-04-23 应收占收入比调至现金循环天数下一行（模块B末行）；RT_MONITOR_STATIC_VER 20260423-17 */
+/* 代码更新时间：2026-04-23 经营宽表「自由现金流FCF（亿）」展示名去星号；RT_MONITOR_STATIC_VER 20260423-18 */
+/* 代码更新时间：2026-04-23 经营宽表着色说明（图例）+ 指标列可读性；RT_MONITOR_STATIC_VER 20260423-19 */
+/* 代码更新时间：2026-04-23 去除经营宽表顶部着色说明；RT_MONITOR_STATIC_VER 20260423-20 */
+/* 代码更新时间：2026-04-25 07:41 现金创造能力合并格点击弹出 25 季 OCF/Capex/FCF + 现金转化率组合图；RT_MONITOR_STATIC_VER 20260425-1 */
+/* 代码更新时间：2026-04-25 08:06 现金创造能力图增加防重叠数值标注（halo + 多档避让）；RT_MONITOR_STATIC_VER 20260425-2 */
+/* 代码更新时间：2026-04-25 11:02 现金创造能力图/经营宽表：现金转化率展示名与数值均不带 %；RT_MONITOR_STATIC_VER 20260425-3 */
+/* 代码更新时间：2026-04-23 筛选弹窗打开时先 hidden 测量再 rAF 聚焦，降低卡顿；公告日/上市日筛选兼容 yyyy-mm-dd；RT_MONITOR_STATIC_VER 20260423-26 */
+/* 代码更新时间：2026-04-23 经营宽表应收/存货天数：相对行内均值浅红低、浅绿高；RT_MONITOR_STATIC_VER 20260423-49 */
+/* 代码更新时间：2026-04-24 应收/存货保留极值三色，均值色仅补非极值格+再浅色；RT_MONITOR_STATIC_VER 20260423-50 */
+/* 代码更新时间：2026-04-24 应收占收入比 recv_pct 并入 lowerIsBetterKeys + 均值行（与应收天数同）；RT_MONITOR_STATIC_VER 20260423-53 */
+/* 代码更新时间：2026-04-24 应收/存货/应收占收入比：浅色偏离改相对行中位数（原算术均值）；RT_MONITOR_STATIC_VER 20260423-55 */
+/* 代码更新时间：2026-04-25 13:37 现金创造能力弹窗：顶栏拖动、CSS resize、localStorage 几何；与固定资产速览弹窗同套路；RT_MONITOR_STATIC_VER 20260425-4 */
+/* 代码更新时间：2026-04-25 13:45 现金创造图 FCF 柱按正负分色（负翡翠绿/正紫），与经营宽表负值字色同系；RT_MONITOR_STATIC_VER 20260425-5 */
+/* 代码更新时间：2026-04-25 14:15 现金创造图 B 档：OCF 靛青负/资本深褐负/零轴加粗/转化率点 玫红|翡翠；RT_MONITOR_STATIC_VER 20260425-6 */
+/* 代码更新时间：2026-04-25 14:31 固定资产弹窗指标第二行 PE 左侧增加「上市时间」（payload.list_date / arturnRow.list_date）；RT_MONITOR_STATIC_VER 20260425-7 */
+/* 代码更新时间：2026-04-25 14:53 上市时间值后追加 finaListingTenureZhFromNow（已上市X年X个月）；RT_MONITOR_STATIC_VER 20260425-8 */
+/* 代码更新时间：2026-04-25 15:06 营运资本周转天数二级弹窗：模块B 合并格点击，左轴4线+右轴应收占收入比柱；RT_MONITOR_STATIC_VER 20260425-9 */
+/* 代码更新时间：2026-04-25 15:23 营运资本图优化：应收/应付高对比配色 + 图上数值标签 + 点样式区分；RT_MONITOR_STATIC_VER 20260425-10 */
+/* 代码更新时间：2026-04-25 15:27 营运资本图优化：应收占收入比柱状图轻量化（收窄柱宽/降低透明度/右轴留白）；RT_MONITOR_STATIC_VER 20260425-11 */
+/* 代码更新时间：2026-04-25 15:53 固定资产弹窗证券代码仅展示6位（formatFinaFixedAssetsTsCodeDisplay）；RT_MONITOR_STATIC_VER 20260425-12 */
+/* 代码更新时间：2026-04-25 17:12 固定资产弹窗「资本效率」二级弹窗：ROIC+ROE(扣非) 25季双折线、可拖拽/resize/记忆；RT_MONITOR_STATIC_VER 20260425-13 */
+/* 代码更新时间：2026-04-25 17:18 资本效率图标签策略：最早/最新报告期首尾点强制显示数值；RT_MONITOR_STATIC_VER 20260425-14 */
+/* 代码更新时间：2026-04-25 17:42 资本效率图：同季度标签分槽防重叠（含最新期）+负值线段/点/标签专属配色；RT_MONITOR_STATIC_VER 20260425-15 */
+/* 代码更新时间：2026-04-26 16:29 固定资产弹窗指标条：申万行业+实控人/企业性质（stock_basic.act_name、act_ent_type）；RT_MONITOR_STATIC_VER 20260426-6 */
+/* 代码更新时间：2026-04-26 16:40 后端 stock_basic 直查四列（见 RT_MONITOR_STATIC_VER 20260426-7） */
+/* 代码更新时间：2026-04-26 16:51 固定资产序列 API 响应头 no-store（见 RT_MONITOR_STATIC_VER 20260426-8） */
+/* 代码更新时间：2026-04-26 17:05 固定资产序列请求 URL 加 _cb；成功后立即清「加载中」；RT_MONITOR_STATIC_VER 20260426-9 */
+/* 代码更新时间：2026-04-26 18:05 实控人/企业性质：与序列并行拉 act 接口；财报表行 act 由后端主 SQL 与 list_date 同源；RT_MONITOR_STATIC_VER 20260426-13 */
+/* 代码更新时间：2026-04-26 20:31 筛选方案弹窗：下拉选中后展示列条件/排序/保存报告期；computeFinaMetricFilterKeyTitle 与弹窗标题同源；RT_MONITOR_STATIC_VER 20260426-14 */
+/* 代码更新时间：2026-04-26 21:05 computeFinaMetricFilterKeyTitle：p=应收周转天、g=销售毛利率；r/u=q_gr_yoy/q_op_yoy；fchg/kchg/invchg 带父级亿口径；未知列键可辨；RT_MONITOR_STATIC_VER 20260426-15 */
+/* 代码更新时间：2026-04-26 21:27 财报表：资产负债率/带息负债率列筛选与表头分组 colspan 对齐；computeFinaMetricFilterKeyTitle 补 fqm_*；RT_MONITOR_STATIC_VER 20260426-16 */
+/* 代码更新时间：2026-04-26 22:36 财报表：营业利润同比右侧增 v0–v8（利润增速−收入增速百分点）表头/行/筛选/排序/CSS 列数；RT_MONITOR_STATIC_VER 20260426-18 */
