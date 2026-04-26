@@ -6299,7 +6299,7 @@ function computeFinaMetricFilterKeyTitle(panelKey, filterKey) {
         var idxVx = parseInt(filterKey.charAt(1), 10);
         var cpsVx = Array.isArray(_finaMetricState().contractPeriods) ? _finaMetricState().contractPeriods : [];
         var rawVx = cpsVx[idxVx];
-        title = '单季度利润增速高于收入增速(百分点)·q_op_yoy−q_gr_yoy（单季营业利润为负时为空）·' + finaArturnQuarterLabel(rawVx) + numHint;
+        title = '单季度利润增速高于收入增速(百分点)·q_op_yoy−q_gr_yoy（与表内 r/u 同比列同源，非利润绝对额）·' + finaArturnQuarterLabel(rawVx) + numHint;
     } else if (!title && /^[pgco][0-3]$/.test(filterKey)) {
         var idxPg = parseInt(filterKey.charAt(1), 10);
         var chPg = filterKey.charAt(0);
@@ -7334,3 +7334,4 @@ window.addEventListener('load', function () {
 /* 代码更新时间：2026-04-26 21:05 computeFinaMetricFilterKeyTitle：p=应收周转天、g=销售毛利率；r/u=q_gr_yoy/q_op_yoy；fchg/kchg/invchg 带父级亿口径；未知列键可辨；RT_MONITOR_STATIC_VER 20260426-15 */
 /* 代码更新时间：2026-04-26 21:27 财报表：资产负债率/带息负债率列筛选与表头分组 colspan 对齐；computeFinaMetricFilterKeyTitle 补 fqm_*；RT_MONITOR_STATIC_VER 20260426-16 */
 /* 代码更新时间：2026-04-26 22:36 财报表：营业利润同比右侧增 v0–v8（利润增速−收入增速百分点）表头/行/筛选/排序/CSS 列数；RT_MONITOR_STATIC_VER 20260426-18 */
+/* 代码更新时间：2026-04-26 23:05 v 列口径：仅行内 q_op_yoy−q_gr_yoy，不用 income 利润绝对额；RT_MONITOR_STATIC_VER 20260426-19 */

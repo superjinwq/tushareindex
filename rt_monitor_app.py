@@ -1176,7 +1176,7 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 静态资源版本号：更新 css/js 后递增，避免浏览器长期缓存旧脚本导致与 HTML 表头列数不一致
-RT_MONITOR_STATIC_VER = '20260426-18'
+RT_MONITOR_STATIC_VER = '20260426-19'
 
 # 禁止缓存的 JSON GET：除精确 path 外按「后缀」匹配，兼容反代挂载后 request.path 为 /prefix/api/... 仍下发 no-store
 _JSON_API_NO_STORE_SUFFIXES: tuple[str, ...] = (
@@ -4160,60 +4160,6 @@ def _fina_batch_income_total_revenue(
     return {k: dict(v) for k, v in out.items()}
 
 
-def _fina_batch_income_operate_profit(
-    conn,
-    ts_codes: list[str],
-    date_keys: set[str],
-    has_inc_rt: bool,
-) -> dict[str, dict[str, float]]:
-    """ts_code -> { YYYYMMDD -> operate_profit 累计值（元）}，选行与 total_revenue 同源。"""
-    if not ts_codes or not date_keys:
-        return {}
-    fi_rt = (
-        '          CASE WHEN inc.report_type = 1 THEN 0 ELSE 1 END, '
-        if has_inc_rt else
-        ''
-    )
-    date_list = sorted(date_keys)
-    date_objs = [datetime.strptime(d, '%Y%m%d').date() for d in date_list]
-    out: dict[str, dict[str, float]] = defaultdict(dict)
-    chunk = 450
-    for i in range(0, len(ts_codes), chunk):
-        part = ts_codes[i : i + chunk]
-        ph_ts = ','.join(['%s'] * len(part))
-        ph_dt = ','.join(['%s'] * len(date_objs))
-        sql = (
-            'SELECT inc.ts_code, inc.end_date, inc.operate_profit '
-            'FROM ( '
-            '  SELECT inc.ts_code, inc.end_date, inc.operate_profit, '
-            '    ROW_NUMBER() OVER ( '
-            '      PARTITION BY inc.ts_code, inc.end_date '
-            '      ORDER BY '
-            '        CASE WHEN inc.operate_profit IS NOT NULL AND TRIM(CAST(inc.operate_profit AS CHAR)) <> \'\' '
-            '          THEN 0 ELSE 1 END, '
-            '        CASE WHEN inc.update_flag = \'1\' THEN 0 ELSE 1 END, '
-            + fi_rt +
-            '        inc.ann_date DESC '
-            '    ) AS rn '
-            '  FROM income inc '
-            f'  WHERE inc.ts_code IN ({ph_ts}) AND inc.end_date IN ({ph_dt}) '
-            ') inc '
-            'WHERE inc.rn = 1'
-        )
-        params = tuple(part) + tuple(date_objs)
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            for row in cur.fetchall() or []:
-                tc, ed, tv = row[0], row[1], row[2]
-                k = _normalize_end_date_yyyymmdd(ed)
-                if not k:
-                    continue
-                v = _fina_parse_income_total_revenue(tv)
-                if v is not None:
-                    out[tc][k] = v
-    return {k: dict(v) for k, v in out.items()}
-
-
 def _fina_batch_accounts_receiv(
     conn,
     ts_codes: list[str],
@@ -5436,15 +5382,15 @@ def _fina_arturn_attach_quarter_yoy(
 
 
 def _fina_arturn_attach_quarter_op_yoy_excess_gr_yoy(
-    conn,
+    _conn,
     rows: list[dict],
     quarter_periods: list[str],
-    has_inc_rt: bool,
+    _has_inc_rt: bool,
 ) -> None:
-    """就地写入 v0..v8：营业利润同比增速高于营收同比增速时的差值（q_op_yoy − q_gr_yoy，百分点）。
+    """就地写入 v0..v8：与表内 r/u 同源，均为 fina_indicator 同比增速（百分点差）。
 
-    单季营业利润为负（income.operate_profit 按 A 股累计口径拆单季后 < 0）时该季置空（前端显示 --）。
-    若库无 income.operate_profit 列，则不做利润符号判断，仅按 u>r 写差值。
+    v_i = q_op_yoy − q_gr_yoy，仅当 r_i、u_i 可解析为浮点数且 u_i > r_i 时写入（否则前端 --）。
+    与 income 营业利润绝对额无关。_conn / _has_inc_rt 保留签名与调用方一致，本函数不使用。
     """
     for row in rows:
         for i in range(9):
@@ -5454,24 +5400,8 @@ def _fina_arturn_attach_quarter_op_yoy_excess_gr_yoy(
     periods = [str(p).strip() for p in quarter_periods[:9] if str(p).strip()]
     if not periods:
         return
-    has_op_col = _tushare_column_exists(conn, 'income', 'operate_profit')
-    ts_codes = [str(r.get('ts_code') or '').strip() for r in rows if str(r.get('ts_code') or '').strip()]
-    if not ts_codes:
-        return
-    op_nested: dict[str, dict[str, float]] = {}
-    if has_op_col:
-        try:
-            dkeys = _fina_income_date_keys_for_single_quarter_revenue(periods)
-            op_nested = _fina_batch_income_operate_profit(conn, ts_codes, dkeys, has_inc_rt)
-        except Exception as e:
-            logger.warning('单季营业利润批量读取失败（v 列不做利润符号过滤）: %s', e)
-            op_nested = {}
     for row in rows:
-        tc = str(row.get('ts_code') or '').strip()
-        if not tc:
-            continue
-        op_map = op_nested.get(tc, {}) if op_nested else {}
-        for i, p in enumerate(periods[:9]):
+        for i, _p in enumerate(periods[:9]):
             rv = row.get(f'r{i}')
             uv = row.get(f'u{i}')
             if rv is None or uv is None:
@@ -5481,13 +5411,6 @@ def _fina_arturn_attach_quarter_op_yoy_excess_gr_yoy(
                 uf = float(uv)
             except (TypeError, ValueError):
                 continue
-            if has_op_col and op_map:
-                yq = _fina_yq_from_anchor(p)
-                if yq:
-                    y, q = yq
-                    sq_op = _fina_quarter_single_revenue(op_map, y, q)
-                    if sq_op is not None and float(sq_op) < 0:
-                        continue
             if uf > rf:
                 row[f'v{i}'] = round(uf - rf, 2)
 
@@ -6474,7 +6397,7 @@ def _query_fina_arturn_table(selected_end_date: str) -> dict:
     经营现金流净额/经营活动净收益、经营现金流净额/营业收入：各自独立选行，优先对应字段非空；其中 ocf_to_or 四列不在 SQL 中预 ROUND，接口为库内小数×100、保留 2 位百分数。
     选行优先级（fina_indicator / balancesheet 一致）：update_flag=1 > report_type=1（合并报表）> ann_date 最新。
     单季度同比：q_gr_yoy（营业收入同比增速）与 q_op_yoy（营业利润同比增长率），均取当季+往前 8 季，共 9 季。
-    单季利润增速高于收入增速（百分点）：v0..v8，当 q_op_yoy>q_gr_yoy 时为二者之差；单季营业利润（income.operate_profit 拆累计）为负时置空。
+    单季利润增速高于收入增速（百分点）：v0..v8，由行内 u（q_op_yoy）与 r（q_gr_yoy）算 u−r；仅 u>r 时写入，与 income 绝对额无关。
     合同负债（亿）：balancesheet 同一报告期 contract_liab + adv_receipts（若存在 adv_receipts 列；旧准则预收款项），再 /1e8；无该列时仅用 contract_liab。
     固定资产（亿）：balancesheet.fix_assets_total / 1e8。
     应收占比(%)（单列）：balancesheet.accounts_receiv ÷ income 最近四单季营业总收入（TTM，累计口径拆解）×100，锚定期为 periods[0]。
@@ -10852,4 +10775,5 @@ if __name__ == '__main__':
 # 代码更新时间：2026-04-26 21:05 RT_MONITOR_STATIC_VER 20260426-15（方案摘要列名：补 p 应收周转天、r/u 同比及 Chg% 父指标；未知列键提示）
 # 代码更新时间：2026-04-26 21:27 RT_MONITOR_STATIC_VER 20260426-16（财报表：fina_quarter_metrics 按表头报告期挂 fqm_debt_to_assets、fqm_interestdebt_ratio）
 # 代码更新时间：2026-04-26 21:41 RT_MONITOR_STATIC_VER 20260426-17（固定资产弹窗顶栏证券代码输入框 text-align:center）
-# 代码更新时间：2026-04-26 22:36 RT_MONITOR_STATIC_VER 20260426-18（财报表 v0..v8：单季 q_op_yoy>q_gr_yoy 时差值百分点；单季营业利润负则空；前端/CSS 列与分组竖线同步）
+# 代码更新时间：2026-04-26 22:36 RT_MONITOR_STATIC_VER 20260426-18（财报表 v0..v8：单季 q_op_yoy>q_gr_yoy 时差值百分点；前端/CSS 列与分组竖线同步）
+# 代码更新时间：2026-04-26 23:05 RT_MONITOR_STATIC_VER 20260426-19（v 列仅行内 q_op_yoy−q_gr_yoy，去掉 income.operate_profit 绝对额判断）
