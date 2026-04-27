@@ -167,6 +167,8 @@ var FINA_METRIC_PANEL = {
             section: 'fina-arturn-section',
             thead: 'fina-arturn-thead',
             tbody: 'fina-arturn-tbody',
+            /** 分栏外包裹：委托固定资产弹窗点击（覆盖冻结+可滚动 tbody，单一监听器） */
+            splitWrap: 'fina-arturn-tbody-scroll',
             msg: 'fina-arturn-msg',
             headUpdated: 'fina-arturn-head-updated',
             schemeOpen: 'fina-arturn-scheme-open',
@@ -5521,7 +5523,7 @@ function renderFinaMetricTable(panelKey) {
             /* 冻结面板：前 6 列（股票代码/名称/申万/总市值/自由市值/公告日） */
             var fHtml = trOpen +
                 '<td class="median-table-cat">' + escapeHtmlAttr(row.ts_code || '--') + '</td>' +
-                '<td class="median-table-cat">' + escapeHtmlAttr(row.sec_name || '--') + '</td>' +
+                '<td class="median-table-cat"><span class="fina-fixed-assets-clickable" data-fixed-assets-ts-code="' + escapeHtmlAttr(row.ts_code || '') + '" data-fixed-assets-sec-name="' + escapeHtmlAttr(row.sec_name || '') + '" title="查看固定资产、在建工程与营收（最多25季）">' + escapeHtmlAttr(row.sec_name || '--') + '</span></td>' +
                 '<td class="median-table-cat fina-arturn-sw-cell"' + swTitle + '>' + escapeHtmlAttr(swRaw || '--') + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.total_mv_yi, 1) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.free_mv_yi, 1) + '</td>' +
@@ -6508,6 +6510,7 @@ function initFinaMetricPanel(panelKey) {
     var applyRememberCheckbox = document.getElementById(ids.schemeApplyRememberPref);
     var tableHead = document.getElementById(ids.thead);
     var tbody = document.getElementById(ids.tbody);
+    var splitWrap = document.getElementById(ids.splitWrap);
     var popInput = document.getElementById(ids.filterInput);
     var popApply = document.getElementById(ids.filterApply);
     var popClear = document.getElementById(ids.filterClear);
@@ -6585,9 +6588,9 @@ function initFinaMetricPanel(panelKey) {
             openFinaMetricFilterPopover(panelKey, key, t, ev);
         });
     }
-    if (tbody && !tbody.dataset.fixedAssetsClickBound) {
-        tbody.dataset.fixedAssetsClickBound = '1';
-        tbody.addEventListener('click', function (ev) {
+    if (splitWrap && !splitWrap.dataset.fixedAssetsClickBound) {
+        splitWrap.dataset.fixedAssetsClickBound = '1';
+        splitWrap.addEventListener('click', function (ev) {
             var t = ev.target;
             if (!t || !t.closest) return;
             var hit = t.closest('.fina-fixed-assets-clickable');
@@ -7335,3 +7338,4 @@ window.addEventListener('load', function () {
 /* 代码更新时间：2026-04-26 21:27 财报表：资产负债率/带息负债率列筛选与表头分组 colspan 对齐；computeFinaMetricFilterKeyTitle 补 fqm_*；RT_MONITOR_STATIC_VER 20260426-16 */
 /* 代码更新时间：2026-04-26 22:36 财报表：营业利润同比右侧增 v0–v8（利润增速−收入增速百分点）表头/行/筛选/排序/CSS 列数；RT_MONITOR_STATIC_VER 20260426-18 */
 /* 代码更新时间：2026-04-26 23:05 v 列口径：仅行内 q_op_yoy−q_gr_yoy，不用 income 利润绝对额；RT_MONITOR_STATIC_VER 20260426-19 */
+/* 代码更新时间：2026-04-27 08:24 冻结列「股票名称」同 f0 可点打开固定资产速览；点击委托 #fina-arturn-tbody-scroll；RT_MONITOR_STATIC_VER 20260426-20 */

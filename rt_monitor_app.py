@@ -1176,7 +1176,7 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 静态资源版本号：更新 css/js 后递增，避免浏览器长期缓存旧脚本导致与 HTML 表头列数不一致
-RT_MONITOR_STATIC_VER = '20260426-19'
+RT_MONITOR_STATIC_VER = '20260426-20'
 
 # 禁止缓存的 JSON GET：除精确 path 外按「后缀」匹配，兼容反代挂载后 request.path 为 /prefix/api/... 仍下发 no-store
 _JSON_API_NO_STORE_SUFFIXES: tuple[str, ...] = (
@@ -10777,3 +10777,4 @@ if __name__ == '__main__':
 # 代码更新时间：2026-04-26 21:41 RT_MONITOR_STATIC_VER 20260426-17（固定资产弹窗顶栏证券代码输入框 text-align:center）
 # 代码更新时间：2026-04-26 22:36 RT_MONITOR_STATIC_VER 20260426-18（财报表 v0..v8：单季 q_op_yoy>q_gr_yoy 时差值百分点；前端/CSS 列与分组竖线同步）
 # 代码更新时间：2026-04-26 23:05 RT_MONITOR_STATIC_VER 20260426-19（v 列仅行内 q_op_yoy−q_gr_yoy，去掉 income.operate_profit 绝对额判断）
+# 代码更新时间：2026-04-27 08:24 RT_MONITOR_STATIC_VER 20260426-20（财报表冻结列股票名称同 f0 打开固定资产速览；splitWrap 委托点击）
