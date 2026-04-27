@@ -5549,7 +5549,7 @@ function renderFinaMetricTable(panelKey) {
         st._renderToken = (st._renderToken || 0) + 1;
         var _ftb = document.getElementById('fina-arturn-frozen-tbody');
         if (_ftb) _ftb.innerHTML = '<tr><td colspan="6" class="median-table-cat">无匹配数据</td></tr>';
-        tbody.innerHTML = '<tr><td colspan="190" class="median-table-cat">无匹配数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="191" class="median-table-cat">无匹配数据</td></tr>';
         /* 占位已写入 tbody，trMap 已失效；下次非空时必须走全量重建 */
         st._domBuiltRowsVersion = -1;
         st._frozenTrMap = null;
@@ -7405,3 +7405,4 @@ window.addEventListener('load', function () {
 /* 代码更新时间：2026-04-27 14:24 单季度毛利率分组新增「新高」「环比」两列，口径对齐后端 m_high/m_qoq；RT_MONITOR_STATIC_VER 20260427-21 */
 /* 代码更新时间：2026-04-27 14:35 m_high/m_qoq 序列化改用 ?? 保留 0 值显示（不再渲染为 --）；RT_MONITOR_STATIC_VER 20260427-22 */
 /* 代码更新时间：2026-04-27 17:37 单季度净利率/ROE(扣非)新增新高+环比列（整数显示）并同步筛选排序与列数；RT_MONITOR_STATIC_VER 20260427-23 */
+/* 代码更新时间：2026-04-27 17:52 空结果占位 colspan 同步为 191（与当前表体总列一致），避免筛选后表头错位；RT_MONITOR_STATIC_VER 20260427-24 */
