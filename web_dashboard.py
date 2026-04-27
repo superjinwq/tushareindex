@@ -55,7 +55,7 @@ UPDATE_INTERVAL = int(os.getenv('UPDATE_INTERVAL', '30'))  # 默认30秒更新�
 
 # 与 rt_monitor_app 共用 templates/static 绝对路径，避免工作目录不对时读到旧模板或空白变量
 _WEB_DIR = os.path.dirname(os.path.abspath(__file__))
-RT_MONITOR_STATIC_VER = '20260427-22'  # 与 rt_monitor_app.RT_MONITOR_STATIC_VER 保持同步（静态资源 ?v=）
+RT_MONITOR_STATIC_VER = '20260427-23'  # 与 rt_monitor_app.RT_MONITOR_STATIC_VER 保持同步（静态资源 ?v=）
 
 app = Flask(
     __name__,
@@ -684,4 +684,5 @@ if __name__ == '__main__':
 # 代码更新时间：2026-04-26 23:05 同步 RT_MONITOR_STATIC_VER=20260426-19（v 列口径修正）
 # 代码更新时间：2026-04-27 08:24 同步 RT_MONITOR_STATIC_VER=20260426-20（冻结列股票名称打开固定资产速览）
 # 代码更新时间：2026-04-27 14:24 同步 RT_MONITOR_STATIC_VER=20260427-21（单季度毛利率新增新高/环比）
-# 代码更新时间：2026-04-27 14:35 同步 RT_MONITOR_STATIC_VER=20260427-22（修复毛利率新高/环比显示与表头错位）
+# 代码更新时间：2026-04-27 14:35 同步 RT_MONITOR_STATIC_VER=20260427-23（修复毛利率新高/环比显示与表头错位）
+# 代码更新时间：2026-04-27 17:37 同步 RT_MONITOR_STATIC_VER=20260427-23（净利率/ROE 新高+环比两列）

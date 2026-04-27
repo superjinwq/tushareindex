@@ -131,6 +131,8 @@ var finaArturnState = {
         oco0: '', oco1: '', oco2: '', oco3: '', oco4: '', oco5: '', oco6: '', oco7: '', oco8: '',
         r0: '', r1: '', r2: '', r3: '', r4: '', r5: '', r6: '', r7: '', r8: '',
         m_high: '', m_qoq: '',
+        n_high: '', n_qoq: '',
+        t_high: '', t_qoq: '',
         m0: '', m1: '', m2: '', m3: '', m4: '', m5: '', m6: '', m7: '', m8: '',
         n0: '', n1: '', n2: '', n3: '', n4: '', n5: '', n6: '', n7: '', n8: '',
         t0: '', t1: '', t2: '', t3: '', t4: '', t5: '', t6: '', t7: '', t8: '',
@@ -3933,6 +3935,10 @@ function buildFinaMetricFilterShapeFrom(src) {
         r8: String(s.r8 || ''),
         m_high: String(s.m_high ?? ''),
         m_qoq: String(s.m_qoq ?? ''),
+        n_high: String(s.n_high ?? ''),
+        n_qoq: String(s.n_qoq ?? ''),
+        t_high: String(s.t_high ?? ''),
+        t_qoq: String(s.t_qoq ?? ''),
         m0: String(s.m0 || ''),
         m1: String(s.m1 || ''),
         m2: String(s.m2 || ''),
@@ -4346,6 +4352,10 @@ function finaArturnGetSortCell(row, key) {
     if (key === 'r8') return row.r8;
     if (key === 'm_high') return row.m_high;
     if (key === 'm_qoq') return row.m_qoq;
+    if (key === 'n_high') return row.n_high;
+    if (key === 'n_qoq') return row.n_qoq;
+    if (key === 't_high') return row.t_high;
+    if (key === 't_qoq') return row.t_qoq;
     if (key === 'm0') return row.m0;
     if (key === 'm1') return row.m1;
     if (key === 'm2') return row.m2;
@@ -4480,6 +4490,10 @@ function finaArturnCompareRows(a, b, key, dir) {
             key === 'r5' || key === 'r6' || key === 'r7' || key === 'r8' ||
             key === 'm_high' ||
             key === 'm_qoq' ||
+            key === 'n_high' ||
+            key === 'n_qoq' ||
+            key === 't_high' ||
+            key === 't_qoq' ||
             key === 'm0' || key === 'm1' || key === 'm2' || key === 'm3' || key === 'm4' ||
             key === 'm5' || key === 'm6' || key === 'm7' || key === 'm8' ||
             key === 'n0' || key === 'n1' || key === 'n2' || key === 'n3' || key === 'n4' ||
@@ -4553,6 +4567,10 @@ function finaArturnIsSortableColumnKey(key) {
         key === 'r5' || key === 'r6' || key === 'r7' || key === 'r8' ||
         key === 'm_high' ||
         key === 'm_qoq' ||
+        key === 'n_high' ||
+        key === 'n_qoq' ||
+        key === 't_high' ||
+        key === 't_qoq' ||
         key === 'm0' || key === 'm1' || key === 'm2' || key === 'm3' || key === 'm4' ||
         key === 'm5' || key === 'm6' || key === 'm7' || key === 'm8' ||
         key === 'n0' || key === 'n1' || key === 'n2' || key === 'n3' || key === 'n4' ||
@@ -4880,8 +4898,8 @@ function renderFinaMetricTable(panelKey) {
         '<th colspan="9" class="fina-arturn-th-group" scope="colgroup">单季度 营业利润同比增长率(%)</th>' +
         '<th colspan="9" class="fina-arturn-th-group" scope="colgroup">单季度 利润增速高于收入增速(百分点)</th>' +
         '<th colspan="11" class="fina-arturn-th-group" scope="colgroup">单季度 毛利率(%)</th>' +
-        '<th colspan="9" class="fina-arturn-th-group" scope="colgroup">单季度 净利率(%)</th>' +
-        '<th colspan="9" class="fina-arturn-th-group" scope="colgroup">单季度 ROE(扣非)</th>' +
+        '<th colspan="11" class="fina-arturn-th-group" scope="colgroup">单季度 净利率(%)</th>' +
+        '<th colspan="11" class="fina-arturn-th-group" scope="colgroup">单季度 ROE(扣非)</th>' +
         '<th colspan="12" class="fina-arturn-th-group" scope="colgroup">存货（亿）</th>' +
         '<th colspan="12" class="fina-arturn-th-group" scope="colgroup">合同负债（亿）</th>' +
         '<th colspan="10" class="fina-arturn-th-group" scope="colgroup">固定资产（亿）</th>' +
@@ -5022,6 +5040,8 @@ function renderFinaMetricTable(panelKey) {
         buildTh(q6, 'm6') +
         buildTh(q7, 'm7') +
         buildTh(q8, 'm8') +
+        buildTh('新高', 'n_high') +
+        buildTh('环比', 'n_qoq') +
         buildTh(q0, 'n0') +
         buildTh(q1, 'n1') +
         buildTh(q2, 'n2') +
@@ -5031,6 +5051,8 @@ function renderFinaMetricTable(panelKey) {
         buildTh(q6, 'n6') +
         buildTh(q7, 'n7') +
         buildTh(q8, 'n8') +
+        buildTh('新高', 't_high') +
+        buildTh('环比', 't_qoq') +
         buildTh(q0, 't0') +
         buildTh(q1, 't1') +
         buildTh(q2, 't2') +
@@ -5249,6 +5271,10 @@ function renderFinaMetricTable(panelKey) {
     var mv8 = buildNumericFilterMatcher(filters.v8);
     var mmHigh = buildNumericFilterMatcher(filters.m_high);
     var mmQoq = buildNumericFilterMatcher(filters.m_qoq);
+    var mnHigh = buildNumericFilterMatcher(filters.n_high);
+    var mnQoq = buildNumericFilterMatcher(filters.n_qoq);
+    var mtHigh = buildNumericFilterMatcher(filters.t_high);
+    var mtQoq = buildNumericFilterMatcher(filters.t_qoq);
     var mm0 = buildNumericFilterMatcher(filters.m0);
     var mm1 = buildNumericFilterMatcher(filters.m1);
     var mm2 = buildNumericFilterMatcher(filters.m2);
@@ -5454,6 +5480,10 @@ function renderFinaMetricTable(panelKey) {
         if (mv8 && !mv8(row.v8)) return false;
         if (mmHigh && !mmHigh(row.m_high)) return false;
         if (mmQoq && !mmQoq(row.m_qoq)) return false;
+        if (mnHigh && !mnHigh(row.n_high)) return false;
+        if (mnQoq && !mnQoq(row.n_qoq)) return false;
+        if (mtHigh && !mtHigh(row.t_high)) return false;
+        if (mtQoq && !mtQoq(row.t_qoq)) return false;
         if (mm0 && !mm0(row.m0)) return false;
         if (mm1 && !mm1(row.m1)) return false;
         if (mm2 && !mm2(row.m2)) return false;
@@ -5519,7 +5549,7 @@ function renderFinaMetricTable(panelKey) {
         st._renderToken = (st._renderToken || 0) + 1;
         var _ftb = document.getElementById('fina-arturn-frozen-tbody');
         if (_ftb) _ftb.innerHTML = '<tr><td colspan="6" class="median-table-cat">无匹配数据</td></tr>';
-        tbody.innerHTML = '<tr><td colspan="187" class="median-table-cat">无匹配数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="190" class="median-table-cat">无匹配数据</td></tr>';
         /* 占位已写入 tbody，trMap 已失效；下次非空时必须走全量重建 */
         st._domBuiltRowsVersion = -1;
         st._frozenTrMap = null;
@@ -5670,8 +5700,8 @@ function renderFinaMetricTable(panelKey) {
                 '<td class="median-table-num">' + formatFinaArturnValue(row.v6, 2) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.v7, 2) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.v8, 2) + '</td>' +
-                '<td class="median-table-num">' + formatFinaArturnValue(row.m_high) + '</td>' +
-                '<td class="median-table-num">' + formatFinaArturnValue(row.m_qoq) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.m_high, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.m_qoq, 0) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.m0) + '">' + formatFinaArturnValue(row.m0) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.m1) + '">' + formatFinaArturnValue(row.m1) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.m2) + '">' + formatFinaArturnValue(row.m2) + '</td>' +
@@ -5681,6 +5711,8 @@ function renderFinaMetricTable(panelKey) {
                 '<td class="median-table-num' + finaArturnNegClass(row.m6) + '">' + formatFinaArturnValue(row.m6) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.m7) + '">' + formatFinaArturnValue(row.m7) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.m8) + '">' + formatFinaArturnValue(row.m8) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.n_high, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.n_qoq, 0) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.n0) + '">' + formatFinaArturnValue(row.n0) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.n1) + '">' + formatFinaArturnValue(row.n1) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.n2) + '">' + formatFinaArturnValue(row.n2) + '</td>' +
@@ -5690,6 +5722,8 @@ function renderFinaMetricTable(panelKey) {
                 '<td class="median-table-num' + finaArturnNegClass(row.n6) + '">' + formatFinaArturnValue(row.n6) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.n7) + '">' + formatFinaArturnValue(row.n7) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.n8) + '">' + formatFinaArturnValue(row.n8) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.t_high, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.t_qoq, 0) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.t0) + '">' + formatFinaArturnValue(row.t0) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.t1) + '">' + formatFinaArturnValue(row.t1) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(row.t2) + '">' + formatFinaArturnValue(row.t2) + '</td>' +
@@ -6267,6 +6301,14 @@ function computeFinaMetricFilterKeyTitle(panelKey, filterKey) {
         title = '新高（1=最新季 m0 在已有值的展示季中为最大，0=否；不要求 9 季全有值）' + numHint;
     } else if (!title && filterKey === 'm_qoq') {
         title = '环比连增（m0>m1 记1；若 m1>m2 再+1，最多 8）' + numHint;
+    } else if (!title && filterKey === 'n_high') {
+        title = '新高（1=最新季 n0 在已有值的展示季中为最大，0=否；不要求 9 季全有值）' + numHint;
+    } else if (!title && filterKey === 'n_qoq') {
+        title = '环比连增（n0>n1 记1；若 n1>n2 再+1，最多 8）' + numHint;
+    } else if (!title && filterKey === 't_high') {
+        title = '新高（1=最新季 t0 在已有值的展示季中为最大，0=否；不要求 9 季全有值）' + numHint;
+    } else if (!title && filterKey === 't_qoq') {
+        title = '环比连增（t0>t1 记1；若 t1>t2 再+1，最多 8）' + numHint;
     } else if (!title && filterKey === 'ocs_wqcv') {
         title = '加权离散（WQCV）：九季 ocs 的加权变异系数，最新季权重最大（衰减默认 0.88/季）；数值越小相对波动越小；有效季少于 2 为空；均值近 0 时为加权标准差' + numHint;
     } else if (!title && filterKey === 'inv_high') {
@@ -7362,3 +7404,4 @@ window.addEventListener('load', function () {
 /* 代码更新时间：2026-04-27 08:24 冻结列「股票名称」同 f0 可点打开固定资产速览；点击委托 #fina-arturn-tbody-scroll；RT_MONITOR_STATIC_VER 20260426-20 */
 /* 代码更新时间：2026-04-27 14:24 单季度毛利率分组新增「新高」「环比」两列，口径对齐后端 m_high/m_qoq；RT_MONITOR_STATIC_VER 20260427-21 */
 /* 代码更新时间：2026-04-27 14:35 m_high/m_qoq 序列化改用 ?? 保留 0 值显示（不再渲染为 --）；RT_MONITOR_STATIC_VER 20260427-22 */
+/* 代码更新时间：2026-04-27 17:37 单季度净利率/ROE(扣非)新增新高+环比列（整数显示）并同步筛选排序与列数；RT_MONITOR_STATIC_VER 20260427-23 */

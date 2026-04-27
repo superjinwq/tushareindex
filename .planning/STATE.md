@@ -11,6 +11,7 @@
 | `quick/260427-fa-frozen-name-modal` | 财报表冻结列「股票名称」与 f0 同开固定资产速览；`#fina-arturn-tbody-scroll` 单委托；`RT_MONITOR_STATIC_VER` 20260426-20 | 2026-04-27 |
 | `quick/260427-m-gpm-high-qoq` | 财报表单季度毛利率新增 `m_high` 新高与 `m_qoq` 环比连增（0..8）；前后端筛选排序与表头同步；`RT_MONITOR_STATIC_VER` 20260427-21 | 2026-04-27 |
 | `quick/260427-m-gpm-fix-display-align` | 修复单季度毛利率新增列：`m_high/m_qoq` 的 0 值显示与表头分组竖线错位；`RT_MONITOR_STATIC_VER` 20260427-22 | 2026-04-27 |
+| `quick/260427-nt-high-qoq-columns` | 财报表单季度净利率/ROE(扣非)新增新高与环比两列（n/t 组），整数显示并修正表头分组边界；`RT_MONITOR_STATIC_VER` 20260427-23 | 2026-04-27 |
 
 ## Current phase
 

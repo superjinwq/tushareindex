@@ -1591,8 +1591,8 @@ body.rt-monitor-fina-page .container {
 /* ── scroll 表 thead 第二行列间细竖线（排除分组边界列）──
    分组边界列（scroll 内绝对位置）：5=营收 8=ROE 12=应收 16=毛利率 20=经营/经营 24=经营/营收
    28=s_high 38=cf_high 48=oi_high 58=dtp_high 68=fst_high 78=ocs_high
-   89=oco0 98=r0 107=u0 116=v0 125=m_high 136=n0 145=t0 154=invchg 166=kchg 178=fchg */
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(n+2):not(:nth-child(5)):not(:nth-child(8)):not(:nth-child(12)):not(:nth-child(16)):not(:nth-child(20)):not(:nth-child(24)):not(:nth-child(28)):not(:nth-child(38)):not(:nth-child(48)):not(:nth-child(58)):not(:nth-child(68)):not(:nth-child(78)):not(:nth-child(89)):not(:nth-child(98)):not(:nth-child(107)):not(:nth-child(116)):not(:nth-child(125)):not(:nth-child(136)):not(:nth-child(145)):not(:nth-child(154)):not(:nth-child(166)):not(:nth-child(178)) {
+   89=oco0 98=r0 107=u0 116=v0 125=m_high 136=n_high 147=t_high 157=invchg 169=kchg 181=fchg */
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(n+2):not(:nth-child(5)):not(:nth-child(8)):not(:nth-child(12)):not(:nth-child(16)):not(:nth-child(20)):not(:nth-child(24)):not(:nth-child(28)):not(:nth-child(38)):not(:nth-child(48)):not(:nth-child(58)):not(:nth-child(68)):not(:nth-child(78)):not(:nth-child(89)):not(:nth-child(98)):not(:nth-child(107)):not(:nth-child(116)):not(:nth-child(125)):not(:nth-child(136)):not(:nth-child(147)):not(:nth-child(157)):not(:nth-child(169)):not(:nth-child(181)) {
     border-left: 1px solid var(--fina-arturn-vline-col, #e8e8e8);
 }
 
@@ -1626,7 +1626,7 @@ body.rt-monitor-fina-page .container {
    28=s_high(单季收入) 38=cf_high(单季现金) 48=oi_high(单季经营) 58=dtp_high(单季扣非)
    68=fst_high(FCF) 78=ocs_high(单季现金/营收%) 89=oco0(单季现金/经营%)
    98=r0(营收同比) 107=u0(营业利润) 116=v0(利润增速−收入增速) 125=m_high(毛利率新高/环比)
-   136=n0(净利率%) 145=t0(ROE扣非) 154=invchg(存货) 166=kchg(合同负债) 178=fchg(固定资产) */
+   136=n_high(净利率新高/环比) 147=t_high(ROE扣非新高/环比) 157=invchg(存货) 169=kchg(合同负债) 181=fchg(固定资产) */
 #fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(5),
 #fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(8),
 #fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(12),
@@ -1645,10 +1645,10 @@ body.rt-monitor-fina-page .container {
 #fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(116),
 #fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(125),
 #fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(136),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(145),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(154),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(166),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(178),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(147),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(157),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(169),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(181),
 #fina-arturn-table.median-table tbody > tr > td:nth-child(5),
 #fina-arturn-table.median-table tbody > tr > td:nth-child(8),
 #fina-arturn-table.median-table tbody > tr > td:nth-child(12),
@@ -1667,10 +1667,10 @@ body.rt-monitor-fina-page .container {
 #fina-arturn-table.median-table tbody > tr > td:nth-child(116),
 #fina-arturn-table.median-table tbody > tr > td:nth-child(125),
 #fina-arturn-table.median-table tbody > tr > td:nth-child(136),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(145),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(154),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(166),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(178) {
+#fina-arturn-table.median-table tbody > tr > td:nth-child(147),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(157),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(169),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(181) {
     border-left: var(--fina-arturn-vline-group-width, 2px) solid var(--fina-arturn-vline-group, #6d7d8b);
 }
 .fina-arturn-table tr.fina-arturn-thead-cols th .fina-arturn-th-inner {
@@ -3422,3 +3422,4 @@ body.rt-monitor-main .lbzt-detail-modal-overlay .lbzt-detail-modal-shell {
 /* 代码更新时间：2026-04-26 21:41 固定资产弹窗顶栏 .fina-fixed-assets-ts-input 内 6 位代码水平居中；RT_MONITOR_STATIC_VER 20260426-17 */
 /* 代码更新时间：2026-04-26 22:36 财报表增 v0–v8 分组竖线 nth-child（u 与 m 之间 +9 列）；RT_MONITOR_STATIC_VER 20260426-18 */
 /* 代码更新时间：2026-04-27 14:35 财报 scroll 表分组竖线边界列更新（m 组由 9 列改 11 列后，后续边界整体右移 2 列） */
+/* 代码更新时间：2026-04-27 17:37 财报 scroll 表分组边界列更新：新增 n/t 的新高+环比后边界重排 */

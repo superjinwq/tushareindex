@@ -1176,7 +1176,7 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 静态资源版本号：更新 css/js 后递增，避免浏览器长期缓存旧脚本导致与 HTML 表头列数不一致
-RT_MONITOR_STATIC_VER = '20260427-22'
+RT_MONITOR_STATIC_VER = '20260427-23'
 
 # 禁止缓存的 JSON GET：除精确 path 外按「后缀」匹配，兼容反代挂载后 request.path 为 /prefix/api/... 仍下发 no-store
 _JSON_API_NO_STORE_SUFFIXES: tuple[str, ...] = (
@@ -6192,12 +6192,16 @@ def _fina_arturn_attach_quarter_margins(
     has_fi_rt: bool,
     fi_cands: dict | None = None,
 ) -> None:
-    """就地写入单季度毛利率/净利率/ROE(扣非)（m0..m8, n0..n8, t0..t8）并补齐毛利率新高/环比连续上升次数。"""
+    """就地写入单季度毛利率/净利率/ROE(扣非)（m0..m8, n0..n8, t0..t8）并补齐三组新高/环比连续上升次数。"""
     if not rows:
         return
     for row in rows:
         row['m_high'] = None
         row['m_qoq'] = None
+        row['n_high'] = None
+        row['n_qoq'] = None
+        row['t_high'] = None
+        row['t_qoq'] = None
         for i in range(9):
             row[f'm{i}'] = None
             row[f'n{i}'] = None
@@ -6237,105 +6241,109 @@ def _fina_arturn_attach_quarter_margins(
                 row[f'm{i}'] = _to_float_or_none(best.get('q_gsprofit_margin')) if has_q_gsprofit_margin else None
                 row[f'n{i}'] = _to_float_or_none(best.get('q_netprofit_margin')) if has_q_netprofit_margin else None
                 row[f't{i}'] = _to_float_or_none(best.get('q_dt_roe')) if has_q_dt_roe else None
-        return
+    else:
+        fi_rt_ord = (
+            "      CASE WHEN fi.report_type = 1 THEN 0 ELSE 1 END, "
+            if has_fi_rt else
+            ""
+        )
+        ts_ph = ", ".join(["%s"] * len(ts_codes))
+        pd_ph = ", ".join(["%s"] * len(periods))
+        gm_sel = "fi.q_gsprofit_margin" if has_q_gsprofit_margin else "NULL AS q_gsprofit_margin"
+        nm_sel = "fi.q_netprofit_margin" if has_q_netprofit_margin else "NULL AS q_netprofit_margin"
+        gm_ord = "CASE WHEN fi.q_gsprofit_margin IS NOT NULL THEN 0 ELSE 1 END, " if has_q_gsprofit_margin else ""
+        nm_ord = "CASE WHEN fi.q_netprofit_margin IS NOT NULL THEN 0 ELSE 1 END, " if has_q_netprofit_margin else ""
+        qroe_sel = "fi.q_dt_roe" if has_q_dt_roe else "NULL AS q_dt_roe"
+        qroe_ord = "CASE WHEN fi.q_dt_roe IS NOT NULL THEN 0 ELSE 1 END, " if has_q_dt_roe else ""
+        sql = (
+            "SELECT z.ts_code, z.end_date, z.q_gsprofit_margin, z.q_netprofit_margin, z.q_dt_roe "
+            "FROM ("
+            "  SELECT fi.ts_code, fi.end_date, "
+            f"    {gm_sel}, "
+            f"    {nm_sel}, "
+            f"    {qroe_sel}, "
+            "    ROW_NUMBER() OVER ("
+            "      PARTITION BY fi.ts_code, fi.end_date "
+            "      ORDER BY "
+            f"        {gm_ord}"
+            f"        {nm_ord}"
+            f"        {qroe_ord}"
+            "        CASE WHEN fi.update_flag = '1' THEN 0 ELSE 1 END, "
+            f"        {fi_rt_ord}"
+            "        fi.ann_date DESC"
+            "    ) AS rn "
+            "  FROM stock_tushare.fina_indicator fi "
+            f"  WHERE fi.ts_code IN ({ts_ph}) "
+            f"    AND fi.end_date IN ({pd_ph})"
+            ") z "
+            "WHERE z.rn = 1"
+        )
+        params = tuple(ts_codes + periods)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                raw = cur.fetchall() or []
+        except Exception as e:
+            logger.warning("单季度毛利率/净利率补齐失败（降级为空列）: %s", e)
+            return
 
-    fi_rt_ord = (
-        "      CASE WHEN fi.report_type = 1 THEN 0 ELSE 1 END, "
-        if has_fi_rt else
-        ""
-    )
-    ts_ph = ", ".join(["%s"] * len(ts_codes))
-    pd_ph = ", ".join(["%s"] * len(periods))
-    gm_sel = "fi.q_gsprofit_margin" if has_q_gsprofit_margin else "NULL AS q_gsprofit_margin"
-    nm_sel = "fi.q_netprofit_margin" if has_q_netprofit_margin else "NULL AS q_netprofit_margin"
-    gm_ord = "CASE WHEN fi.q_gsprofit_margin IS NOT NULL THEN 0 ELSE 1 END, " if has_q_gsprofit_margin else ""
-    nm_ord = "CASE WHEN fi.q_netprofit_margin IS NOT NULL THEN 0 ELSE 1 END, " if has_q_netprofit_margin else ""
-    qroe_sel = "fi.q_dt_roe" if has_q_dt_roe else "NULL AS q_dt_roe"
-    qroe_ord = "CASE WHEN fi.q_dt_roe IS NOT NULL THEN 0 ELSE 1 END, " if has_q_dt_roe else ""
-    sql = (
-        "SELECT z.ts_code, z.end_date, z.q_gsprofit_margin, z.q_netprofit_margin, z.q_dt_roe "
-        "FROM ("
-        "  SELECT fi.ts_code, fi.end_date, "
-        f"    {gm_sel}, "
-        f"    {nm_sel}, "
-        f"    {qroe_sel}, "
-        "    ROW_NUMBER() OVER ("
-        "      PARTITION BY fi.ts_code, fi.end_date "
-        "      ORDER BY "
-        f"        {gm_ord}"
-        f"        {nm_ord}"
-        f"        {qroe_ord}"
-        "        CASE WHEN fi.update_flag = '1' THEN 0 ELSE 1 END, "
-        f"        {fi_rt_ord}"
-        "        fi.ann_date DESC"
-        "    ) AS rn "
-        "  FROM stock_tushare.fina_indicator fi "
-        f"  WHERE fi.ts_code IN ({ts_ph}) "
-        f"    AND fi.end_date IN ({pd_ph})"
-        ") z "
-        "WHERE z.rn = 1"
-    )
-    params = tuple(ts_codes + periods)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            raw = cur.fetchall() or []
-    except Exception as e:
-        logger.warning("单季度毛利率/净利率补齐失败（降级为空列）: %s", e)
-        return
-
-    mp: dict[str, dict[str, tuple[float | None, float | None, float | None]]] = {}
-    for r in raw:
-        tc = str(r[0]).strip() if len(r) > 0 and r[0] is not None else ""
-        ed = _normalize_end_date_yyyymmdd(r[1] if len(r) > 1 else None)
-        if not tc or not ed:
-            continue
-        gm = _to_float_or_none(r[2] if len(r) > 2 else None)
-        nm = _to_float_or_none(r[3] if len(r) > 3 else None)
-        qroe = _to_float_or_none(r[4] if len(r) > 4 else None)
-        if tc not in mp:
-            mp[tc] = {}
-        mp[tc][ed] = (gm, nm, qroe)
-
-    for row in rows:
-        tc = str(row.get('ts_code') or '').strip()
-        if not tc:
-            continue
-        md = mp.get(tc, {})
-        for i, p in enumerate(periods[:9]):
-            v = md.get(p)
-            if not v:
+        mp: dict[str, dict[str, tuple[float | None, float | None, float | None]]] = {}
+        for r in raw:
+            tc = str(r[0]).strip() if len(r) > 0 and r[0] is not None else ""
+            ed = _normalize_end_date_yyyymmdd(r[1] if len(r) > 1 else None)
+            if not tc or not ed:
                 continue
-            row[f'm{i}'] = v[0]
-            row[f'n{i}'] = v[1]
-            row[f't{i}'] = v[2]
-    for row in rows:
-        m0v = row.get('m0')
+            gm = _to_float_or_none(r[2] if len(r) > 2 else None)
+            nm = _to_float_or_none(r[3] if len(r) > 3 else None)
+            qroe = _to_float_or_none(r[4] if len(r) > 4 else None)
+            if tc not in mp:
+                mp[tc] = {}
+            mp[tc][ed] = (gm, nm, qroe)
+
+        for row in rows:
+            tc = str(row.get('ts_code') or '').strip()
+            if not tc:
+                continue
+            md = mp.get(tc, {})
+            for i, p in enumerate(periods[:9]):
+                v = md.get(p)
+                if not v:
+                    continue
+                row[f'm{i}'] = v[0]
+                row[f'n{i}'] = v[1]
+                row[f't{i}'] = v[2]
+    def _attach_high_qoq(row_obj: dict, metric_prefix: str, high_key: str, qoq_key: str) -> None:
+        m0v = row_obj.get(f'{metric_prefix}0')
         if m0v is None:
-            row['m_high'] = None
-            row['m_qoq'] = None
-            continue
-        mPresent: list[float] = []
+            row_obj[high_key] = None
+            row_obj[qoq_key] = None
+            return
+        m_present: list[float] = []
         for i in range(9):
-            mv = row.get(f'm{i}')
+            mv = row_obj.get(f'{metric_prefix}{i}')
             if mv is not None:
-                mPresent.append(float(mv))
-        row['m_high'] = (1 if mPresent and float(m0v) == max(mPresent) else 0) if m0v is not None else None
-        riseCount = 0
-        prev = row.get('m0')
+                m_present.append(float(mv))
+        row_obj[high_key] = 1 if m_present and float(m0v) == max(m_present) else 0
+        rise_count = 0
+        prev = row_obj.get(f'{metric_prefix}0')
         if prev is None:
-            row['m_qoq'] = None
-            continue
+            row_obj[qoq_key] = None
+            return
         for i in range(1, 9):
-            curr = row.get(f'm{i}')
+            curr = row_obj.get(f'{metric_prefix}{i}')
             if curr is None:
                 break
             if float(prev) > float(curr):
-                riseCount += 1
+                rise_count += 1
                 prev = curr
                 continue
             break
-        row['m_qoq'] = riseCount
+        row_obj[qoq_key] = rise_count
+
+    for row in rows:
+        _attach_high_qoq(row, 'm', 'm_high', 'm_qoq')
+        _attach_high_qoq(row, 'n', 'n_high', 'n_qoq')
+        _attach_high_qoq(row, 't', 't_high', 't_qoq')
 
 
 def _query_fina_metric_end_dates(metric_col: str, limit_n: int = 80) -> list[str]:
@@ -10808,4 +10816,6 @@ if __name__ == '__main__':
 # 代码更新时间：2026-04-26 23:05 RT_MONITOR_STATIC_VER 20260426-19（v 列仅行内 q_op_yoy−q_gr_yoy，去掉 income.operate_profit 绝对额判断）
 # 代码更新时间：2026-04-27 08:24 RT_MONITOR_STATIC_VER 20260426-20（财报表冻结列股票名称同 f0 打开固定资产速览；splitWrap 委托点击）
 # 代码更新时间：2026-04-27 14:24 RT_MONITOR_STATIC_VER 20260427-21（单季度毛利率新增 m_high 新高与 m_qoq 环比连增 0..8）
-# 代码更新时间：2026-04-27 14:35 RT_MONITOR_STATIC_VER 20260427-22（修复毛利率新高/环比 0 值显示与财报表分组竖线错位）
+# 代码更新时间：2026-04-27 14:35 RT_MONITOR_STATIC_VER 20260427-23（修复毛利率新高/环比 0 值显示与财报表分组竖线错位）
+# 代码更新时间：2026-04-27 14:58（修复 fi_cands 快路径提前返回导致 m_high/m_qoq 始终为空；统一执行毛利率新高/环比派生）
+# 代码更新时间：2026-04-27 17:37 RT_MONITOR_STATIC_VER 20260427-23（单季度净利率/ROE(扣非)新增 n_high/n_qoq、t_high/t_qoq）
