@@ -1176,7 +1176,7 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 静态资源版本号：更新 css/js 后递增，避免浏览器长期缓存旧脚本导致与 HTML 表头列数不一致
-RT_MONITOR_STATIC_VER = '20260426-20'
+RT_MONITOR_STATIC_VER = '20260427-21'
 
 # 禁止缓存的 JSON GET：除精确 path 外按「后缀」匹配，兼容反代挂载后 request.path 为 /prefix/api/... 仍下发 no-store
 _JSON_API_NO_STORE_SUFFIXES: tuple[str, ...] = (
@@ -6192,10 +6192,12 @@ def _fina_arturn_attach_quarter_margins(
     has_fi_rt: bool,
     fi_cands: dict | None = None,
 ) -> None:
-    """就地写入单季度毛利率/净利率/ROE(扣非)（m0..m8, n0..n8, t0..t8）。"""
+    """就地写入单季度毛利率/净利率/ROE(扣非)（m0..m8, n0..n8, t0..t8）并补齐毛利率新高/环比连续上升次数。"""
     if not rows:
         return
     for row in rows:
+        row['m_high'] = None
+        row['m_qoq'] = None
         for i in range(9):
             row[f'm{i}'] = None
             row[f'n{i}'] = None
@@ -6307,6 +6309,33 @@ def _fina_arturn_attach_quarter_margins(
             row[f'm{i}'] = v[0]
             row[f'n{i}'] = v[1]
             row[f't{i}'] = v[2]
+    for row in rows:
+        m0v = row.get('m0')
+        if m0v is None:
+            row['m_high'] = None
+            row['m_qoq'] = None
+            continue
+        mPresent: list[float] = []
+        for i in range(9):
+            mv = row.get(f'm{i}')
+            if mv is not None:
+                mPresent.append(float(mv))
+        row['m_high'] = (1 if mPresent and float(m0v) == max(mPresent) else 0) if m0v is not None else None
+        riseCount = 0
+        prev = row.get('m0')
+        if prev is None:
+            row['m_qoq'] = None
+            continue
+        for i in range(1, 9):
+            curr = row.get(f'm{i}')
+            if curr is None:
+                break
+            if float(prev) > float(curr):
+                riseCount += 1
+                prev = curr
+                continue
+            break
+        row['m_qoq'] = riseCount
 
 
 def _query_fina_metric_end_dates(metric_col: str, limit_n: int = 80) -> list[str]:
@@ -10778,3 +10807,4 @@ if __name__ == '__main__':
 # 代码更新时间：2026-04-26 22:36 RT_MONITOR_STATIC_VER 20260426-18（财报表 v0..v8：单季 q_op_yoy>q_gr_yoy 时差值百分点；前端/CSS 列与分组竖线同步）
 # 代码更新时间：2026-04-26 23:05 RT_MONITOR_STATIC_VER 20260426-19（v 列仅行内 q_op_yoy−q_gr_yoy，去掉 income.operate_profit 绝对额判断）
 # 代码更新时间：2026-04-27 08:24 RT_MONITOR_STATIC_VER 20260426-20（财报表冻结列股票名称同 f0 打开固定资产速览；splitWrap 委托点击）
+# 代码更新时间：2026-04-27 14:24 RT_MONITOR_STATIC_VER 20260427-21（单季度毛利率新增 m_high 新高与 m_qoq 环比连增 0..8）
