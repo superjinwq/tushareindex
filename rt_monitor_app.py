@@ -1176,7 +1176,7 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 静态资源版本号：更新 css/js 后递增，避免浏览器长期缓存旧脚本导致与 HTML 表头列数不一致
-RT_MONITOR_STATIC_VER = '20260427-21'
+RT_MONITOR_STATIC_VER = '20260427-22'
 
 # 禁止缓存的 JSON GET：除精确 path 外按「后缀」匹配，兼容反代挂载后 request.path 为 /prefix/api/... 仍下发 no-store
 _JSON_API_NO_STORE_SUFFIXES: tuple[str, ...] = (
@@ -10808,3 +10808,4 @@ if __name__ == '__main__':
 # 代码更新时间：2026-04-26 23:05 RT_MONITOR_STATIC_VER 20260426-19（v 列仅行内 q_op_yoy−q_gr_yoy，去掉 income.operate_profit 绝对额判断）
 # 代码更新时间：2026-04-27 08:24 RT_MONITOR_STATIC_VER 20260426-20（财报表冻结列股票名称同 f0 打开固定资产速览；splitWrap 委托点击）
 # 代码更新时间：2026-04-27 14:24 RT_MONITOR_STATIC_VER 20260427-21（单季度毛利率新增 m_high 新高与 m_qoq 环比连增 0..8）
+# 代码更新时间：2026-04-27 14:35 RT_MONITOR_STATIC_VER 20260427-22（修复毛利率新高/环比 0 值显示与财报表分组竖线错位）

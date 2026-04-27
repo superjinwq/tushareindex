@@ -3931,8 +3931,8 @@ function buildFinaMetricFilterShapeFrom(src) {
         r6: String(s.r6 || ''),
         r7: String(s.r7 || ''),
         r8: String(s.r8 || ''),
-        m_high: String(s.m_high || ''),
-        m_qoq: String(s.m_qoq || ''),
+        m_high: String(s.m_high ?? ''),
+        m_qoq: String(s.m_qoq ?? ''),
         m0: String(s.m0 || ''),
         m1: String(s.m1 || ''),
         m2: String(s.m2 || ''),
@@ -7361,3 +7361,4 @@ window.addEventListener('load', function () {
 /* 代码更新时间：2026-04-26 23:05 v 列口径：仅行内 q_op_yoy−q_gr_yoy，不用 income 利润绝对额；RT_MONITOR_STATIC_VER 20260426-19 */
 /* 代码更新时间：2026-04-27 08:24 冻结列「股票名称」同 f0 可点打开固定资产速览；点击委托 #fina-arturn-tbody-scroll；RT_MONITOR_STATIC_VER 20260426-20 */
 /* 代码更新时间：2026-04-27 14:24 单季度毛利率分组新增「新高」「环比」两列，口径对齐后端 m_high/m_qoq；RT_MONITOR_STATIC_VER 20260427-21 */
+/* 代码更新时间：2026-04-27 14:35 m_high/m_qoq 序列化改用 ?? 保留 0 值显示（不再渲染为 --）；RT_MONITOR_STATIC_VER 20260427-22 */
