@@ -7,6 +7,7 @@
 
 | ID / 目录 | 摘要 | 完成日 |
 |-----------|------|--------|
+| `quick/20260503-rt-monitor-niusan-expand-btn-fix` | 牛散页「+」展开：`click` 委托内 target 归一化（Text 节点无 `closest`）；`RT_MONITOR_STATIC_VER` 20260503-20 | 2026-05-03 |
 | `quick/20260503-fina-stk-holdernumber-columns` | 财报页固定资产右侧「股东人数」hnchg+hn0–hn8（stk_holdernumber）；缓存 sb_act_7；RT_MONITOR_STATIC_VER 20260503-19 | 2026-05-03 |
 | `quick/20260503-fina-free-float-ratio` | 财报页「自由流通比」列（前三持股右侧，紧凑 loc-col；free_mv/total_mv×100）；缓存 sb_act_6；RT_MONITOR_STATIC_VER 20260503-18 | 2026-05-03 |
 | `quick/20260503-fina-top3-holders-ent-type` | 财报页前三持股+企业性质（top10_holders / act_ent_type）、明细弹窗 localStorage；RT_MONITOR_STATIC_VER 20260503-16 | 2026-05-03 |

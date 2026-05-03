@@ -55,7 +55,7 @@ UPDATE_INTERVAL = int(os.getenv('UPDATE_INTERVAL', '30'))  # 默认30秒更新�
 
 # 与 rt_monitor_app 共用 templates/static 绝对路径，避免工作目录不对时读到旧模板或空白变量
 _WEB_DIR = os.path.dirname(os.path.abspath(__file__))
-RT_MONITOR_STATIC_VER = '20260503-19'  # 与 rt_monitor_app.RT_MONITOR_STATIC_VER 保持同步（静态资源 ?v=）
+RT_MONITOR_STATIC_VER = '20260503-20'  # 与 rt_monitor_app.RT_MONITOR_STATIC_VER 保持同步（静态资源 ?v=）
 
 app = Flask(
     __name__,

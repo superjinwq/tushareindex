@@ -1,0 +1,1637 @@
+<!DOCTYPE html>
+<!-- rt-monitor-niusan-template: {{ rt_monitor_static_ver }} -->
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>window.__RT_MONITOR_API_PREFIX__ = {{ rt_monitor_api_prefix | tojson }};</script>
+    <title>牛散持股</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ rt_monitor_static_ver }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rt_monitor.css') }}?v={{ rt_monitor_static_ver }}">
+    <style id="rt-monitor-niusan-layout">
+        /* 牛散页：醒目但不跳出 rt-monitor 终端浅灰体系（ui-ux：层次、对比度、触控滚动） */
+        html, body.rt-monitor.rt-monitor-niusan-page {
+            height: 100vh;
+            max-height: 100vh;
+            overflow: hidden;
+            padding: 0 !important;
+        }
+        body.rt-monitor.rt-monitor-niusan-page {
+            overscroll-behavior-x: contain;
+            background: linear-gradient(165deg, #dce2ea 0%, #e8ecf1 45%, #e4e7ec 100%);
+        }
+        .rt-monitor-niusan-page .container {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding: 6px 8px !important;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+        .rt-monitor-niusan-page #niusan-section {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 100%;
+            box-sizing: border-box;
+            border-radius: 12px;
+            border: 1px solid rgba(21, 101, 192, 0.18);
+            box-shadow:
+                0 4px 28px rgba(13, 71, 161, 0.14),
+                0 2px 10px rgba(0, 0, 0, 0.06);
+            background: var(--rt-monitor-surface, #fff);
+            overflow: hidden;
+        }
+        /* 顶栏：左侧方案配置 + 居中标题「牛散持股」 */
+        .rt-monitor-niusan-page #niusan-section .niusan-page-head {
+            margin: 0;
+            padding: 12px 14px 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            background: linear-gradient(180deg, #ffffff 0%, #f0f6fc 100%);
+            border-bottom: 1px solid rgba(21, 101, 192, 0.12);
+            position: relative;
+            flex-shrink: 0;
+        }
+        .rt-monitor-niusan-page #niusan-section .niusan-page-head-lead,
+        .rt-monitor-niusan-page #niusan-section .niusan-page-head-trail {
+            flex: 1 1 0;
+            min-width: 0;
+            display: flex;
+            align-items: center;
+        }
+        .rt-monitor-niusan-page #niusan-section .niusan-page-head-lead {
+            justify-content: flex-start;
+        }
+        .rt-monitor-niusan-page #niusan-section .niusan-page-head-trail {
+            justify-content: flex-end;
+        }
+        .rt-monitor-niusan-page #niusan-section .niusan-page-head-mid {
+            flex: 0 0 auto;
+            text-align: center;
+            position: relative;
+        }
+        .rt-monitor-niusan-page #niusan-section .niusan-page-title-text {
+            margin: 0;
+            padding: 0;
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            color: #0d47a1;
+            line-height: 1.35;
+        }
+        .rt-monitor-niusan-page #niusan-section .niusan-page-head-mid::after {
+            content: '';
+            display: block;
+            height: 3px;
+            width: min(140px, 40%);
+            margin: 8px auto 0;
+            border-radius: 3px;
+            background: linear-gradient(90deg, #1565c0, #42a5f5, #90caf9);
+        }
+        .rt-monitor-niusan-page #niusan-split {
+            flex: 1;
+            min-height: 0;
+            padding: 0 4px 6px;
+            box-sizing: border-box;
+        }
+        /* 表格：固定布局 + 最小总宽，便于列宽控制与横滚 */
+        .rt-monitor-niusan-page #niusan-data-table.fina-arturn-table {
+            table-layout: fixed;
+            min-width: 1450px;
+            width: max-content;
+            max-width: none;
+            border-collapse: separate;
+            border-spacing: 0;
+            /* 双行表头：首行说明条高度，供列名行 sticky 偏移 */
+            --niusan-thead-meta-h: 38px;
+        }
+        .rt-monitor-niusan-page #niusan-data-table thead tr.niusan-thead-meta th {
+            position: sticky;
+            top: 0;
+            z-index: 6;
+            padding: 8px 10px;
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            color: #212121;
+            text-align: center;
+            vertical-align: middle;
+            white-space: normal;
+            line-height: 1.45;
+            background: linear-gradient(180deg, #e3ecf5 0%, #d5e3f2 100%);
+            border-bottom: 1px solid #90caf9;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+        }
+        .rt-monitor-niusan-page #niusan-data-table thead tr.niusan-thead-meta th .niusan-amt-total {
+            font-variant-numeric: tabular-nums;
+            font-feature-settings: "tnum" 1;
+            margin-left: 0.35em;
+            color: #212121;
+        }
+        .rt-monitor-niusan-page #niusan-thead-scheme-title,
+        .rt-monitor-niusan-page #niusan-thead-related {
+            color: #212121;
+        }
+        .rt-monitor-niusan-page .niusan-thead-meta-flex {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px 14px;
+            flex-wrap: wrap;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .rt-monitor-niusan-page .niusan-thead-meta-center {
+            flex: 1 1 auto;
+            text-align: center;
+            min-width: 0;
+        }
+        .rt-monitor-niusan-page .niusan-thead-meta-right {
+            flex: 0 0 auto;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            font-feature-settings: "tnum" 1;
+        }
+        .rt-monitor-niusan-page .niusan-config-open-btn {
+            font-size: 13px;
+            font-weight: 600;
+            color: #0d47a1;
+            text-decoration: underline;
+            text-underline-offset: 2px;
+            background: none;
+            border: none;
+            padding: 4px 6px;
+            margin: 0;
+            cursor: pointer;
+            font-family: inherit;
+            border-radius: 6px;
+        }
+        .rt-monitor-niusan-page .niusan-config-open-btn:hover {
+            color: #1565c0;
+            background: rgba(21, 101, 192, 0.06);
+        }
+        .rt-monitor-niusan-page .niusan-stock-name-btn {
+            background: none;
+            border: none;
+            padding: 0;
+            margin: 0;
+            max-width: 100%;
+            font: inherit;
+            font-size: inherit;
+            color: #212121;
+            text-decoration: underline;
+            text-underline-offset: 2px;
+            cursor: pointer;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        .rt-monitor-niusan-page .niusan-stock-name-btn:hover {
+            color: #000000;
+        }
+        /* 方案弹窗内表单（与独立配置页同源类名） */
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-cfg-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-cfg-btn {
+            height: 34px;
+            padding: 0 14px;
+            border-radius: 6px;
+            border: 1px solid #1565c0;
+            background: #1565c0;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-cfg-btn.secondary {
+            background: #fff;
+            color: #1565c0;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-cfg-btn:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-cfg-msg {
+            font-size: 13px;
+            margin-top: 8px;
+            margin-bottom: 10px;
+            min-height: 1.2em;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-cfg-msg.err { color: #b00020; }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-cfg-msg.ok { color: #2e7d32; }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-modal-scheme-select {
+            margin-left: 6px;
+            min-width: 160px;
+            max-width: min(280px, 55vw);
+            height: 34px;
+            padding: 0 10px;
+            border-radius: 6px;
+            border: 1px solid #b0bec5;
+            font-size: 14px;
+            box-sizing: border-box;
+            background: #fff;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-scheme-card {
+            border: 1px solid #cfd8dc;
+            border-radius: 8px;
+            padding: 12px 12px 10px;
+            margin-bottom: 12px;
+            background: #fafcfe;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-scheme-card.active {
+            border-color: #42a5f5;
+            box-shadow: 0 0 0 1px rgba(66, 165, 245, 0.35);
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-scheme-head {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-scheme-head label {
+            font-size: 13px;
+            color: #37474f;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-scheme-head input[type="text"] {
+            height: 32px;
+            padding: 0 10px;
+            border: 1px solid #b0bec5;
+            border-radius: 6px;
+            width: min(200px, 42vw);
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-holder-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-holder-row input {
+            flex: 1;
+            min-width: 0;
+            height: 32px;
+            padding: 0 10px;
+            border: 1px solid #b0bec5;
+            border-radius: 6px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-holder-row button {
+            flex-shrink: 0;
+            height: 32px;
+            min-width: 36px;
+            border: 1px solid #cfd8dc;
+            border-radius: 6px;
+            background: #fff;
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+            color: #546e7a;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-scheme-actions {
+            margin-top: 6px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-scheme-actions button {
+            height: 30px;
+            padding: 0 10px;
+            font-size: 13px;
+            border-radius: 6px;
+            border: 1px solid #90a4ae;
+            background: #fff;
+            cursor: pointer;
+        }
+        /* 明细弹窗表格 */
+        .rt-monitor-niusan-page .niusan-detail-modal-sub {
+            font-size: 13px;
+            color: #37474f;
+            margin-bottom: 10px;
+            line-height: 1.5;
+        }
+        .rt-monitor-niusan-page .niusan-detail-table-wrap {
+            overflow: auto;
+            max-height: min(58vh, 520px);
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+        }
+        .rt-monitor-niusan-page .niusan-detail-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .rt-monitor-niusan-page .niusan-detail-table th,
+        .rt-monitor-niusan-page .niusan-detail-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #eceff1;
+            text-align: center;
+        }
+        .rt-monitor-niusan-page .niusan-detail-table th {
+            background: #f5f7fa;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        .rt-monitor-niusan-page .niusan-detail-table td:first-child,
+        .rt-monitor-niusan-page .niusan-detail-table th:first-child {
+            text-align: left;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .rt-monitor-niusan-page .niusan-detail-table .median-table-num {
+            font-variant-numeric: tabular-nums;
+        }
+        .rt-monitor-niusan-page .niusan-detail-modal-foot {
+            font-size: 12px;
+            color: #607d8b;
+            margin: 10px 0 0;
+            line-height: 1.45;
+        }
+        .rt-monitor-niusan-page .niusan-detail-chg-rise {
+            color: #e74c3c;
+            font-weight: 600;
+        }
+        .rt-monitor-niusan-page .niusan-detail-chg-fall {
+            color: #27ae60;
+            font-weight: 600;
+        }
+        .rt-monitor-niusan-page #niusan-data-table thead tr:not(.niusan-thead-meta) th {
+            position: sticky;
+            top: var(--niusan-thead-meta-h);
+            z-index: 5;
+            padding: 9px 4px;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            color: #263238;
+            text-align: center;
+            vertical-align: middle;
+            white-space: nowrap;
+            background: linear-gradient(180deg, #eef2f6 0%, #dfe6ee 100%);
+            border-bottom: 2px solid #1565c0;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+        }
+        .rt-monitor-niusan-page #niusan-data-table thead th .fina-arturn-th-inner {
+            display: inline-block;
+            max-width: 100%;
+            line-height: 1.35;
+        }
+        .rt-monitor-niusan-page #niusan-data-table tbody td {
+            padding: 8px 4px;
+            font-size: 13px;
+            line-height: var(--rt-monitor-line-height-table, 1.5);
+            text-align: center;
+            vertical-align: middle;
+            color: var(--rt-monitor-text-body, #333);
+            border-bottom: 1px solid #eceff1;
+        }
+        .rt-monitor-niusan-page #niusan-data-table tbody tr:hover td {
+            background: rgba(21, 101, 192, 0.07) !important;
+        }
+        .rt-monitor-niusan-page #niusan-data-table tbody tr.median-table-zebra td {
+            background: #f5f8fc;
+        }
+        .rt-monitor-niusan-page #niusan-data-table tbody tr.median-table-zebra:hover td {
+            background: rgba(21, 101, 192, 0.09) !important;
+        }
+        .rt-monitor-niusan-page #niusan-data-table .median-table-num {
+            font-variant-numeric: tabular-nums;
+            font-feature-settings: "tnum" 1;
+            letter-spacing: 0.03em;
+            font-weight: 500;
+        }
+        /* 申万 sw 页同源：可排序表头 + 圆角小按钮 */
+        .rt-monitor-niusan-page #niusan-data-table .niusan-sortable-th {
+            cursor: default;
+            user-select: none;
+            position: relative;
+        }
+        .rt-monitor-niusan-page #niusan-data-table .niusan-th-sort-inner {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+        }
+        .rt-monitor-niusan-page #niusan-data-table .niusan-sort-btn {
+            border: 1px solid #d7dee6;
+            background: #fff;
+            color: #5f6b7a;
+            border-radius: 3px;
+            font-size: 10px;
+            line-height: 1;
+            height: 18px;
+            min-width: 18px;
+            padding: 0 4px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .rt-monitor-niusan-page #niusan-data-table .niusan-sort-btn.is-asc,
+        .rt-monitor-niusan-page #niusan-data-table .niusan-sort-btn.is-desc {
+            background: #eef5ff;
+            border-color: #b6c9e6;
+            color: #355f9d;
+        }
+        .rt-monitor-niusan-page #niusan-data-table .niusan-th-label {
+            white-space: nowrap;
+        }
+        /* 公告日：与报告期日期一致（非 median-table-num） */
+        .rt-monitor-niusan-page #niusan-data-table td.niusan-ann-date-cell {
+            text-align: center;
+            vertical-align: middle;
+            padding: 8px 4px;
+            box-sizing: border-box;
+            line-height: 1.35;
+            white-space: nowrap;
+        }
+        /* 列宽收紧（nth 与列顺序一致） */
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(1),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(1) { width: 88px; min-width: 88px; }
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(2),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(2) { width: 80px; min-width: 80px; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(3),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(3) { width: 88px; min-width: 88px; }
+        /* 总市值 / 自由市值：整数列收窄 */
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(4),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(4) { width: 56px; min-width: 56px; max-width: 56px; }
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(5),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(5) { width: 56px; min-width: 56px; max-width: 56px; }
+        /* 申万二级行业：加宽以减少「…」截断 */
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(6),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(6) {
+            width: 292px;
+            min-width: 292px;
+            max-width: 292px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(7),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(7) { width: 80px; min-width: 80px; }
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(8),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(8) { width: 72px; min-width: 72px; }
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(9),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(9) { width: 76px; min-width: 76px; }
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(10),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(10) { width: 76px; min-width: 76px; }
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(11),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(11) { width: 64px; min-width: 64px; }
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(12),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(12) { width: 86px; min-width: 86px; }
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(13),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(13) { width: 86px; min-width: 86px; }
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(14),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(14) { width: 92px; min-width: 92px; }
+        .rt-monitor-niusan-page #niusan-data-table th:nth-child(15),
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(15) { width: 102px; min-width: 102px; }
+        /* 涨红跌绿：须压过本页 tbody td 的 color（否则类名不生效） */
+        .rt-monitor-niusan-page #niusan-data-table tbody td.niusan-hold-chg-rise,
+        .rt-monitor-niusan-page #niusan-data-table tbody td.niusan-pct-rise {
+            color: #e74c3c;
+            font-weight: 600;
+        }
+        .rt-monitor-niusan-page #niusan-data-table tbody td.niusan-hold-chg-fall,
+        .rt-monitor-niusan-page #niusan-data-table tbody td.niusan-pct-fall {
+            color: #27ae60;
+            font-weight: 600;
+        }
+        /* 持仓变化：数值居中 */
+        .rt-monitor-niusan-page #niusan-data-table td:nth-child(9) {
+            white-space: nowrap;
+        }
+        /* 报告期：日期与「+」同一行、垂直居中，不额外撑高行高 */
+        .rt-monitor-niusan-page #niusan-data-table td.niusan-report-period-cell {
+            text-align: center;
+            vertical-align: middle;
+            padding: 8px 4px;
+            box-sizing: border-box;
+        }
+        .rt-monitor-niusan-page #niusan-data-table td.niusan-report-period-cell .niusan-report-period-inner {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            flex-wrap: nowrap;
+            white-space: nowrap;
+            line-height: 1.35;
+        }
+        .rt-monitor-niusan-page #niusan-data-table td.niusan-report-period-cell .niusan-report-period-text {
+            flex: 0 1 auto;
+        }
+        .rt-monitor-niusan-page .niusan-expand-btn {
+            position: static;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 17px;
+            height: 17px;
+            margin: 0;
+            padding: 0;
+            border: 1px solid #1565c0;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.92);
+            color: #1565c0;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1;
+            cursor: pointer;
+            flex-shrink: 0;
+            box-shadow: 0 1px 2px rgba(13, 71, 161, 0.12);
+        }
+        .rt-monitor-niusan-page .niusan-expand-btn:hover {
+            background: #e3f2fd;
+            box-shadow: 0 1px 3px rgba(13, 71, 161, 0.2);
+        }
+        .rt-monitor-niusan-page .niusan-expand-btn:focus-visible {
+            outline: 2px solid #1565c0;
+            outline-offset: 1px;
+        }
+        .rt-monitor-niusan-page #niusan-data-table tbody tr.niusan-history-sub td {
+            background: #f0f7fd !important;
+            font-size: 12px;
+            border-bottom: 1px solid #dbe8f5;
+        }
+        .rt-monitor-niusan-page #niusan-data-table tbody tr.niusan-history-sub:hover td {
+            background: #e6f1fb !important;
+        }
+        .niusan-err {
+            color: #b00020;
+            font-size: 13px;
+            margin: 8px 12px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            background: #ffebee;
+            border: 1px solid #ffcdd2;
+        }
+        html {
+            scrollbar-color: #98a2b3 var(--rt-monitor-bg-page, #e8eaed);
+        }
+        html::-webkit-scrollbar {
+            height: 11px;
+            width: 11px;
+        }
+        html::-webkit-scrollbar-track {
+            background: var(--rt-monitor-bg-page, #e8eaed);
+        }
+        html::-webkit-scrollbar-thumb {
+            background: #98a2b3;
+            border-radius: 6px;
+        }
+        .fina-arturn-scroll-pane#niusan-scroll-pane {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(21, 101, 192, 0.35) transparent;
+        }
+        .fina-arturn-scroll-pane#niusan-scroll-pane::-webkit-scrollbar {
+            height: 10px;
+            width: 10px;
+        }
+        .fina-arturn-scroll-pane#niusan-scroll-pane::-webkit-scrollbar-thumb {
+            background: rgba(21, 101, 192, 0.35);
+            border-radius: 5px;
+        }
+        /* 主表上方：各方案持股汇总（横排换行、宽度随内容） */
+        .rt-monitor-niusan-page #niusan-main-scheme-strip {
+            flex-shrink: 0;
+            padding: 8px 12px 10px;
+            display: flex;
+            flex-direction: row;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px 10px;
+            border-bottom: 1px solid rgba(21, 101, 192, 0.1);
+            background: linear-gradient(180deg, #f5f9fc 0%, #eef4f8 100%);
+        }
+        .rt-monitor-niusan-page #niusan-main-scheme-strip.niusan-main-scheme-strip--empty {
+            display: none;
+        }
+        .rt-monitor-niusan-page button.niusan-main-scheme-card {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(21, 101, 192, 0.15);
+            background: linear-gradient(180deg, #f8fbff 0%, #eef4fb 100%);
+            font-size: 13px;
+            color: #263238;
+            line-height: 1.45;
+            font-variant-numeric: tabular-nums;
+            font-feature-settings: "tnum" 1;
+            width: max-content;
+            max-width: 100%;
+            cursor: pointer;
+            font-family: inherit;
+            text-align: left;
+            box-sizing: border-box;
+        }
+        .rt-monitor-niusan-page button.niusan-main-scheme-card:hover {
+            border-color: rgba(21, 101, 192, 0.38);
+            background: linear-gradient(180deg, #ffffff 0%, #e3f2fd 100%);
+        }
+        .rt-monitor-niusan-page button.niusan-main-scheme-card.is-selected {
+            border-color: #1565c0;
+            box-shadow: 0 0 0 1px rgba(21, 101, 192, 0.45);
+            background: linear-gradient(180deg, #e3f2fd 0%, #bbdefb 100%);
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .rt-monitor-niusan-page #niusan-section .niusan-page-head-mid::after {
+                background: #1565c0;
+            }
+        }
+    </style>
+</head>
+<body class="rt-monitor rt-monitor-niusan-page">
+    <a href="#rt-monitor-niusan-main" class="rt-monitor-skip-link">跳到主内容</a>
+    <main id="rt-monitor-niusan-main" class="container">
+        <section id="niusan-section" class="median-table-wrap fina-arturn-wrap" aria-label="牛散持股">
+            <div class="niusan-page-head">
+                <div class="niusan-page-head-lead">
+                    <button type="button" id="niusan-open-scheme-modal" class="niusan-config-open-btn">方案配置</button>
+                </div>
+                <div class="niusan-page-head-mid">
+                    <h1 class="niusan-page-title-text">牛散持股</h1>
+                </div>
+                <div class="niusan-page-head-trail" aria-hidden="true"></div>
+            </div>
+            {% if niusan_error %}
+            <div class="niusan-err" role="alert">加载失败：{{ niusan_error }}</div>
+            {% endif %}
+            <div id="niusan-main-scheme-strip" class="niusan-main-scheme-strip{% if not niusan_scheme_summaries %} niusan-main-scheme-strip--empty{% endif %}" aria-label="各方案持股汇总">
+                {% for s in niusan_scheme_summaries %}
+                <button type="button" class="niusan-main-scheme-card{% if niusan_active_scheme_id and (s.scheme_id | default('') | string) == (niusan_active_scheme_id | string) %} is-selected{% endif %}" data-scheme-id="{{ s.scheme_id | default('', true) }}" title="主表切换为该方案持股">{{ s.scheme_name }}　持股数：{{ s.stock_count }}　持股金额：{{ s.amt_yi_total }}亿</button>
+                {% endfor %}
+            </div>
+            <div id="niusan-split" class="fina-arturn-split-wrap">
+                <div class="fina-arturn-scroll-pane" id="niusan-scroll-pane">
+                    <table id="niusan-data-table" class="median-table fina-arturn-table" aria-label="牛散持股数据表">
+                        <thead>
+                            <tr class="niusan-thead-meta">
+                                <th colspan="15" scope="colgroup">
+                                    <div class="niusan-thead-meta-flex">
+                                        <div class="niusan-thead-meta-center">
+                                            <span id="niusan-thead-scheme-title">{{ niusan_scheme_title }}</span><span id="niusan-thead-related" class="niusan-thead-meta-sub">　关联人：{{ niusan_related_join or '--' }}</span>
+                                        </div>
+                                        <div class="niusan-thead-meta-right">
+                                            合计持仓金额（亿）：<span class="niusan-amt-total" id="niusan-thead-amt-total">{{ niusan_amt_yi_total }}</span>
+                                        </div>
+                                    </div>
+                                </th>
+                            </tr>
+                            <tr>
+                                <th scope="col"><span class="fina-arturn-th-inner">股票代码</span></th>
+                                <th scope="col"><span class="fina-arturn-th-inner">股票名称</span></th>
+                                <th scope="col"><span class="fina-arturn-th-inner">上市日期</span></th>
+                                <th scope="col" class="niusan-sortable-th" data-key="total_mv_yi"><div class="fina-arturn-th-inner niusan-th-sort-inner"><button type="button" class="niusan-sort-btn" data-sort-key="total_mv_yi" title="排序：升序/降序/还原">↕</button><span class="niusan-th-label">总市值(亿)</span></div></th>
+                                <th scope="col" class="niusan-sortable-th" data-key="free_mv_yi"><div class="fina-arturn-th-inner niusan-th-sort-inner"><button type="button" class="niusan-sort-btn" data-sort-key="free_mv_yi" title="排序：升序/降序/还原">↕</button><span class="niusan-th-label">自由市值(亿)</span></div></th>
+                                <th scope="col"><span class="fina-arturn-th-inner">申万二级行业</span></th>
+                                <th scope="col"><span class="fina-arturn-th-inner">持股数(万股)</span></th>
+                                <th scope="col" class="niusan-sortable-th" data-key="hold_ratio"><div class="fina-arturn-th-inner niusan-th-sort-inner"><button type="button" class="niusan-sort-btn" data-sort-key="hold_ratio" title="排序：升序/降序/还原">↕</button><span class="niusan-th-label">持股比例(%)</span></div></th>
+                                <th scope="col"><span class="fina-arturn-th-inner">持仓变化</span></th>
+                                <th scope="col" class="niusan-sortable-th" data-key="amt_yi"><div class="fina-arturn-th-inner niusan-th-sort-inner"><button type="button" class="niusan-sort-btn" data-sort-key="amt_yi" title="排序：升序/降序/还原">↕</button><span class="niusan-th-label">持股金额(亿)</span></div></th>
+                                <th scope="col"><span class="fina-arturn-th-inner">VWAP</span></th>
+                                <th scope="col" class="niusan-sortable-th" data-key="pct_20d"><div class="fina-arturn-th-inner niusan-th-sort-inner"><button type="button" class="niusan-sort-btn" data-sort-key="pct_20d" title="排序：升序/降序/还原">↕</button><span class="niusan-th-label">20日涨跌幅(%)</span></div></th>
+                                <th scope="col" class="niusan-sortable-th" data-key="pct_vs_vwap"><div class="fina-arturn-th-inner niusan-th-sort-inner"><button type="button" class="niusan-sort-btn" data-sort-key="pct_vs_vwap" title="排序：升序/降序/还原">↕</button><span class="niusan-th-label">相对VWAP(%)</span></div></th>
+                                <th scope="col" class="niusan-sortable-th" data-key="ann_date"><div class="fina-arturn-th-inner niusan-th-sort-inner"><button type="button" class="niusan-sort-btn" data-sort-key="ann_date" title="排序：升序/降序/还原">↕</button><span class="niusan-th-label">公告日</span></div></th>
+                                <th scope="col"><span class="fina-arturn-th-inner">报告期</span></th>
+                            </tr>
+                        </thead>
+                        <tbody id="niusan-data-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+    {% include '_rt_monitor_niusan_modals.html' %}
+    <script type="application/json" id="niusan-rows-json">{{ niusan_rows | tojson }}</script>
+    <script type="application/json" id="niusan-active-view-json">{{ {'scheme_id': niusan_active_scheme_id | default('', true), 'scheme_name': niusan_scheme_title, 'related_join': niusan_related_join | default('', true), 'amt_yi_total': niusan_amt_yi_total} | tojson }}</script>
+    <script type="application/json" id="niusan-holder-config-json">{{ niusan_holder_cfg_embed | tojson }}</script>
+    <script>
+(function () {
+    var pre = typeof window !== 'undefined' && window.__RT_MONITOR_API_PREFIX__
+        ? String(window.__RT_MONITOR_API_PREFIX__).replace(/\/+$/, '')
+        : '';
+    function apiUrl(path) {
+        var p = path.charAt(0) === '/' ? path : '/' + path;
+        return pre ? pre + p : p;
+    }
+    var histCache = {};
+    var detailCache = {};
+    var niusanSortKey = '';
+    var niusanSortDir = 'asc';
+    var niusanRawRows = [];
+    /** 方案 id -> /api/niusan_scheme_holdings 完整响应，用于切换秒开 */
+    var niusanSchemeHoldingsCache = {};
+    var NIUSAN_SORT_META = {
+        total_mv_yi: 'number',
+        free_mv_yi: 'number',
+        hold_ratio: 'number',
+        amt_yi: 'number',
+        pct_20d: 'pct',
+        pct_vs_vwap: 'pct',
+        ann_date: 'date'
+    };
+    function esc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+    function escAttr(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;');
+    }
+    function pctClsSuffix(row, key) {
+        var c = row[key] || '';
+        if (c === 'rise') return ' niusan-pct-rise';
+        if (c === 'fall') return ' niusan-pct-fall';
+        return '';
+    }
+    function holdChgClsSuffix(row) {
+        var c = row.hold_change_cls || '';
+        if (c === 'rise') return ' niusan-hold-chg-rise';
+        if (c === 'fall') return ' niusan-hold-chg-fall';
+        return '';
+    }
+    function parseNiusanNumberCell(v) {
+        if (v == null || v === '' || v === '--') return null;
+        var n = parseFloat(String(v).replace(/,/g, ''));
+        return isNaN(n) ? null : n;
+    }
+    function parseNiusanPctCell(v) {
+        if (v == null || v === '' || v === '--') return null;
+        var t = String(v).replace(/%/g, '').trim();
+        if (t.charAt(0) === '+') t = t.slice(1);
+        var n = parseFloat(t);
+        return isNaN(n) ? null : n;
+    }
+    function getNiusanComparable(row, key, kind) {
+        if (!row) return null;
+        if (kind === 'number') return parseNiusanNumberCell(row[key]);
+        if (kind === 'pct') return parseNiusanPctCell(row[key]);
+        if (kind === 'date') {
+            var s = String(row[key] == null ? '' : row[key]).trim();
+            if (!s || s === '--') return null;
+            return s;
+        }
+        return String(row[key] == null ? '' : row[key]).trim();
+    }
+    function applyNiusanSort(rows) {
+        var list = rows.slice();
+        if (!niusanSortKey) {
+            list.sort(function (a, b) { return (a._order | 0) - (b._order | 0); });
+            return list;
+        }
+        var kind = NIUSAN_SORT_META[niusanSortKey] || 'number';
+        list.sort(function (a, b) {
+            var va = getNiusanComparable(a, niusanSortKey, kind);
+            var vb = getNiusanComparable(b, niusanSortKey, kind);
+            if (va == null && vb == null) return 0;
+            if (va == null) return 1;
+            if (vb == null) return -1;
+            var cmp = 0;
+            if (kind === 'number' || kind === 'pct') cmp = va - vb;
+            else cmp = String(va).localeCompare(String(vb), 'zh-CN');
+            return niusanSortDir === 'desc' ? -cmp : cmp;
+        });
+        return list;
+    }
+    function refreshNiusanSortHeader() {
+        var ths = document.querySelectorAll('#niusan-data-table .niusan-sortable-th[data-key]');
+        for (var i = 0; i < ths.length; i++) {
+            var th = ths[i];
+            var key = th.getAttribute('data-key') || '';
+            var sortBtn = th.querySelector('.niusan-sort-btn[data-sort-key]');
+            if (!sortBtn) continue;
+            sortBtn.classList.remove('is-asc', 'is-desc');
+            if (key === niusanSortKey && niusanSortDir === 'asc') {
+                sortBtn.classList.add('is-asc');
+                sortBtn.textContent = '\u25b2';
+            } else if (key === niusanSortKey && niusanSortDir === 'desc') {
+                sortBtn.classList.add('is-desc');
+                sortBtn.textContent = '\u25bc';
+            } else {
+                sortBtn.textContent = '\u2195';
+            }
+        }
+    }
+    function closeAllNiusanExpanded(tbody) {
+        if (!tbody) return;
+        var tbl = tbody.closest('table');
+        if (!tbl) return;
+        tbl.querySelectorAll('.niusan-expand-btn[aria-expanded="true"]').forEach(function (btn) {
+            var tr = btn.closest('tr');
+            if (!tr || !tbody.contains(tr)) return;
+            removeHistoryRows(tr);
+            btn.setAttribute('aria-expanded', 'false');
+            btn.textContent = '+';
+        });
+    }
+    function buildMainRowHtml(row, idx) {
+        var zebra = ((idx + 1) % 2 === 0) ? ' median-table-zebra' : '';
+        var hcx = holdChgClsSuffix(row);
+        var p20 = pctClsSuffix(row, 'pct_20d_cls');
+        var pv = pctClsSuffix(row, 'pct_vs_vwap_cls');
+        var expandBtn = '';
+        if (row.hold_change !== '新进' && row.hold_change !== '--') {
+            expandBtn = '<button type="button" class="niusan-expand-btn" data-ts-code="' + esc(row.ts_code) + '" aria-expanded="false" aria-label="展开或收起历史报告期" title="历史持仓至新进">+</button>';
+        }
+        return (
+            '<tr class="median-table-row' + zebra + '">' +
+            '<td>' + esc(row.ts_code) + '</td>' +
+            '<td class="niusan-name-cell" title="' + esc(row.name) + '"><button type="button" class="niusan-stock-name-btn" data-ts-code="' + esc(row.ts_code) + '" data-name="' + esc(row.name) + '" title="查看该股关联人明细">' + esc(row.name) + '</button></td>' +
+            '<td>' + esc(row.list_date) + '</td>' +
+            '<td class="median-table-num">' + esc(row.total_mv_yi) + '</td>' +
+            '<td class="median-table-num">' + esc(row.free_mv_yi) + '</td>' +
+            '<td title="' + esc(row.sw_name) + '">' + esc(row.sw_name) + '</td>' +
+            '<td class="median-table-num">' + esc(row.hold_wan) + '</td>' +
+            '<td class="median-table-num">' + esc(row.hold_ratio) + '</td>' +
+            '<td class="median-table-num' + (hcx ? ' ' + hcx : '') + '">' + esc(row.hold_change) + '</td>' +
+            '<td class="median-table-num">' + esc(row.amt_yi) + '</td>' +
+            '<td class="median-table-num">' + esc(row.vwap) + '</td>' +
+            '<td class="median-table-num' + p20 + '">' + esc(row.pct_20d) + '</td>' +
+            '<td class="median-table-num' + pv + '">' + esc(row.pct_vs_vwap) + '</td>' +
+            '<td class="niusan-ann-date-cell">' + esc(row.ann_date) + '</td>' +
+            '<td class="niusan-report-period-cell"><span class="niusan-report-period-inner"><span class="niusan-report-period-text">' + esc(row.report_period) + '</span>' + expandBtn + '</span></td>' +
+            '</tr>'
+        );
+    }
+    function renderNiusanTbody() {
+        var tbody = document.getElementById('niusan-data-tbody');
+        if (!tbody) return;
+        closeAllNiusanExpanded(tbody);
+        histCache = {};
+        var rows = applyNiusanSort(niusanRawRows);
+        if (!rows.length) {
+            tbody.innerHTML = '<tr class="median-table-row"><td colspan="15">暂无数据。</td></tr>';
+            refreshNiusanSortHeader();
+            return;
+        }
+        var parts = [];
+        for (var ri = 0; ri < rows.length; ri++) {
+            parts.push(buildMainRowHtml(rows[ri], ri));
+        }
+        tbody.innerHTML = parts.join('');
+        refreshNiusanSortHeader();
+    }
+    function removeHistoryRows(mainTr) {
+        var n = mainTr.nextElementSibling;
+        while (n && n.classList && n.classList.contains('niusan-history-sub')) {
+            var nx = n.nextElementSibling;
+            n.remove();
+            n = nx;
+        }
+    }
+    function buildHistoryRowHtml(row) {
+        var hcx = holdChgClsSuffix(row);
+        var p20 = pctClsSuffix(row, 'pct_20d_cls');
+        var pv = pctClsSuffix(row, 'pct_vs_vwap_cls');
+        return (
+            '<td>' + esc(row.ts_code) + '</td>' +
+            '<td class="niusan-name-cell" title="' + esc(row.name) + '"><button type="button" class="niusan-stock-name-btn" data-ts-code="' + esc(row.ts_code) + '" data-name="' + esc(row.name) + '" title="查看该股关联人明细">' + esc(row.name) + '</button></td>' +
+            '<td>' + esc(row.list_date) + '</td>' +
+            '<td class="median-table-num">' + esc(row.total_mv_yi) + '</td>' +
+            '<td class="median-table-num">' + esc(row.free_mv_yi) + '</td>' +
+            '<td title="' + esc(row.sw_name) + '">' + esc(row.sw_name) + '</td>' +
+            '<td class="median-table-num">' + esc(row.hold_wan) + '</td>' +
+            '<td class="median-table-num">' + esc(row.hold_ratio) + '</td>' +
+            '<td class="median-table-num' + (hcx ? ' ' + hcx : '') + '">' + esc(row.hold_change) + '</td>' +
+            '<td class="median-table-num">' + esc(row.amt_yi) + '</td>' +
+            '<td class="median-table-num">' + esc(row.vwap) + '</td>' +
+            '<td class="median-table-num' + p20 + '">' + esc(row.pct_20d) + '</td>' +
+            '<td class="median-table-num' + pv + '">' + esc(row.pct_vs_vwap) + '</td>' +
+            '<td class="niusan-ann-date-cell">' + esc(row.ann_date) + '</td>' +
+            '<td class="niusan-report-period-cell"><span class="niusan-report-period-inner"><span class="niusan-report-period-text">' + esc(row.report_period) + '</span></span></td>'
+        );
+    }
+    function appendHistory(mainTr, periods) {
+        var ins = mainTr;
+        for (var i = 0; i < periods.length; i++) {
+            var tr = document.createElement('tr');
+            tr.className = 'median-table-row niusan-history-sub';
+            tr.setAttribute('aria-hidden', 'false');
+            tr.innerHTML = buildHistoryRowHtml(periods[i]);
+            ins.parentNode.insertBefore(tr, ins.nextSibling);
+            ins = tr;
+        }
+    }
+    var jsonEl = document.getElementById('niusan-rows-json');
+    try {
+        var parsed = jsonEl ? JSON.parse(jsonEl.textContent || '[]') : [];
+        niusanRawRows = (parsed || []).map(function (r, i) {
+            var o = {};
+            for (var k in r) {
+                if (Object.prototype.hasOwnProperty.call(r, k)) o[k] = r[k];
+            }
+            o._order = i;
+            return o;
+        });
+    } catch (e1) {
+        niusanRawRows = [];
+    }
+    renderNiusanTbody();
+    schedulePrefetchNiusanDetails();
+
+    (function seedNiusanActiveSchemeCache() {
+        try {
+            var avEl = document.getElementById('niusan-active-view-json');
+            var av = avEl ? JSON.parse(avEl.textContent || '{}') : {};
+            var aid = av.scheme_id ? String(av.scheme_id) : '';
+            if (!aid) return;
+            var rowsCopy = niusanRawRows.map(function (r) {
+                var o = {};
+                for (var k in r) {
+                    if (k === '_order') continue;
+                    if (Object.prototype.hasOwnProperty.call(r, k)) o[k] = r[k];
+                }
+                return o;
+            });
+            niusanSchemeHoldingsCache[aid] = {
+                ok: true,
+                rows: rowsCopy,
+                scheme_name: av.scheme_name != null ? String(av.scheme_name) : '--',
+                related_join: av.related_join != null ? String(av.related_join) : '',
+                amt_yi_total: av.amt_yi_total != null ? String(av.amt_yi_total) : '0.00',
+                report_end_date: null
+            };
+        } catch (eSeed) {
+            /* ignore */
+        }
+    })();
+
+    function prefetchNiusanSchemeHoldingsIntoCache() {
+        var strip = document.getElementById('niusan-main-scheme-strip');
+        if (!strip) return;
+        strip.querySelectorAll('.niusan-main-scheme-card[data-scheme-id]').forEach(function (btn) {
+            var sid = btn.getAttribute('data-scheme-id');
+            if (!sid || niusanSchemeHoldingsCache[sid]) return;
+            fetch(apiUrl('/api/niusan_scheme_holdings?scheme_id=' + encodeURIComponent(sid)), { credentials: 'same-origin' })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (data && data.ok) niusanSchemeHoldingsCache[sid] = data;
+                })
+                .catch(function () { /* 静默失败，点击时再请求 */ });
+        });
+    }
+    function kickNiusanSchemePrefetchIdle() {
+        /* 略延迟，避免与首屏/打开方案配置争用连接与主线程 */
+        var run = function () {
+            setTimeout(function () { prefetchNiusanSchemeHoldingsIntoCache(); }, 500);
+        };
+        if (typeof window.requestIdleCallback === 'function') {
+            window.requestIdleCallback(run, { timeout: 2800 });
+        } else {
+            setTimeout(run, 700);
+        }
+    }
+    kickNiusanSchemePrefetchIdle();
+
+    /* —— 方案配置弹窗：下拉选方案 + 单块编辑 —— */
+    var schemeOverlay = document.getElementById('niusan-scheme-modal-overlay');
+    var niusanModalMsgEl = document.getElementById('niusan-modal-cfg-msg');
+    var niusanModalSingleEditorEl = document.getElementById('niusan-modal-single-editor');
+    var niusanModalState = { activeId: '', schemes: [] };
+    var niusanModalSelectedId = '';
+
+    function setNiusanModalMsg(text, cls) {
+        if (!niusanModalMsgEl) return;
+        niusanModalMsgEl.textContent = text || '';
+        niusanModalMsgEl.className = 'niusan-cfg-msg' + (cls ? ' ' + cls : '');
+    }
+
+    function uidNiusanModal() {
+        var a = [];
+        for (var i = 0; i < 16; i++) {
+            a.push(Math.floor(Math.random() * 16).toString(16));
+        }
+        return a.join('');
+    }
+
+    function holderRowHtmlModal(val) {
+        return '<div class="niusan-holder-row">' +
+            '<input type="text" class="niusan-holder-input" value="' + escAttr(val || '') + '" placeholder="股东姓名，参与 holder_name 匹配" />' +
+            '<button type="button" class="niusan-remove-holder" title="删除此行">\u2212</button>' +
+            '</div>';
+    }
+
+    function syncNiusanModalEditorToState() {
+        var editor = niusanModalSingleEditorEl;
+        var sid = niusanModalSelectedId;
+        if (!editor || !sid) return;
+        var nameInp = editor.querySelector('.niusan-scheme-name');
+        var schemeName = nameInp ? nameInp.value.trim() : '';
+        var holders = [];
+        editor.querySelectorAll('.niusan-holder-input').forEach(function (inp) {
+            var t = inp.value.trim();
+            if (t) holders.push(t);
+        });
+        var activeRadio = editor.querySelector('input[name="niusan-modal-active"]:checked');
+        for (var i = 0; i < niusanModalState.schemes.length; i++) {
+            if (niusanModalState.schemes[i].id === sid) {
+                niusanModalState.schemes[i].schemeName = schemeName;
+                niusanModalState.schemes[i].holders = holders;
+                break;
+            }
+        }
+        if (activeRadio) {
+            niusanModalState.activeId = activeRadio.value;
+        }
+    }
+
+    function bindNiusanModalSingleEditor() {
+        if (!niusanModalSingleEditorEl) return;
+        niusanModalSingleEditorEl.querySelectorAll('.niusan-add-holder').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var list = btn.closest('.niusan-scheme-card').querySelector('.niusan-holder-list');
+                var wrap = document.createElement('div');
+                wrap.innerHTML = holderRowHtmlModal('');
+                list.appendChild(wrap.firstChild);
+            });
+        });
+        niusanModalSingleEditorEl.querySelectorAll('.niusan-remove-holder').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var row = btn.closest('.niusan-holder-row');
+                var list = btn.closest('.niusan-holder-list');
+                if (list.querySelectorAll('.niusan-holder-row').length <= 1) {
+                    var inp = row.querySelector('.niusan-holder-input');
+                    if (inp) inp.value = '';
+                    return;
+                }
+                row.remove();
+            });
+        });
+        niusanModalSingleEditorEl.querySelectorAll('input[name="niusan-modal-active"]').forEach(function (r) {
+            r.addEventListener('change', function () {
+                niusanModalState.activeId = r.value;
+            });
+        });
+    }
+
+    function renderNiusanModalEditor() {
+        if (!niusanModalSingleEditorEl) return;
+        var schemes = niusanModalState.schemes;
+        var sel = document.getElementById('niusan-modal-scheme-select');
+        if (sel) {
+            sel.innerHTML = '';
+            for (var i = 0; i < schemes.length; i++) {
+                var s2 = schemes[i];
+                var opt = document.createElement('option');
+                opt.value = s2.id;
+                opt.textContent = (s2.schemeName && String(s2.schemeName).trim()) ? String(s2.schemeName).trim() : ('方案 ' + (i + 1));
+                sel.appendChild(opt);
+            }
+            if (niusanModalSelectedId) {
+                sel.value = niusanModalSelectedId;
+            }
+            if (!sel.value && schemes.length) {
+                niusanModalSelectedId = schemes[0].id;
+                sel.value = niusanModalSelectedId;
+            }
+        }
+        var sc = null;
+        for (var j = 0; j < schemes.length; j++) {
+            if (schemes[j].id === niusanModalSelectedId) {
+                sc = schemes[j];
+                break;
+            }
+        }
+        if (!sc && schemes.length) {
+            niusanModalSelectedId = schemes[0].id;
+            sc = schemes[0];
+            if (sel) sel.value = niusanModalSelectedId;
+        }
+        if (!sc) {
+            niusanModalSingleEditorEl.innerHTML = '';
+            return;
+        }
+        var html = '';
+        html += '<div class="niusan-scheme-card active" data-scheme-id="' + escAttr(sc.id) + '">';
+        html += '<div class="niusan-scheme-head">';
+        html += '<label><input type="radio" name="niusan-modal-active" value="' + escAttr(sc.id) + '"' + (niusanModalState.activeId === sc.id ? ' checked' : '') + ' /> 启用此方案</label>';
+        html += '<label>方案名 <input type="text" class="niusan-scheme-name" value="' + escAttr(sc.schemeName || '') + '" placeholder="展示标题" /></label>';
+        html += '</div>';
+        html += '<div class="niusan-holder-list">';
+        var holders = sc.holders || [];
+        for (var k = 0; k < holders.length; k++) {
+            html += holderRowHtmlModal(holders[k]);
+        }
+        if (holders.length === 0) {
+            html += holderRowHtmlModal('');
+        }
+        html += '</div>';
+        html += '<div class="niusan-scheme-actions">';
+        html += '<button type="button" class="niusan-add-holder">+ 关联人</button>';
+        html += '</div>';
+        html += '</div>';
+        niusanModalSingleEditorEl.innerHTML = html;
+        bindNiusanModalSingleEditor();
+    }
+
+    function collectNiusanModalFromDom() {
+        syncNiusanModalEditorToState();
+        return { activeId: niusanModalState.activeId, schemes: niusanModalState.schemes };
+    }
+
+    function closeNiusanSchemeModal() {
+        if (schemeOverlay) schemeOverlay.classList.remove('is-open');
+    }
+
+    function applyNiusanHolderConfigPayload(data) {
+        if (!data || !data.schemes) return false;
+        niusanModalState.activeId = data.activeId || '';
+        niusanModalState.schemes = data.schemes;
+        if (!niusanModalState.schemes.length) {
+            niusanModalState.schemes.push({ id: uidNiusanModal(), schemeName: '', holders: [] });
+        }
+        niusanModalSelectedId = niusanModalState.activeId || niusanModalState.schemes[0].id;
+        setNiusanModalMsg('', '');
+        renderNiusanModalEditor();
+        return true;
+    }
+
+    function openNiusanSchemeModal() {
+        if (!schemeOverlay) return;
+        var embedded = null;
+        try {
+            var hEl = document.getElementById('niusan-holder-config-json');
+            if (hEl && hEl.textContent) embedded = JSON.parse(hEl.textContent);
+        } catch (eEmb) {
+            embedded = null;
+        }
+        if (embedded && applyNiusanHolderConfigPayload(embedded)) {
+            schemeOverlay.classList.add('is-open');
+            return;
+        }
+        setNiusanModalMsg('加载中…', '');
+        schemeOverlay.classList.add('is-open');
+        fetch(apiUrl('/api/niusan_holder_config'), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!applyNiusanHolderConfigPayload(data)) {
+                    setNiusanModalMsg('加载失败', 'err');
+                }
+            })
+            .catch(function (e) {
+                setNiusanModalMsg((e && e.message) ? e.message : String(e), 'err');
+            });
+    }
+
+    if (schemeOverlay) {
+        schemeOverlay.addEventListener('change', function (ev) {
+            var t = ev.target;
+            if (t && t.id === 'niusan-modal-scheme-select') {
+                syncNiusanModalEditorToState();
+                niusanModalSelectedId = t.value || '';
+                renderNiusanModalEditor();
+            }
+        });
+    }
+
+    var niusanOpenSchemeBtn = document.getElementById('niusan-open-scheme-modal');
+    if (niusanOpenSchemeBtn) {
+        niusanOpenSchemeBtn.addEventListener('click', function () {
+            openNiusanSchemeModal();
+        });
+    }
+    var niusanSchemeCloseBtn = document.getElementById('niusan-scheme-modal-close');
+    if (niusanSchemeCloseBtn) {
+        niusanSchemeCloseBtn.addEventListener('click', closeNiusanSchemeModal);
+    }
+    var niusanModalAddScheme = document.getElementById('niusan-modal-add-scheme');
+    if (niusanModalAddScheme) {
+        niusanModalAddScheme.addEventListener('click', function () {
+            syncNiusanModalEditorToState();
+            var newId = uidNiusanModal();
+            niusanModalState.schemes.push({ id: newId, schemeName: '', holders: [] });
+            niusanModalSelectedId = newId;
+            renderNiusanModalEditor();
+        });
+    }
+    var niusanModalDelScheme = document.getElementById('niusan-modal-del-scheme');
+    if (niusanModalDelScheme) {
+        niusanModalDelScheme.addEventListener('click', function () {
+            syncNiusanModalEditorToState();
+            var sid = niusanModalSelectedId;
+            if (!sid || !niusanModalState.schemes.length) return;
+            if (!window.confirm('确定删除所选方案？')) return;
+            niusanModalState.schemes = niusanModalState.schemes.filter(function (s) { return s.id !== sid; });
+            if (niusanModalState.schemes.length === 0) {
+                niusanModalState.schemes.push({ id: uidNiusanModal(), schemeName: '', holders: [] });
+            }
+            if (niusanModalState.activeId === sid) {
+                niusanModalState.activeId = niusanModalState.schemes[0].id;
+            }
+            niusanModalSelectedId = niusanModalState.schemes[0].id;
+            renderNiusanModalEditor();
+        });
+    }
+    var niusanModalSaveBtn = document.getElementById('niusan-modal-save');
+    if (niusanModalSaveBtn) {
+        niusanModalSaveBtn.addEventListener('click', function () {
+            var btn = niusanModalSaveBtn;
+            var payload = collectNiusanModalFromDom();
+            niusanModalState.activeId = payload.activeId;
+            niusanModalState.schemes = payload.schemes;
+            btn.disabled = true;
+            setNiusanModalMsg('保存中…', '');
+            fetch(apiUrl('/api/niusan_holder_config'), {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ activeId: payload.activeId, schemes: payload.schemes }),
+            })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    btn.disabled = false;
+                    if (!data || !data.ok) {
+                        setNiusanModalMsg(data && data.error ? String(data.error) : '保存失败', 'err');
+                        return;
+                    }
+                    setNiusanModalMsg('已保存，正在刷新…', 'ok');
+                    closeNiusanSchemeModal();
+                    window.location.reload();
+                })
+                .catch(function (e) {
+                    btn.disabled = false;
+                    setNiusanModalMsg(e && e.message ? e.message : String(e), 'err');
+                });
+        });
+    }
+
+    /* —— 关联人明细弹窗 —— */
+    var detailOverlay = document.getElementById('niusan-detail-modal-overlay');
+
+    function bindNiusanModalDrag(overlay, shell) {
+        if (!overlay || !shell || overlay.dataset.niusanDragBound === '1') return;
+        var header = shell.querySelector('.niusan-modal-drag-header');
+        if (!header) return;
+        overlay.dataset.niusanDragBound = '1';
+        shell.style.position = 'fixed';
+        shell.style.left = '50%';
+        shell.style.top = '50%';
+        shell.style.transform = 'translate(-50%, -50%)';
+        shell.style.margin = '0';
+        var dragging = false;
+        var sx = 0;
+        var sy = 0;
+        var sl = 0;
+        var st = 0;
+        var sw = 0;
+        var sh = 0;
+        header.style.cursor = 'move';
+        header.addEventListener('mousedown', function (e) {
+            if (e.button !== 0) return;
+            if (e.target && e.target.closest && e.target.closest('button, input, select, textarea, label')) return;
+            dragging = true;
+            sx = e.clientX;
+            sy = e.clientY;
+            var rect = shell.getBoundingClientRect();
+            sl = rect.left;
+            st = rect.top;
+            sw = rect.width;
+            sh = rect.height;
+            shell.style.transform = '';
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!dragging) return;
+            var dx = e.clientX - sx;
+            var dy = e.clientY - sy;
+            var nl = sl + dx;
+            var nt = st + dy;
+            var vw = window.innerWidth || document.documentElement.clientWidth;
+            var vh = window.innerHeight || document.documentElement.clientHeight;
+            var maxL = vw - sw;
+            var maxT = vh - sh;
+            if (nl < 0) nl = 0;
+            if (nt < 0) nt = 0;
+            if (nl > maxL) nl = maxL;
+            if (nt > maxT) nt = maxT;
+            shell.style.left = nl + 'px';
+            shell.style.top = nt + 'px';
+        });
+        document.addEventListener('mouseup', function () {
+            dragging = false;
+        });
+    }
+    bindNiusanModalDrag(document.getElementById('niusan-detail-modal-overlay'), document.getElementById('niusan-detail-modal-shell'));
+    bindNiusanModalDrag(document.getElementById('niusan-scheme-modal-overlay'), document.getElementById('niusan-scheme-modal-shell'));
+
+    function closeNiusanDetailModal() {
+        if (detailOverlay) detailOverlay.classList.remove('is-open');
+    }
+
+    function detailChgClsSuffix(cls) {
+        if (cls === 'rise') return ' niusan-detail-chg-rise';
+        if (cls === 'fall') return ' niusan-detail-chg-fall';
+        return '';
+    }
+
+    function renderNiusanDetailModalBody(data, tsCode, nameHint) {
+        var subEl = document.getElementById('niusan-detail-modal-sub');
+        var footEl = document.getElementById('niusan-detail-modal-foot');
+        var tbody = document.getElementById('niusan-detail-tbody');
+        if (!data || !data.ok) return;
+        var dispName = data.name || nameHint || '--';
+        if (subEl) {
+            subEl.innerHTML = esc(data.ts_code || tsCode || '') + ' ' + esc(dispName) +
+                ' · 报告期 ' + esc(data.report_end || '--');
+        }
+        if (footEl) {
+            footEl.textContent = data.vwap_note ? String(data.vwap_note) : '';
+        }
+        var rows = data.rows || [];
+        if (!tbody) return;
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="6">暂无关联人明细（当前方案与报告期下无匹配行）。</td></tr>';
+            return;
+        }
+        var parts = [];
+        for (var ri = 0; ri < rows.length; ri++) {
+            var row = rows[ri];
+            var dcx = detailChgClsSuffix(row.hold_change_cls);
+            parts.push(
+                '<tr>' +
+                '<td title="' + escAttr(row.holder_name) + '">' + esc(row.holder_name) + '</td>' +
+                '<td class="median-table-num">' + esc(row.hold_wan) + '</td>' +
+                '<td class="median-table-num">' + esc(row.hold_ratio) + '</td>' +
+                '<td class="median-table-num' + dcx + '">' + esc(row.hold_change) + '</td>' +
+                '<td class="median-table-num">' + esc(row.amt_yi) + '</td>' +
+                '<td class="median-table-num">' + esc(row.vwap) + '</td>' +
+                '</tr>'
+            );
+        }
+        tbody.innerHTML = parts.join('');
+    }
+
+    function openNiusanDetailModal(tsCode, nameHint) {
+        if (!detailOverlay) return;
+        var subEl = document.getElementById('niusan-detail-modal-sub');
+        var footEl = document.getElementById('niusan-detail-modal-foot');
+        var tbody = document.getElementById('niusan-detail-tbody');
+        var cached = detailCache[tsCode];
+        if (cached && cached.ok) {
+            detailOverlay.classList.add('is-open');
+            renderNiusanDetailModalBody(cached, tsCode, nameHint);
+            return;
+        }
+        if (tbody) tbody.innerHTML = '<tr><td colspan="6">加载中…</td></tr>';
+        if (subEl) {
+            subEl.textContent = (tsCode || '') + (nameHint ? ' · ' + nameHint : '');
+        }
+        if (footEl) footEl.textContent = '';
+        detailOverlay.classList.add('is-open');
+        fetch(apiUrl('/api/niusan_floatholder_detail?ts_code=' + encodeURIComponent(tsCode || '')), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data && data.ok) {
+                    detailCache[tsCode] = data;
+                }
+                if (!data || !data.ok) {
+                    if (tbody) {
+                        tbody.innerHTML = '<tr><td colspan="6">' + esc(data && data.error ? String(data.error) : '加载失败') + '</td></tr>';
+                    }
+                    return;
+                }
+                renderNiusanDetailModalBody(data, tsCode, nameHint);
+            })
+            .catch(function (e) {
+                if (tbody) {
+                    tbody.innerHTML = '<tr><td colspan="6">请求失败：' + esc(e && e.message ? e.message : String(e)) + '</td></tr>';
+                }
+            });
+    }
+
+    function schedulePrefetchNiusanDetails() {
+        var codes = [];
+        var seen = {};
+        for (var pi = 0; pi < niusanRawRows.length; pi++) {
+            var c = niusanRawRows[pi].ts_code;
+            if (c && !seen[c]) {
+                seen[c] = true;
+                codes.push(c);
+            }
+        }
+        if (!codes.length) return;
+        var idx = 0;
+        var concurrency = 4;
+        function runNext() {
+            if (idx >= codes.length) return;
+            var slice = [];
+            for (var k = 0; k < concurrency && idx < codes.length; k++, idx++) {
+                slice.push(codes[idx]);
+            }
+            Promise.all(slice.map(function (tc) {
+                if (detailCache[tc]) return Promise.resolve();
+                return fetch(apiUrl('/api/niusan_floatholder_detail?ts_code=' + encodeURIComponent(tc)), { credentials: 'same-origin' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        if (data && data.ok) detailCache[tc] = data;
+                    })
+                    .catch(function () { });
+            })).then(function () { runNext(); });
+        }
+        var kick = function () { runNext(); };
+        if (typeof window.requestIdleCallback === 'function') {
+            window.requestIdleCallback(kick, { timeout: 3000 });
+        } else {
+            setTimeout(kick, 120);
+        }
+    }
+
+    function applyNiusanSchemeHoldingsToMainTable(data) {
+        var rows = data.rows || [];
+        niusanRawRows = rows.map(function (r, i) {
+            var o = {};
+            for (var k in r) {
+                if (Object.prototype.hasOwnProperty.call(r, k)) o[k] = r[k];
+            }
+            o._order = i;
+            return o;
+        });
+        var titleEl = document.getElementById('niusan-thead-scheme-title');
+        var relEl = document.getElementById('niusan-thead-related');
+        var amtEl = document.getElementById('niusan-thead-amt-total');
+        if (titleEl) {
+            titleEl.textContent = (data.scheme_name != null && String(data.scheme_name).trim() !== '')
+                ? String(data.scheme_name)
+                : '--';
+        }
+        if (relEl) {
+            relEl.textContent = '　关联人：' + ((data.related_join != null && String(data.related_join).trim() !== '')
+                ? String(data.related_join)
+                : '--');
+        }
+        if (amtEl) amtEl.textContent = data.amt_yi_total != null ? String(data.amt_yi_total) : '--';
+        histCache = {};
+        detailCache = {};
+        renderNiusanTbody();
+        schedulePrefetchNiusanDetails();
+    }
+
+    var niusanDetailCloseBtn = document.getElementById('niusan-detail-modal-close');
+    if (niusanDetailCloseBtn) {
+        niusanDetailCloseBtn.addEventListener('click', closeNiusanDetailModal);
+    }
+
+    var schemeStripEl = document.getElementById('niusan-main-scheme-strip');
+    if (schemeStripEl) {
+        schemeStripEl.addEventListener('click', function (ev) {
+            var card = ev.target.closest('.niusan-main-scheme-card');
+            if (!card) return;
+            var sid = card.getAttribute('data-scheme-id');
+            if (!sid) return;
+            schemeStripEl.querySelectorAll('.niusan-main-scheme-card').forEach(function (b) {
+                b.classList.toggle('is-selected', b === card);
+            });
+            var cached = niusanSchemeHoldingsCache[sid];
+            if (cached && cached.ok) {
+                applyNiusanSchemeHoldingsToMainTable(cached);
+                return;
+            }
+            var tbodyLoad = document.getElementById('niusan-data-tbody');
+            if (tbodyLoad) {
+                tbodyLoad.innerHTML = '<tr class="median-table-row"><td colspan="15">加载中…</td></tr>';
+            }
+            fetch(apiUrl('/api/niusan_scheme_holdings?scheme_id=' + encodeURIComponent(sid)), { credentials: 'same-origin' })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (!data || !data.ok) {
+                        if (tbodyLoad) {
+                            tbodyLoad.innerHTML = '<tr class="median-table-row"><td colspan="15">' + esc(data && data.error ? String(data.error) : '加载失败') + '</td></tr>';
+                        }
+                        return;
+                    }
+                    niusanSchemeHoldingsCache[sid] = data;
+                    applyNiusanSchemeHoldingsToMainTable(data);
+                })
+                .catch(function (e) {
+                    if (tbodyLoad) {
+                        tbodyLoad.innerHTML = '<tr class="median-table-row"><td colspan="15">请求失败：' + esc(e && e.message ? e.message : String(e)) + '</td></tr>';
+                    }
+                });
+        });
+    }
+
+    document.addEventListener('keydown', function (ev) {
+        if (ev.key !== 'Escape') return;
+        var dOv = document.getElementById('niusan-detail-modal-overlay');
+        var sOv = document.getElementById('niusan-scheme-modal-overlay');
+        if (dOv && dOv.classList.contains('is-open')) {
+            ev.preventDefault();
+            closeNiusanDetailModal();
+            return;
+        }
+        if (sOv && sOv.classList.contains('is-open')) {
+            ev.preventDefault();
+            closeNiusanSchemeModal();
+        }
+    });
+
+    var tbl = document.getElementById('niusan-data-table');
+    if (tbl) {
+    tbl.addEventListener('click', function (ev) {
+        /* 点击「+」等时 target 可能为 Text 节点，无 closest 会抛错导致整段失效 */
+        var el = ev.target;
+        if (el && el.nodeType !== 1) {
+            el = el.parentElement;
+        }
+        if (!el || typeof el.closest !== 'function') {
+            return;
+        }
+        var stockBtn = el.closest('.niusan-stock-name-btn');
+        if (stockBtn) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            var tc = stockBtn.getAttribute('data-ts-code') || '';
+            var nm = stockBtn.getAttribute('data-name') || '';
+            openNiusanDetailModal(tc, nm);
+            return;
+        }
+        var sortBtn = el.closest('.niusan-sort-btn[data-sort-key]');
+        if (sortBtn) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            var key = sortBtn.getAttribute('data-sort-key') || '';
+            if (!key) return;
+            if (niusanSortKey !== key) {
+                niusanSortKey = key;
+                niusanSortDir = 'asc';
+            } else if (niusanSortDir === 'asc') {
+                niusanSortDir = 'desc';
+            } else {
+                niusanSortKey = '';
+                niusanSortDir = 'asc';
+            }
+            renderNiusanTbody();
+            return;
+        }
+        var btn = el.closest('.niusan-expand-btn');
+        if (!btn) return;
+        var tsCode = btn.getAttribute('data-ts-code');
+        if (!tsCode) return;
+        var mainTr = btn.closest('tr');
+        if (!mainTr || mainTr.classList.contains('niusan-history-sub')) return;
+        var expanded = btn.getAttribute('aria-expanded') === 'true';
+        if (expanded) {
+            removeHistoryRows(mainTr);
+            btn.setAttribute('aria-expanded', 'false');
+            btn.textContent = '+';
+            return;
+        }
+        function openRows(periods) {
+            removeHistoryRows(mainTr);
+            appendHistory(mainTr, periods);
+            btn.setAttribute('aria-expanded', 'true');
+            btn.textContent = '\u2212';
+        }
+        if (histCache[tsCode]) {
+            openRows(histCache[tsCode]);
+            return;
+        }
+        btn.disabled = true;
+        fetch(apiUrl('/api/niusan_floatholder_history?ts_code=' + encodeURIComponent(tsCode)), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                btn.disabled = false;
+                if (!data || !data.ok) {
+                    window.alert(data && data.error ? String(data.error) : '加载失败');
+                    return;
+                }
+                var periods = data.periods || [];
+                histCache[tsCode] = periods;
+                if (periods.length === 0) {
+                    window.alert('无更早报告期数据');
+                    return;
+                }
+                openRows(periods);
+            })
+            .catch(function (e) {
+                btn.disabled = false;
+                window.alert('请求失败：' + (e && e.message ? e.message : String(e)));
+            });
+    });
+    }
+})();
+    </script>
+</body>
+</html>

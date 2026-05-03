@@ -1192,7 +1192,7 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 静态资源版本号：更新 css/js 后递增，避免浏览器长期缓存旧脚本导致与 HTML 表头列数不一致
-RT_MONITOR_STATIC_VER = '20260503-19'
+RT_MONITOR_STATIC_VER = '20260503-20'
 
 # 禁止缓存的 JSON GET：除精确 path 外按「后缀」匹配，兼容反代挂载后 request.path 为 /prefix/api/... 仍下发 no-store
 _JSON_API_NO_STORE_SUFFIXES: tuple[str, ...] = (
@@ -13780,3 +13780,4 @@ if __name__ == '__main__':
 # 代码更新时间：2026-05-03 10:41 _warmup_sw_industry_cache_async 默认 L1（test_client GET sw_industry_stats?level=l1）
 # 代码更新时间：2026-05-03 11:05 fina_arturn 自由流通比 free_mv/total_mv×100；_fina_arturn_attach_free_float_ratio_pct；缓存键 sb_act_6；RT_MONITOR_STATIC_VER 20260503-18
 # 代码更新时间：2026-05-03 13:11 fina_arturn 股东人数 hn0–hn8（stk_holdernumber）；_fina_arturn_attach_stk_holdernumber_quarters；缓存键 sb_act_7；RT_MONITOR_STATIC_VER 20260503-19
+# 代码更新时间：2026-05-03 13:19 rt_monitor_niusan 表头点击：event.target 为 Text 时无 closest，致「+」整段抛错；归一化到父元素；RT_MONITOR_STATIC_VER 20260503-20
