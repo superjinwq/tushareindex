@@ -7,6 +7,7 @@
 
 | ID / 目录 | 摘要 | 完成日 |
 |-----------|------|--------|
+| `quick/20260503-niusan-history-by-scheme-id` | 牛散「+」历史/明细：API 按 `scheme_id` 关联人（非仅 config activeId）；前端主表 `niusanViewSchemeId` + 缓存键；`RT_MONITOR_STATIC_VER` 20260503-21 | 2026-05-03 |
 | `quick/20260503-rt-monitor-niusan-expand-btn-fix` | 牛散页「+」展开：`click` 委托内 target 归一化（Text 节点无 `closest`）；`RT_MONITOR_STATIC_VER` 20260503-20 | 2026-05-03 |
 | `quick/20260503-fina-stk-holdernumber-columns` | 财报页固定资产右侧「股东人数」hnchg+hn0–hn8（stk_holdernumber）；缓存 sb_act_7；RT_MONITOR_STATIC_VER 20260503-19 | 2026-05-03 |
 | `quick/20260503-fina-free-float-ratio` | 财报页「自由流通比」列（前三持股右侧，紧凑 loc-col；free_mv/total_mv×100）；缓存 sb_act_6；RT_MONITOR_STATIC_VER 20260503-18 | 2026-05-03 |

@@ -738,6 +738,8 @@
     var niusanRawRows = [];
     /** 方案 id -> /api/niusan_scheme_holdings 完整响应，用于切换秒开 */
     var niusanSchemeHoldingsCache = {};
+    /** 主表当前展示的方案 id（与方案条/表头一致；展开历史、明细 API 需与之一致，不再误用 config 的 activeId） */
+    var niusanViewSchemeId = '';
     var NIUSAN_SORT_META = {
         total_mv_yi: 'number',
         free_mv_yi: 'number',
@@ -934,6 +936,23 @@
             ins = tr;
         }
     }
+    (function initNiusanViewSchemeId() {
+        try {
+            var avEl = document.getElementById('niusan-active-view-json');
+            var av = avEl ? JSON.parse(avEl.textContent || '{}') : {};
+            if (av.scheme_id) {
+                niusanViewSchemeId = String(av.scheme_id);
+            }
+        } catch (e0) { /* ignore */ }
+    })();
+
+    function niusanHistoryCacheKey(tsCode) {
+        return (niusanViewSchemeId || '') + '\t' + String(tsCode || '');
+    }
+    function niusanDetailCacheKey(tsCode) {
+        return (niusanViewSchemeId || '') + '\t' + String(tsCode || '');
+    }
+
     var jsonEl = document.getElementById('niusan-rows-json');
     try {
         var parsed = jsonEl ? JSON.parse(jsonEl.textContent || '[]') : [];
@@ -967,6 +986,7 @@
             });
             niusanSchemeHoldingsCache[aid] = {
                 ok: true,
+                scheme_id: aid,
                 rows: rowsCopy,
                 scheme_name: av.scheme_name != null ? String(av.scheme_name) : '--',
                 related_join: av.related_join != null ? String(av.related_join) : '',
@@ -1388,7 +1408,8 @@
         var subEl = document.getElementById('niusan-detail-modal-sub');
         var footEl = document.getElementById('niusan-detail-modal-foot');
         var tbody = document.getElementById('niusan-detail-tbody');
-        var cached = detailCache[tsCode];
+        var dck = niusanDetailCacheKey(tsCode);
+        var cached = detailCache[dck];
         if (cached && cached.ok) {
             detailOverlay.classList.add('is-open');
             renderNiusanDetailModalBody(cached, tsCode, nameHint);
@@ -1400,11 +1421,15 @@
         }
         if (footEl) footEl.textContent = '';
         detailOverlay.classList.add('is-open');
-        fetch(apiUrl('/api/niusan_floatholder_detail?ts_code=' + encodeURIComponent(tsCode || '')), { credentials: 'same-origin' })
+        var detQ = '/api/niusan_floatholder_detail?ts_code=' + encodeURIComponent(tsCode || '');
+        if (niusanViewSchemeId) {
+            detQ += '&scheme_id=' + encodeURIComponent(niusanViewSchemeId);
+        }
+        fetch(apiUrl(detQ), { credentials: 'same-origin' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 if (data && data.ok) {
-                    detailCache[tsCode] = data;
+                    detailCache[niusanDetailCacheKey(tsCode)] = data;
                 }
                 if (!data || !data.ok) {
                     if (tbody) {
@@ -1441,11 +1466,15 @@
                 slice.push(codes[idx]);
             }
             Promise.all(slice.map(function (tc) {
-                if (detailCache[tc]) return Promise.resolve();
-                return fetch(apiUrl('/api/niusan_floatholder_detail?ts_code=' + encodeURIComponent(tc)), { credentials: 'same-origin' })
+                if (detailCache[niusanDetailCacheKey(tc)]) return Promise.resolve();
+                var u = '/api/niusan_floatholder_detail?ts_code=' + encodeURIComponent(tc);
+                if (niusanViewSchemeId) {
+                    u += '&scheme_id=' + encodeURIComponent(niusanViewSchemeId);
+                }
+                return fetch(apiUrl(u), { credentials: 'same-origin' })
                     .then(function (r) { return r.json(); })
                     .then(function (data) {
-                        if (data && data.ok) detailCache[tc] = data;
+                        if (data && data.ok) detailCache[niusanDetailCacheKey(tc)] = data;
                     })
                     .catch(function () { });
             })).then(function () { runNext(); });
@@ -1459,6 +1488,9 @@
     }
 
     function applyNiusanSchemeHoldingsToMainTable(data) {
+        if (data.scheme_id != null && String(data.scheme_id).trim() !== '') {
+            niusanViewSchemeId = String(data.scheme_id).trim();
+        }
         var rows = data.rows || [];
         niusanRawRows = rows.map(function (r, i) {
             var o = {};
@@ -1500,6 +1532,7 @@
             if (!card) return;
             var sid = card.getAttribute('data-scheme-id');
             if (!sid) return;
+            niusanViewSchemeId = sid;
             schemeStripEl.querySelectorAll('.niusan-main-scheme-card').forEach(function (b) {
                 b.classList.toggle('is-selected', b === card);
             });
@@ -1604,12 +1637,17 @@
             btn.setAttribute('aria-expanded', 'true');
             btn.textContent = '\u2212';
         }
-        if (histCache[tsCode]) {
-            openRows(histCache[tsCode]);
+        var hck = niusanHistoryCacheKey(tsCode);
+        if (histCache[hck]) {
+            openRows(histCache[hck]);
             return;
         }
         btn.disabled = true;
-        fetch(apiUrl('/api/niusan_floatholder_history?ts_code=' + encodeURIComponent(tsCode)), { credentials: 'same-origin' })
+        var histUrl = '/api/niusan_floatholder_history?ts_code=' + encodeURIComponent(tsCode);
+        if (niusanViewSchemeId) {
+            histUrl += '&scheme_id=' + encodeURIComponent(niusanViewSchemeId);
+        }
+        fetch(apiUrl(histUrl), { credentials: 'same-origin' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 btn.disabled = false;
@@ -1618,7 +1656,7 @@
                     return;
                 }
                 var periods = data.periods || [];
-                histCache[tsCode] = periods;
+                histCache[hck] = periods;
                 if (periods.length === 0) {
                     window.alert('无更早报告期数据');
                     return;

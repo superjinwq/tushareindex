@@ -1192,7 +1192,7 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 静态资源版本号：更新 css/js 后递增，避免浏览器长期缓存旧脚本导致与 HTML 表头列数不一致
-RT_MONITOR_STATIC_VER = '20260503-20'
+RT_MONITOR_STATIC_VER = '20260503-21'
 
 # 禁止缓存的 JSON GET：除精确 path 外按「后缀」匹配，兼容反代挂载后 request.path 为 /prefix/api/... 仍下发 no-store
 _JSON_API_NO_STORE_SUFFIXES: tuple[str, ...] = (
@@ -1473,6 +1473,36 @@ def _niusan_holder_where_clause_n(alias: str, n_likes: int) -> str:
     a = alias + '.' if alias else ''
     parts = [f'{a}holder_name LIKE %s' for _ in range(n_likes)]
     return '(' + ' OR '.join(parts) + ')'
+
+
+def _niusan_resolve_holder_hw_hp(for_scheme_id: str | None) -> dict:
+    """
+    关联人 WHERE 子句与 LIKE 参数。
+    for_scheme_id 为空：当前启用方案（niusan_holder_config activeId）。
+    非空：该方案 id（与主表 /api/niusan_scheme_holdings 一致）。
+    成功：{'ok': True, 'hw': str, 'hp': tuple}
+    失败：{'ok': False, 'error': 'scheme_not_found' | 'scheme_no_holders'}
+    """
+    sid = str(for_scheme_id or '').strip()
+    if sid:
+        cfg_pick = _niusan_holder_cfg_load()
+        sch_pick = None
+        for s in cfg_pick.get('schemes') or []:
+            if isinstance(s, dict) and str(s.get('id')) == sid:
+                sch_pick = s
+                break
+        if not sch_pick:
+            return {'ok': False, 'error': 'scheme_not_found'}
+        hol_pick = sch_pick.get('holders')
+        hol_list_pick: list = hol_pick if isinstance(hol_pick, list) else []
+        hp = _niusan_holder_like_tuple_from_list(hol_list_pick)
+        if not hp:
+            return {'ok': False, 'error': 'scheme_no_holders'}
+        hw = _niusan_holder_where_clause_n('t', len(hp))
+        return {'ok': True, 'hw': hw, 'hp': hp}
+    hw = _niusan_holder_where_clause('t')
+    hp = _niusan_holder_params()
+    return {'ok': True, 'hw': hw, 'hp': hp}
 
 
 def _niusan_ts_codes_present_in_rt_k(ts_codes: list[str]) -> set[str]:
@@ -1826,38 +1856,18 @@ def _niusan_pct_display_cls(pct_str: str) -> str:
 def _query_niusan_holdings_page_rows(for_scheme_id: str | None = None):
     """牛散持股页：四人合并为每股一行；读 stock_tushare，最新价另读 stock_wind.rt_k。
     for_scheme_id 非空时仅针对该配置方案（用于方案汇总卡点击查看明细）；为空则用当前启用方案（主页表）。"""
-    hw: str
-    hp: tuple[str, ...]
-    if for_scheme_id:
-        cfg_pick = _niusan_holder_cfg_load()
-        sch_pick = None
-        for s in cfg_pick.get('schemes') or []:
-            if isinstance(s, dict) and str(s.get('id')) == str(for_scheme_id):
-                sch_pick = s
-                break
-        if not sch_pick:
-            return {
-                'report_end_date': None,
-                'rows': [],
-                'error': 'scheme_not_found',
-                'amt_yi_total': '0.00',
-                'scheme_summaries': [],
-            }
-        hol_pick = sch_pick.get('holders')
-        hol_list_pick: list = hol_pick if isinstance(hol_pick, list) else []
-        hp = _niusan_holder_like_tuple_from_list(hol_list_pick)
-        if not hp:
-            return {
-                'report_end_date': None,
-                'rows': [],
-                'error': 'scheme_no_holders',
-                'amt_yi_total': '0.00',
-                'scheme_summaries': [],
-            }
-        hw = _niusan_holder_where_clause_n('t', len(hp))
-    else:
-        hw = _niusan_holder_where_clause('t')
-        hp = _niusan_holder_params()
+    res = _niusan_resolve_holder_hw_hp(for_scheme_id)
+    if not res.get('ok'):
+        err = str(res.get('error') or '')
+        return {
+            'report_end_date': None,
+            'rows': [],
+            'error': err,
+            'amt_yi_total': '0.00',
+            'scheme_summaries': [],
+        }
+    hw = res['hw']
+    hp = res['hp']
     conn = pymysql.connect(**DB_CONFIG_TUSHARE)
     rows_out: list[dict[str, str]] = []
     report_end: date | None = None
@@ -2181,14 +2191,19 @@ def _query_niusan_holdings_page_rows(for_scheme_id: str | None = None):
     }
 
 
-def _query_niusan_floatholder_history(ts_code: str) -> dict:
-    """单只股票：锚定报告期（全表 MAX end_date）之前的各期四人合并持仓，按报告期从新到旧。"""
+def _query_niusan_floatholder_history(ts_code: str, for_scheme_id: str | None = None) -> dict:
+    """单只股票：锚定报告期（该方案关联人在 top10 上的 MAX end_date）之前的各期合并持仓，按报告期从新到旧。
+    for_scheme_id 与主表当前选中方案一致；空则使用启用方案（兼容旧请求）。"""
     ts_norm = (ts_code or '').strip().upper()
     if not re.match(r'^\d{6}\.(SH|SZ|BJ)$', ts_norm):
         return {'ok': False, 'error': 'invalid ts_code', 'anchor_end_date': None, 'periods': []}
 
-    hw = _niusan_holder_where_clause('t')
-    hp = _niusan_holder_params()
+    res = _niusan_resolve_holder_hw_hp(for_scheme_id)
+    if not res.get('ok'):
+        err = str(res.get('error') or '')
+        return {'ok': False, 'error': err, 'anchor_end_date': None, 'periods': []}
+    hw = res['hw']
+    hp = res['hp']
     conn = pymysql.connect(**DB_CONFIG_TUSHARE)
     periods_out: list[dict[str, str]] = []
     anchor: date | None = None
@@ -2386,13 +2401,18 @@ def _query_niusan_floatholder_history(ts_code: str) -> dict:
     }
 
 
-def _query_niusan_floatholder_detail(ts_code: str) -> dict:
-    """锚定报告期下该股各关联人明细行 + 与主表一致的合并口径 VWAP。"""
+def _query_niusan_floatholder_detail(ts_code: str, for_scheme_id: str | None = None) -> dict:
+    """锚定报告期下该股各关联人明细行 + 与主表一致的合并口径 VWAP。
+    for_scheme_id 与当前主表方案一致；空则启用方案。"""
     ts_norm = (ts_code or '').strip().upper()
     if not re.match(r'^\d{6}\.(SH|SZ|BJ)$', ts_norm):
         return {'ok': False, 'error': 'invalid ts_code'}
-    hw = _niusan_holder_where_clause('t')
-    hp = _niusan_holder_params()
+    res = _niusan_resolve_holder_hw_hp(for_scheme_id)
+    if not res.get('ok'):
+        err = str(res.get('error') or '')
+        return {'ok': False, 'error': err}
+    hw = res['hw']
+    hp = res['hp']
     conn = pymysql.connect(**DB_CONFIG_TUSHARE)
     rows_out: list[dict[str, str]] = []
     err_msg: str | None = None
@@ -4801,9 +4821,13 @@ def api_niusan_holder_config():
 def api_niusan_floatholder_history():
     """牛散持股历史：某代码在锚定报告期之前的各期合并行（用于表内 + 展开）。"""
     ts_code = str(request.args.get('ts_code') or '').strip()
-    out = _query_niusan_floatholder_history(ts_code)
+    scheme_id = str(request.args.get('scheme_id') or '').strip() or None
+    out = _query_niusan_floatholder_history(ts_code, for_scheme_id=scheme_id)
     if not out.get('ok'):
         err = out.get('error') or ''
+        if err in ('scheme_not_found', 'scheme_no_holders'):
+            code = 404 if err == 'scheme_not_found' else 400
+            return jsonify(out), code
         code = 400 if err == 'invalid ts_code' else 500
         return jsonify(out), code
     return jsonify(out)
@@ -4813,9 +4837,13 @@ def api_niusan_floatholder_history():
 def api_niusan_floatholder_detail():
     """牛散持股明细：锚定报告期下该股各关联人分行 + 合并口径 VWAP。"""
     ts_code = str(request.args.get('ts_code') or '').strip()
-    out = _query_niusan_floatholder_detail(ts_code)
+    scheme_id = str(request.args.get('scheme_id') or '').strip() or None
+    out = _query_niusan_floatholder_detail(ts_code, for_scheme_id=scheme_id)
     if not out.get('ok'):
         err = out.get('error') or ''
+        if err in ('scheme_not_found', 'scheme_no_holders'):
+            code = 404 if err == 'scheme_not_found' else 400
+            return jsonify(out), code
         code = 400 if err in ('invalid ts_code', 'no_anchor') else 500
         return jsonify(out), code
     return jsonify(out)
@@ -4841,6 +4869,7 @@ def api_niusan_scheme_holdings():
     return jsonify(
         {
             'ok': True,
+            'scheme_id': scheme_id,
             'rows': payload.get('rows') or [],
             'amt_yi_total': payload.get('amt_yi_total', '0.00'),
             'report_end_date': red_s,
@@ -13781,3 +13810,4 @@ if __name__ == '__main__':
 # 代码更新时间：2026-05-03 11:05 fina_arturn 自由流通比 free_mv/total_mv×100；_fina_arturn_attach_free_float_ratio_pct；缓存键 sb_act_6；RT_MONITOR_STATIC_VER 20260503-18
 # 代码更新时间：2026-05-03 13:11 fina_arturn 股东人数 hn0–hn8（stk_holdernumber）；_fina_arturn_attach_stk_holdernumber_quarters；缓存键 sb_act_7；RT_MONITOR_STATIC_VER 20260503-19
 # 代码更新时间：2026-05-03 13:19 rt_monitor_niusan 表头点击：event.target 为 Text 时无 closest，致「+」整段抛错；归一化到父元素；RT_MONITOR_STATIC_VER 20260503-20
+# 代码更新时间：2026-05-03 13:44 牛散展开历史/明细 API 按 scheme_id 解析关联人（与主表当前方案一致）；_niusan_resolve_holder_hw_hp；RT_MONITOR_STATIC_VER 20260503-21
