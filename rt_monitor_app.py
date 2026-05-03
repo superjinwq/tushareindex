@@ -22,9 +22,11 @@ import os
 import sys
 import json
 import time
+import statistics
 import hashlib
 import subprocess
 import re
+import uuid
 import threading
 import concurrent.futures
 import atexit
@@ -862,6 +864,20 @@ _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 # MA 表支撑/阻力价位：全站共用（与浏览器 localStorage 同源隔离无关），见 /api/ma_sr_levels
 _MA_SR_LEVELS_PATH = os.path.join(_APP_DIR, 'ma_sr_levels.json')
 _APP_LOCK_FILE = os.path.join(_APP_DIR, '.rt_monitor_app.lock')
+# 牛散持股：方案名仅展示；关联人写入 JSON，参与 top10_floatholders.holder_name OR LIKE
+_NIUSAN_HOLDER_CONFIG_PATH = os.path.join(_APP_DIR, 'niusan_holder_config.json')
+_NIUSAN_CFG_LOCK = threading.Lock()
+_niusan_holder_cfg_cached: dict | None = None
+_DEFAULT_NIUSAN_HOLDER_CFG: dict = {
+    'activeId': 'default',
+    'schemes': [
+        {
+            'id': 'default',
+            'schemeName': '章建平',
+            'holders': ['章建平', '方章乐', '方文艳', '方德基'],
+        },
+    ],
+}
 _APP_LOCK_ACQUIRED = False
 # Windows：命名互斥体（进程崩溃/强杀后由系统回收，避免仅靠 PID 误判）；POSIX：flock 独占锁
 _APP_WIN32_MUTEX = None
@@ -1176,7 +1192,7 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 静态资源版本号：更新 css/js 后递增，避免浏览器长期缓存旧脚本导致与 HTML 表头列数不一致
-RT_MONITOR_STATIC_VER = '20260427-25'
+RT_MONITOR_STATIC_VER = '20260503-19'
 
 # 禁止缓存的 JSON GET：除精确 path 外按「后缀」匹配，兼容反代挂载后 request.path 为 /prefix/api/... 仍下发 no-store
 _JSON_API_NO_STORE_SUFFIXES: tuple[str, ...] = (
@@ -1191,6 +1207,11 @@ _JSON_API_NO_STORE_SUFFIXES: tuple[str, ...] = (
     '/api/up_num_ma5_series',
     '/api/etf_bias_series',
     '/api/etf_mcd_series',
+    '/api/niusan_floatholder_history',
+    '/api/niusan_holder_config',
+    '/api/niusan_floatholder_detail',
+    '/api/niusan_scheme_holdings',
+    '/api/sw_industry_stats',
 )
 
 
@@ -1266,6 +1287,1279 @@ def _render_rt_monitor_margin_no_cache():
     resp.headers['X-RT-Monitor-App'] = 'rt_monitor_app'
     return resp
 
+
+def _render_rt_monitor_sw_no_cache():
+    """申万行业分析单页：禁止缓存 HTML。"""
+    resp = make_response(render_template('rt_monitor_sw.html'))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['X-RT-Monitor-Build'] = RT_MONITOR_STATIC_VER
+    resp.headers['X-RT-Monitor-App'] = 'rt_monitor_app'
+    return resp
+
+
+def _niusan_holder_cfg_normalize(cfg: dict | None) -> dict:
+    """规范化方案列表；无效时回落内置默认一套。"""
+    if not isinstance(cfg, dict):
+        cfg = {}
+    schemes_out: list[dict] = []
+    raw_list = cfg.get('schemes')
+    if isinstance(raw_list, list):
+        for s in raw_list[:32]:
+            if not isinstance(s, dict):
+                continue
+            sid = str(s.get('id') or '').strip()
+            if not sid:
+                sid = uuid.uuid4().hex[:12]
+            scheme_name = str(s.get('schemeName') or '').strip()
+            holders_raw = s.get('holders')
+            holders: list[str] = []
+            if isinstance(holders_raw, list):
+                seen_k: set[str] = set()
+                for h in holders_raw[:64]:
+                    if not isinstance(h, str):
+                        continue
+                    t = h.strip()
+                    if not t:
+                        continue
+                    k = t.casefold()
+                    if k in seen_k:
+                        continue
+                    seen_k.add(k)
+                    holders.append(t)
+            if not holders:
+                continue
+            schemes_out.append({'id': sid, 'schemeName': scheme_name, 'holders': holders})
+    if not schemes_out:
+        base = _DEFAULT_NIUSAN_HOLDER_CFG['schemes'][0]
+        schemes_out = [
+            {
+                'id': base['id'],
+                'schemeName': base['schemeName'],
+                'holders': list(base['holders']),
+            },
+        ]
+    active_id = str(cfg.get('activeId') or '').strip()
+    ids_ok = {str(x['id']) for x in schemes_out}
+    if active_id not in ids_ok:
+        active_id = schemes_out[0]['id']
+    return {'activeId': active_id, 'schemes': schemes_out}
+
+
+def _niusan_holder_cfg_write_atomic_inner(cfg: dict) -> None:
+    """原子写入 JSON（调用方已持锁）。"""
+    tmp = _NIUSAN_HOLDER_CONFIG_PATH + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        f.write('\n')
+    os.replace(tmp, _NIUSAN_HOLDER_CONFIG_PATH)
+
+
+def _niusan_holder_cfg_load() -> dict:
+    """读取 niusan_holder_config.json；缺失或损坏时落地内置默认。"""
+    global _niusan_holder_cfg_cached
+    if _niusan_holder_cfg_cached is not None:
+        return _niusan_holder_cfg_cached
+    with _NIUSAN_CFG_LOCK:
+        if _niusan_holder_cfg_cached is not None:
+            return _niusan_holder_cfg_cached
+        cfg: dict
+        if os.path.isfile(_NIUSAN_HOLDER_CONFIG_PATH):
+            try:
+                with open(_NIUSAN_HOLDER_CONFIG_PATH, 'r', encoding='utf-8') as f:
+                    raw = json.load(f)
+                cfg = _niusan_holder_cfg_normalize(raw)
+            except Exception as e:
+                logger.warning('读取 niusan_holder_config.json 失败: %s，使用内置默认', e)
+                cfg = _niusan_holder_cfg_normalize(dict(_DEFAULT_NIUSAN_HOLDER_CFG))
+        else:
+            cfg = _niusan_holder_cfg_normalize(dict(_DEFAULT_NIUSAN_HOLDER_CFG))
+            try:
+                _niusan_holder_cfg_write_atomic_inner(cfg)
+            except Exception as e:
+                logger.warning('写入默认 niusan_holder_config.json 失败: %s', e)
+        _niusan_holder_cfg_cached = cfg
+        return cfg
+
+
+def _niusan_holder_cfg_save(cfg: dict) -> dict:
+    """校验并保存方案；方案名不参与检索，关联人至少一名。"""
+    global _niusan_holder_cfg_cached
+    normalized = _niusan_holder_cfg_normalize(cfg)
+    if not normalized.get('schemes'):
+        raise ValueError('至少保留一套方案')
+    for s in normalized['schemes']:
+        if not s.get('holders'):
+            raise ValueError('每套方案至少填写一名关联人')
+    with _NIUSAN_CFG_LOCK:
+        _niusan_holder_cfg_write_atomic_inner(normalized)
+        _niusan_holder_cfg_cached = normalized
+    return normalized
+
+
+def _get_active_niusan_scheme() -> dict:
+    cfg = _niusan_holder_cfg_load()
+    aid = str(cfg.get('activeId') or '').strip()
+    for s in cfg.get('schemes') or []:
+        if isinstance(s, dict) and str(s.get('id')) == aid:
+            return s
+    schemes = cfg.get('schemes') or []
+    if schemes:
+        return schemes[0]
+    return dict(_DEFAULT_NIUSAN_HOLDER_CFG['schemes'][0])
+
+
+def _niusan_scheme_display_meta_by_id(scheme_id: str) -> tuple[str, str]:
+    """方案展示名 + 关联人文案（与主页 thead 相同分隔符）。"""
+    sid = str(scheme_id or '').strip()
+    if not sid:
+        return ('--', '')
+    cfg = _niusan_holder_cfg_load()
+    for s in cfg.get('schemes') or []:
+        if isinstance(s, dict) and str(s.get('id')) == sid:
+            sn = str(s.get('schemeName') or '').strip() or '--'
+            hol = s.get('holders')
+            if isinstance(hol, list):
+                rj = ' / '.join(str(h).strip() for h in hol if isinstance(h, str) and h.strip())
+            else:
+                rj = ''
+            return (sn, rj)
+    return ('--', '')
+
+
+def _active_niusan_holder_like_params() -> tuple[str, ...]:
+    """当前启用方案：关联人 LIKE 参数（方案名不参与匹配）。"""
+    sch = _get_active_niusan_scheme()
+    holders = sch.get('holders') if isinstance(sch, dict) else None
+    out: list[str] = []
+    if isinstance(holders, list):
+        for h in holders:
+            if isinstance(h, str) and h.strip():
+                out.append('%' + h.strip() + '%')
+    if not out:
+        for h in _DEFAULT_NIUSAN_HOLDER_CFG['schemes'][0]['holders']:
+            out.append('%' + h + '%')
+    return tuple(out)
+
+
+def _niusan_holder_where_clause(alias: str = 't') -> str:
+    """关联人 OR LIKE；占位个数与 _niusan_holder_params() 一致。"""
+    n = len(_active_niusan_holder_like_params())
+    if n < 1:
+        n = 1
+    a = alias + '.' if alias else ''
+    parts = [f'{a}holder_name LIKE %s' for _ in range(n)]
+    return '(' + ' OR '.join(parts) + ')'
+
+
+def _niusan_holder_params() -> tuple[str, ...]:
+    return _active_niusan_holder_like_params()
+
+
+def _niusan_holder_like_tuple_from_list(holders: list | None) -> tuple[str, ...]:
+    """方案内关联人 → LIKE 参数元组（空则返回空元组）。"""
+    out: list[str] = []
+    if isinstance(holders, list):
+        for h in holders:
+            if isinstance(h, str) and h.strip():
+                out.append('%' + h.strip() + '%')
+    return tuple(out)
+
+
+def _niusan_holder_where_clause_n(alias: str, n_likes: int) -> str:
+    """固定 n 个 LIKE 占位（与 _niusan_holder_like_tuple_from_list 长度一致）。"""
+    if n_likes < 1:
+        n_likes = 1
+    a = alias + '.' if alias else ''
+    parts = [f'{a}holder_name LIKE %s' for _ in range(n_likes)]
+    return '(' + ' OR '.join(parts) + ')'
+
+
+def _niusan_ts_codes_present_in_rt_k(ts_codes: list[str]) -> set[str]:
+    """stock_wind.rt_k 中出现的 ts_code（用于剔除无实时行情的代码如部分北交所）。"""
+    if not ts_codes:
+        return set()
+    out: set[str] = set()
+    conn = None
+    try:
+        conn = pymysql.connect(**DB_CONFIG)
+        chunk_sz = 400
+        for i in range(0, len(ts_codes), chunk_sz):
+            part = ts_codes[i : i + chunk_sz]
+            ph = ','.join(['%s'] * len(part))
+            with conn.cursor() as cur:
+                cur.execute(f'SELECT DISTINCT ts_code FROM rt_k WHERE ts_code IN ({ph})', part)
+                for row in cur.fetchall() or []:
+                    if row and row[0]:
+                        out.add(str(row[0]).strip())
+    except Exception as e:
+        logger.warning('牛散持股 rt_k 过滤查询失败，暂不剔除代码：%s', e)
+        return set(ts_codes)
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return out
+
+
+def _niusan_scheme_stock_count_and_amt_yi(cur, report_end: date, holders: list | None) -> tuple[int, str]:
+    """单方案：锚定报告期下合并持股的去重股票只数 + 持股金额(亿)合计（口径同主表 amt_yi）。"""
+    hp = _niusan_holder_like_tuple_from_list(holders)
+    if not hp:
+        return (0, '0.00')
+    hw = _niusan_holder_where_clause_n('t', len(hp))
+    cur.execute(
+        f'''
+        SELECT d.ts_code, SUM(d.hold_amount) AS hold_sum
+        FROM (
+            SELECT t.ts_code, t.hold_amount,
+                ROW_NUMBER() OVER (
+                    PARTITION BY t.ts_code, t.holder_name
+                    ORDER BY t.ann_date IS NULL ASC, t.ann_date DESC, t.hold_amount DESC
+                ) AS rn
+            FROM top10_floatholders t
+            WHERE t.end_date = %s AND {hw}
+        ) d
+        WHERE d.rn = 1
+        GROUP BY d.ts_code
+        ''',
+        (report_end,) + hp,
+    )
+    agg = cur.fetchall() or []
+    if not agg:
+        return (0, '0.00')
+    rk_ok = _niusan_ts_codes_present_in_rt_k([r[0] for r in agg])
+    agg = [r for r in agg if r[0] in rk_ok]
+    if not agg:
+        return (0, '0.00')
+    ts_list = [r[0] for r in agg]
+    ph = ','.join(['%s'] * len(ts_list))
+    ref_close: dict[str, Decimal] = {}
+    cur.execute(
+        f'''
+        SELECT s.ts_code, s.close
+        FROM stk_factor_pro s
+        INNER JOIN (
+            SELECT ts_code, MAX(trade_date) AS mx
+            FROM stk_factor_pro
+            WHERE ts_code IN ({ph}) AND trade_date <= %s
+            GROUP BY ts_code
+        ) m ON s.ts_code = m.ts_code AND s.trade_date = m.mx
+        ''',
+        tuple(ts_list) + (report_end,),
+    )
+    for x in cur.fetchall() or []:
+        ref_close[x[0]] = x[1] if x[1] is not None else Decimal('0')
+    amt_sum = Decimal('0')
+    for r in agg:
+        ts_code, hold_sum = r[0], r[1]
+        if hold_sum is None:
+            continue
+        rc = ref_close.get(ts_code)
+        if rc is None:
+            continue
+        try:
+            amt_sum += Decimal(str(hold_sum)) * Decimal(str(rc)) / Decimal('100000000')
+        except Exception:
+            pass
+    return (len(ts_list), f'{float(amt_sum):.2f}')
+
+
+def _niusan_scheme_summaries_for_report(conn, report_end: date) -> list[dict[str, object]]:
+    """配置中各方案：锚定报告期下持股只数 + 持股金额(亿)（与主表口径一致）。"""
+    scheme_summaries: list[dict[str, object]] = []
+    cfg_page = _niusan_holder_cfg_load()
+    for sch in cfg_page.get('schemes') or []:
+        if not isinstance(sch, dict):
+            continue
+        sn = str(sch.get('schemeName') or '').strip() or '--'
+        hol = sch.get('holders')
+        hol_list: list = hol if isinstance(hol, list) else []
+        with conn.cursor() as cur_sm:
+            cnt, amt_s = _niusan_scheme_stock_count_and_amt_yi(cur_sm, report_end, hol_list)
+        scheme_summaries.append(
+            {
+                'scheme_id': str(sch.get('id') or ''),
+                'scheme_name': sn,
+                'stock_count': cnt,
+                'amt_yi_total': amt_s,
+            }
+        )
+    return scheme_summaries
+
+
+def _prev_quarter_report_end(end_d: date) -> date:
+    """自然季报告期末的上一季报告期末（3/31、6/30、9/30、12/31 链）。"""
+    if end_d.month == 3 and end_d.day == 31:
+        return date(end_d.year - 1, 12, 31)
+    if end_d.month == 6 and end_d.day == 30:
+        return date(end_d.year, 3, 31)
+    if end_d.month == 9 and end_d.day == 30:
+        return date(end_d.year, 6, 30)
+    if end_d.month == 12 and end_d.day == 31:
+        return date(end_d.year, 9, 30)
+    q = (end_d.month - 1) // 3
+    if q == 0:
+        return date(end_d.year - 1, 12, 31)
+    if q == 1:
+        return date(end_d.year, 3, 31)
+    if q == 2:
+        return date(end_d.year, 6, 30)
+    return date(end_d.year, 9, 30)
+
+
+def _niusan_quarter_ends_backward_list(anchor: date, max_steps: int = 48) -> list[date]:
+    """从 anchor 起连续往前推 max_steps 个季末，供批量拉 top10_floatholders。"""
+    out: list[date] = [anchor]
+    q = anchor
+    for _ in range(max_steps):
+        q = _prev_quarter_report_end(q)
+        out.append(q)
+    return out
+
+
+def _niusan_fetch_hold_stats_batch(
+    cur,
+    ts_codes: list[str],
+    quarter_dates: list[date],
+    hw: str,
+    hp: tuple[str, ...],
+) -> dict[tuple[str, date], tuple[Decimal | None, int]]:
+    """(ts_code, end_date) -> (SUM(hold_amount), n_chg_lines)；仅含该期确有行的组合。"""
+    if not ts_codes or not quarter_dates:
+        return {}
+    ph_ts = ','.join(['%s'] * len(ts_codes))
+    ph_d = ','.join(['%s'] * len(quarter_dates))
+    cur.execute(
+        f'''
+        SELECT d.ts_code, d.end_date,
+               SUM(d.hold_amount) AS hold_sum,
+               SUM(CASE WHEN d.hold_change IS NOT NULL THEN 1 ELSE 0 END) AS n_chg_lines
+        FROM (
+            SELECT t.ts_code, t.end_date, t.hold_amount, t.hold_change,
+                ROW_NUMBER() OVER (
+                    PARTITION BY t.ts_code, t.end_date, t.holder_name
+                    ORDER BY t.ann_date IS NULL ASC, t.ann_date DESC, t.hold_amount DESC
+                ) AS rn
+            FROM top10_floatholders t
+            WHERE t.ts_code IN ({ph_ts}) AND t.end_date IN ({ph_d}) AND {hw}
+        ) d
+        WHERE d.rn = 1
+        GROUP BY d.ts_code, d.end_date
+        ''',
+        tuple(ts_codes) + tuple(quarter_dates) + hp,
+    )
+    out: dict[tuple[str, date], tuple[Decimal | None, int]] = {}
+    for row in cur.fetchall() or []:
+        ts_c = row[0]
+        ed = row[1]
+        hs = row[2]
+        nchg = int(row[3] or 0)
+        if ts_c is None or ed is None:
+            continue
+        out[(str(ts_c).strip(), ed)] = (hs, nchg)
+    return out
+
+
+def _niusan_hold_chain_quarter_walk(
+    ts_code: str,
+    anchor: date,
+    hold_stats: dict[tuple[str, date], tuple[Decimal | None, int]],
+) -> list[tuple]:
+    """从 anchor 按自然季往前：缺季即止；遇到新进季纳入后不再往前。返回 [(end_date, hold_sum), ...] 升序。"""
+    ts_key = str(ts_code).strip()
+    anchor_key = (ts_key, anchor)
+    if anchor_key not in hold_stats:
+        return []
+    rev: list[tuple[date, Decimal | None]] = []
+    h_anchor, _ = hold_stats[anchor_key]
+    rev.append((anchor, h_anchor))
+    q = _prev_quarter_report_end(anchor)
+    for _ in range(48):
+        k = (ts_key, q)
+        if k not in hold_stats:
+            break
+        h_sum, n_chg_lines = hold_stats[k]
+        rev.append((q, h_sum))
+        if n_chg_lines == 0:
+            break
+        q = _prev_quarter_report_end(q)
+    rev.reverse()
+    return rev
+
+
+def _niusan_quarter_trade_window(end_d: date) -> tuple[date, date]:
+    """报告期末 end_date 对应季度的自然区间（含首尾），供 stk_factor_pro VWAP 聚合。"""
+    y = end_d.year
+    if end_d.month == 3 and end_d.day == 31:
+        return date(y, 1, 1), end_d
+    if end_d.month == 6 and end_d.day == 30:
+        return date(y, 4, 1), end_d
+    if end_d.month == 9 and end_d.day == 30:
+        return date(y, 7, 1), end_d
+    if end_d.month == 12 and end_d.day == 31:
+        return date(y, 10, 1), end_d
+    q = (end_d.month - 1) // 3
+    starts = (date(y, 1, 1), date(y, 4, 1), date(y, 7, 1), date(y, 10, 1))
+    return starts[q], end_d
+
+
+def _niusan_quarter_vwap_decimal(cur, ts_code: str, end_d: date) -> Decimal | None:
+    """当季 stk_factor_pro 量价加权 VWAP（股），供持仓 blend 的边际价格。"""
+    q0, q1 = _niusan_quarter_trade_window(end_d)
+    cur.execute(
+        '''
+        SELECT CASE WHEN SUM(vol) > 0 THEN SUM(close * vol) / SUM(vol) ELSE NULL END
+        FROM stk_factor_pro
+        WHERE ts_code = %s AND trade_date >= %s AND trade_date <= %s
+          AND vol IS NOT NULL AND vol > 0
+        ''',
+        (ts_code, q0, q1),
+    )
+    row = cur.fetchone()
+    if not row or row[0] is None:
+        return None
+    return Decimal(str(row[0]))
+
+
+def _niusan_blended_vwap_series_decimal(
+    cur,
+    ts_code: str,
+    chain: list[tuple],
+    quarter_vwap_memo: dict[tuple[str, date], Decimal | None] | None = None,
+) -> list[Decimal | None]:
+    """多季连续持有时：从链上最早一季起按持仓数量变化 blend 至各报告期末的持仓加权均价。
+
+    首季：blend = 当季量价 VWAP；后续季 delta>0 时
+    blend = (H_prev*blend + delta*当季VWAP)/H_curr；delta<0（减持）时 blend 不变。
+    chain: [(end_date, hold_sum), ...] 必须按 end_date 升序；hold_sum 为 top10 合并持股数（股）。
+    链由 _niusan_hold_chain_quarter_walk 生成：锚定季起按自然季往前，缺季即止、新进季即止。
+    """
+    memo = quarter_vwap_memo if quarter_vwap_memo is not None else {}
+    out: list[Decimal | None] = []
+    blended: Decimal | None = None
+    h_prev: Decimal | None = None
+    for i, row in enumerate(chain):
+        end_d = row[0]
+        h_raw = row[1]
+        key = (ts_code, end_d)
+        if key not in memo:
+            memo[key] = _niusan_quarter_vwap_decimal(cur, ts_code, end_d)
+        vq = memo[key]
+        if h_raw is None:
+            out.append(blended)
+            continue
+        h_curr = Decimal(str(h_raw))
+        if i == 0:
+            blended = vq
+            h_prev = h_curr
+            out.append(blended)
+            continue
+        delta = h_curr - (h_prev if h_prev is not None else Decimal('0'))
+        if blended is None:
+            blended = vq
+        elif vq is not None:
+            if delta > 0 and h_curr != 0:
+                blended = (h_prev * blended + delta * vq) / h_curr
+            elif delta < 0:
+                pass
+        h_prev = h_curr
+        out.append(blended)
+    return out
+
+
+def _niusan_rt_k_latest_close_map(ts_codes: list[str]) -> dict[str, tuple[Decimal, date]]:
+    """每股 rt_k 最新一笔行情：收盘价 + 自然日（DATE(trade_time)）。读 stock_wind。"""
+    if not ts_codes:
+        return {}
+    ph = ','.join(['%s'] * len(ts_codes))
+    out: dict[str, tuple[Decimal, date]] = {}
+    conn = None
+    try:
+        conn = pymysql.connect(**DB_CONFIG)
+        with conn.cursor() as cur:
+            cur.execute(
+                f'''
+                SELECT r.ts_code, r.close, r.trade_time
+                FROM stock_wind.rt_k r
+                INNER JOIN (
+                    SELECT ts_code, MAX(trade_time) AS mx
+                    FROM stock_wind.rt_k
+                    WHERE ts_code IN ({ph})
+                    GROUP BY ts_code
+                ) m ON r.ts_code = m.ts_code AND r.trade_time = m.mx
+                ''',
+                ts_codes,
+            )
+            for x in cur.fetchall() or []:
+                tt = x[2]
+                d = tt.date() if hasattr(tt, 'date') else tt
+                out[x[0]] = (x[1], d)
+    except Exception as e:
+        logger.warning('牛散持股读取 rt_k 最新价失败: %s', e)
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return out
+
+
+def _niusan_pct_display_cls(pct_str: str) -> str:
+    """涨跌幅字符串着色：正 rise（红）、负 fall（绿）；0/-- 无色。"""
+    if pct_str in ('', '--'):
+        return ''
+    try:
+        v = float(pct_str)
+        if v > 0:
+            return 'rise'
+        if v < 0:
+            return 'fall'
+    except Exception:
+        pass
+    return ''
+
+
+def _query_niusan_holdings_page_rows(for_scheme_id: str | None = None):
+    """牛散持股页：四人合并为每股一行；读 stock_tushare，最新价另读 stock_wind.rt_k。
+    for_scheme_id 非空时仅针对该配置方案（用于方案汇总卡点击查看明细）；为空则用当前启用方案（主页表）。"""
+    hw: str
+    hp: tuple[str, ...]
+    if for_scheme_id:
+        cfg_pick = _niusan_holder_cfg_load()
+        sch_pick = None
+        for s in cfg_pick.get('schemes') or []:
+            if isinstance(s, dict) and str(s.get('id')) == str(for_scheme_id):
+                sch_pick = s
+                break
+        if not sch_pick:
+            return {
+                'report_end_date': None,
+                'rows': [],
+                'error': 'scheme_not_found',
+                'amt_yi_total': '0.00',
+                'scheme_summaries': [],
+            }
+        hol_pick = sch_pick.get('holders')
+        hol_list_pick: list = hol_pick if isinstance(hol_pick, list) else []
+        hp = _niusan_holder_like_tuple_from_list(hol_list_pick)
+        if not hp:
+            return {
+                'report_end_date': None,
+                'rows': [],
+                'error': 'scheme_no_holders',
+                'amt_yi_total': '0.00',
+                'scheme_summaries': [],
+            }
+        hw = _niusan_holder_where_clause_n('t', len(hp))
+    else:
+        hw = _niusan_holder_where_clause('t')
+        hp = _niusan_holder_params()
+    conn = pymysql.connect(**DB_CONFIG_TUSHARE)
+    rows_out: list[dict[str, str]] = []
+    report_end: date | None = None
+    err_msg: str | None = None
+    scheme_summaries_out: list[dict[str, object]] = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f'SELECT MAX(end_date) FROM top10_floatholders t WHERE {hw}',
+                hp,
+            )
+            mx = cur.fetchone()
+            report_end = mx[0] if mx and mx[0] is not None else None
+        if report_end is None:
+            return {'report_end_date': None, 'rows': [], 'error': None, 'amt_yi_total': '0.00', 'scheme_summaries': []}
+
+        with conn.cursor() as cur:
+            cur.execute(
+                f'''
+                SELECT d.ts_code,
+                       SUM(d.hold_amount) AS hold_sum,
+                       SUM(d.hold_float_ratio) AS ratio_sum,
+                       SUM(CASE WHEN d.hold_change IS NOT NULL THEN 1 ELSE 0 END) AS n_chg_lines,
+                       SUM(d.hold_change) AS sum_hold_change,
+                       MAX(d.ann_date) AS ann_date_max
+                FROM (
+                    SELECT t.ts_code, t.hold_amount, t.hold_float_ratio, t.hold_change, t.ann_date,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY t.ts_code, t.holder_name
+                            ORDER BY t.ann_date IS NULL ASC, t.ann_date DESC, t.hold_amount DESC
+                        ) AS rn
+                    FROM top10_floatholders t
+                    WHERE t.end_date = %s AND {hw}
+                ) d
+                WHERE d.rn = 1
+                GROUP BY d.ts_code
+                ORDER BY d.ts_code
+                ''',
+                (report_end,) + hp,
+            )
+            agg = cur.fetchall() or []
+        if agg:
+            rk_allow = _niusan_ts_codes_present_in_rt_k([r[0] for r in agg])
+            agg = [r for r in agg if r[0] in rk_allow]
+        if not agg:
+            scheme_summaries_out = _niusan_scheme_summaries_for_report(conn, report_end)
+            return {
+                'report_end_date': report_end,
+                'rows': [],
+                'error': None,
+                'amt_yi_total': '0.00',
+                'scheme_summaries': scheme_summaries_out,
+            }
+
+        ts_list = [r[0] for r in agg]
+        ph = ','.join(['%s'] * len(ts_list))
+
+        sb_map: dict[str, tuple] = {}
+        with conn.cursor() as cur:
+            cur.execute(
+                f'SELECT ts_code, COALESCE(name,""), list_date FROM stock_basic WHERE ts_code IN ({ph})',
+                ts_list,
+            )
+            for x in cur.fetchall() or []:
+                sb_map[x[0]] = (x[1], x[2])
+
+        sw_map: dict[str, str] = {}
+        with conn.cursor() as cur:
+            cur.execute(
+                f'''
+                SELECT z.ts_code, z.sw_name
+                FROM (
+                    SELECT m.ts_code, m.sw_name,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY m.ts_code
+                            ORDER BY m.in_date DESC, m.sw_name ASC
+                        ) AS rn
+                    FROM stock_tushare.index_member_all_sw m
+                    WHERE (m.is_new = 'Y' OR m.is_new IS NULL)
+                      AND m.sw_name IS NOT NULL AND m.sw_name <> ''
+                      AND m.ts_code IN ({ph})
+                ) z
+                WHERE z.rn = 1
+                ''',
+                ts_list,
+            )
+            for x in cur.fetchall() or []:
+                sw_map[x[0]] = x[1] or ''
+
+        ref_close: dict[str, Decimal] = {}
+        with conn.cursor() as cur:
+            cur.execute(
+                f'''
+                SELECT s.ts_code, s.close
+                FROM stk_factor_pro s
+                INNER JOIN (
+                    SELECT ts_code, MAX(trade_date) AS mx
+                    FROM stk_factor_pro
+                    WHERE ts_code IN ({ph}) AND trade_date <= %s
+                    GROUP BY ts_code
+                ) m ON s.ts_code = m.ts_code AND s.trade_date = m.mx
+                ''',
+                tuple(ts_list) + (report_end,),
+            )
+            for x in cur.fetchall() or []:
+                ref_close[x[0]] = x[1] if x[1] is not None else Decimal('0')
+
+        latest_bar: dict[str, tuple] = {}
+        with conn.cursor() as cur:
+            cur.execute(
+                f'''
+                SELECT s.ts_code, s.total_mv, s.circ_mv, s.free_share, s.close, s.trade_date
+                FROM stk_factor_pro s
+                INNER JOIN (
+                    SELECT ts_code, MAX(trade_date) AS mx
+                    FROM stk_factor_pro
+                    WHERE ts_code IN ({ph})
+                    GROUP BY ts_code
+                ) m ON s.ts_code = m.ts_code AND s.trade_date = m.mx
+                ''',
+                ts_list,
+            )
+            for x in cur.fetchall() or []:
+                latest_bar[x[0]] = (x[1], x[2], x[3], x[4], x[5])
+
+        # 每股：从锚定季末按自然季往前链（缺季即止、新进季即止），再按季边际 VWAP + 持仓变化 blend
+        quarter_date_list = _niusan_quarter_ends_backward_list(report_end, 48)
+        hold_stats_page: dict[tuple[str, date], tuple[Decimal | None, int]] = {}
+        with conn.cursor() as cur:
+            hold_stats_page = _niusan_fetch_hold_stats_batch(cur, ts_list, quarter_date_list, hw, hp)
+        chain_by_ts: defaultdict[str, list[tuple]] = defaultdict(list)
+        for ts_item in ts_list:
+            chain_by_ts[ts_item] = _niusan_hold_chain_quarter_walk(ts_item, report_end, hold_stats_page)
+
+        quarter_vwap_memo: dict[tuple[str, date], Decimal | None] = {}
+        blended_last_by_ts: dict[str, Decimal | None] = {}
+        with conn.cursor() as cur:
+            for ts_item in ts_list:
+                ch = chain_by_ts.get(ts_item, [])
+                ser = _niusan_blended_vwap_series_decimal(cur, ts_item, ch, quarter_vwap_memo)
+                blended_last_by_ts[ts_item] = ser[-1] if ser else None
+
+        rt_latest_map = _niusan_rt_k_latest_close_map(ts_list)
+        close_20d_map: dict[str, Decimal | None] = {}
+        with conn.cursor() as cur:
+            for ts in ts_list:
+                rtl = rt_latest_map.get(ts)
+                if rtl is None:
+                    close_20d_map[ts] = None
+                    continue
+                _c_rt, d_ref = rtl
+                cur.execute(
+                    '''
+                    SELECT close FROM stk_factor_pro
+                    WHERE ts_code = %s AND trade_date <= %s
+                    ORDER BY trade_date DESC
+                    LIMIT 1 OFFSET 20
+                    ''',
+                    (ts, d_ref),
+                )
+                row20 = cur.fetchone()
+                close_20d_map[ts] = row20[0] if row20 and row20[0] is not None else None
+
+        for r in agg:
+            ts_code = r[0]
+            hold_sum = r[1]
+            ratio_sum = r[2]
+            n_chg_lines = int(r[3] or 0)
+            sum_chg = r[4]
+            ann_date_mx = r[5]
+
+            name, list_dt = sb_map.get(ts_code, ('', None))
+            sw_nm = sw_map.get(ts_code, '')
+
+            bar = latest_bar.get(ts_code)
+            total_mv_yi = ''
+            free_mv_yi = ''
+            if bar:
+                total_mv, circ_mv, free_share, cls_latest, _td = bar
+                if total_mv is not None:
+                    try:
+                        total_mv_yi = str(int(round(float(Decimal(str(total_mv)) / Decimal('10000')))))
+                    except Exception:
+                        total_mv_yi = ''
+                _mv_ok = False
+                if free_share is not None and cls_latest is not None:
+                    try:
+                        yi_val = float(Decimal(str(free_share)) * Decimal(str(cls_latest)) / Decimal('10000'))
+                        free_mv_yi = str(int(round(yi_val)))
+                        _mv_ok = True
+                    except Exception:
+                        pass
+                if not _mv_ok and circ_mv is not None:
+                    try:
+                        yi_val = float(Decimal(str(circ_mv)) / Decimal('10000'))
+                        free_mv_yi = str(int(round(yi_val)))
+                    except Exception:
+                        free_mv_yi = ''
+
+            try:
+                hold_wan = float(Decimal(str(hold_sum)) / Decimal('10000'))
+                hold_wan_s = f'{hold_wan:.2f}'
+            except Exception:
+                hold_wan_s = ''
+
+            try:
+                ratio_s = f'{float(ratio_sum):.2f}' if ratio_sum is not None else ''
+            except Exception:
+                ratio_s = ''
+
+            chg_cls = ''
+            if n_chg_lines == 0:
+                chg_disp = '新进'
+            else:
+                try:
+                    chg_wan = float(Decimal(str(sum_chg or 0)) / Decimal('10000'))
+                    chg_disp = f'{chg_wan:.2f}'
+                    if chg_wan > 0:
+                        chg_cls = 'rise'
+                    elif chg_wan < 0:
+                        chg_cls = 'fall'
+                except Exception:
+                    chg_disp = '--'
+
+            rc = ref_close.get(ts_code)
+            amt_yi = ''
+            if hold_sum is not None and rc is not None:
+                try:
+                    amt_yi = f'{float(Decimal(str(hold_sum)) * rc / Decimal("100000000")):.2f}'
+                except Exception:
+                    amt_yi = ''
+
+            vw = blended_last_by_ts.get(ts_code)
+            vwap_s = f'{float(vw):.2f}' if vw is not None else '--'
+
+            pct_20d_s = '--'
+            pct_vs_vwap_s = '--'
+            rtl_pair = rt_latest_map.get(ts_code)
+            if rtl_pair is not None:
+                p_now, _dr = rtl_pair
+                try:
+                    base20 = close_20d_map.get(ts_code)
+                    if base20 is not None and Decimal(str(base20)) != 0:
+                        p20 = (
+                            float(Decimal(str(p_now)) / Decimal(str(base20)) - Decimal('1'))
+                            * 100.0
+                        )
+                        pct_20d_s = f'{p20:+.2f}'
+                except Exception:
+                    pct_20d_s = '--'
+                try:
+                    if vw is not None and Decimal(str(vw)) != 0:
+                        pv = (
+                            float(Decimal(str(p_now)) / Decimal(str(vw)) - Decimal('1'))
+                            * 100.0
+                        )
+                        pct_vs_vwap_s = f'{pv:+.2f}'
+                except Exception:
+                    pct_vs_vwap_s = '--'
+
+            list_s = str(list_dt) if list_dt is not None else ''
+            period_s = str(report_end) if report_end is not None else '--'
+            ann_s = '--'
+            if ann_date_mx is not None:
+                try:
+                    ann_s = ann_date_mx.strftime('%Y-%m-%d')
+                except Exception:
+                    ann_s = str(ann_date_mx)
+                if ann_s == 'None':
+                    ann_s = '--'
+
+            rows_out.append(
+                {
+                    'ts_code': ts_code,
+                    'name': name or '--',
+                    'total_mv_yi': total_mv_yi or '--',
+                    'free_mv_yi': free_mv_yi or '--',
+                    'sw_name': sw_nm or '--',
+                    'list_date': list_s or '--',
+                    'ann_date': ann_s,
+                    'report_period': period_s,
+                    'hold_wan': hold_wan_s or '--',
+                    'hold_ratio': ratio_s or '--',
+                    'hold_change': chg_disp,
+                    'hold_change_cls': chg_cls,
+                    'amt_yi': amt_yi or '--',
+                    'vwap': vwap_s,
+                    'pct_20d': pct_20d_s,
+                    'pct_vs_vwap': pct_vs_vwap_s,
+                    'pct_20d_cls': _niusan_pct_display_cls(pct_20d_s),
+                    'pct_vs_vwap_cls': _niusan_pct_display_cls(pct_vs_vwap_s),
+                }
+            )
+        scheme_summaries_out = _niusan_scheme_summaries_for_report(conn, report_end)
+    except Exception as e:
+        logger.exception('牛散持股页查询失败: %s', e)
+        err_msg = str(e)
+        rows_out = []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    amt_sum_dec = Decimal('0')
+    for _row in rows_out:
+        _s = (_row.get('amt_yi') or '').strip()
+        if not _s or _s == '--':
+            continue
+        try:
+            amt_sum_dec += Decimal(str(_s))
+        except Exception:
+            pass
+    amt_yi_total_s = f'{float(amt_sum_dec):.2f}'
+    return {
+        'report_end_date': report_end,
+        'rows': rows_out,
+        'error': err_msg,
+        'amt_yi_total': amt_yi_total_s,
+        'scheme_summaries': scheme_summaries_out,
+    }
+
+
+def _query_niusan_floatholder_history(ts_code: str) -> dict:
+    """单只股票：锚定报告期（全表 MAX end_date）之前的各期四人合并持仓，按报告期从新到旧。"""
+    ts_norm = (ts_code or '').strip().upper()
+    if not re.match(r'^\d{6}\.(SH|SZ|BJ)$', ts_norm):
+        return {'ok': False, 'error': 'invalid ts_code', 'anchor_end_date': None, 'periods': []}
+
+    hw = _niusan_holder_where_clause('t')
+    hp = _niusan_holder_params()
+    conn = pymysql.connect(**DB_CONFIG_TUSHARE)
+    periods_out: list[dict[str, str]] = []
+    anchor: date | None = None
+    err_msg: str | None = None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'SELECT MAX(end_date) FROM top10_floatholders t WHERE {hw}', hp)
+            mx = cur.fetchone()
+            anchor = mx[0] if mx and mx[0] is not None else None
+        if anchor is None:
+            return {'ok': True, 'error': None, 'anchor_end_date': None, 'periods': []}
+
+        with conn.cursor() as cur:
+            cur.execute(
+                f'''
+                SELECT d.end_date,
+                       SUM(d.hold_amount) AS hold_sum,
+                       SUM(d.hold_float_ratio) AS ratio_sum,
+                       SUM(CASE WHEN d.hold_change IS NOT NULL THEN 1 ELSE 0 END) AS n_chg_lines,
+                       SUM(d.hold_change) AS sum_hold_change,
+                       MAX(d.ann_date) AS ann_date_max
+                FROM (
+                    SELECT t.end_date, t.hold_amount, t.hold_float_ratio, t.hold_change, t.ann_date,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY t.ts_code, t.end_date, t.holder_name
+                            ORDER BY t.ann_date IS NULL ASC, t.ann_date DESC, t.hold_amount DESC
+                        ) AS rn
+                    FROM top10_floatholders t
+                    WHERE t.ts_code = %s AND t.end_date < %s AND {hw}
+                ) d
+                WHERE d.rn = 1
+                GROUP BY d.end_date
+                ORDER BY d.end_date DESC
+                ''',
+                (ts_norm, anchor) + hp,
+            )
+            hist = cur.fetchall() or []
+
+        name_s = '--'
+        list_s = '--'
+        sw_nm = '--'
+        with conn.cursor() as cur:
+            cur.execute(
+                'SELECT COALESCE(name,""), list_date FROM stock_basic WHERE ts_code = %s LIMIT 1',
+                (ts_norm,),
+            )
+            sb = cur.fetchone()
+            if sb:
+                name_s = sb[0] or '--'
+                list_s = str(sb[1]) if sb[1] is not None else '--'
+            cur.execute(
+                '''
+                SELECT z.sw_name
+                FROM (
+                    SELECT m.ts_code, m.sw_name,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY m.ts_code
+                            ORDER BY m.in_date DESC, m.sw_name ASC
+                        ) AS rn
+                    FROM stock_tushare.index_member_all_sw m
+                    WHERE (m.is_new = 'Y' OR m.is_new IS NULL)
+                      AND m.sw_name IS NOT NULL AND m.sw_name <> ''
+                      AND m.ts_code = %s
+                ) z
+                WHERE z.rn = 1
+                ''',
+                (ts_norm,),
+            )
+            swr = cur.fetchone()
+            if swr and swr[0]:
+                sw_nm = swr[0]
+
+        vwap_blend_at_date: dict[date, Decimal | None] = {}
+        quarter_date_hist = _niusan_quarter_ends_backward_list(anchor, 48)
+        hold_stats_hist: dict[tuple[str, date], tuple[Decimal | None, int]] = {}
+        with conn.cursor() as cur:
+            hold_stats_hist = _niusan_fetch_hold_stats_batch(cur, [ts_norm], quarter_date_hist, hw, hp)
+            memo_h: dict[tuple[str, date], Decimal | None] = {}
+            for r in hist:
+                end_d_hist = r[0]
+                chain_hist = _niusan_hold_chain_quarter_walk(ts_norm, end_d_hist, hold_stats_hist)
+                ser_hist = _niusan_blended_vwap_series_decimal(cur, ts_norm, chain_hist, memo_h)
+                if chain_hist and ser_hist:
+                    vwap_blend_at_date[end_d_hist] = ser_hist[-1]
+
+        with conn.cursor() as cur:
+            for r in hist:
+                end_d = r[0]
+                hold_sum = r[1]
+                ratio_sum = r[2]
+                n_chg_lines = int(r[3] or 0)
+                sum_chg = r[4]
+                ann_hist = r[5]
+                ann_hist_s = '--'
+                if ann_hist is not None:
+                    try:
+                        ann_hist_s = ann_hist.strftime('%Y-%m-%d')
+                    except Exception:
+                        ann_hist_s = str(ann_hist)
+                    if ann_hist_s == 'None':
+                        ann_hist_s = '--'
+
+                cur.execute(
+                    '''
+                    SELECT close FROM stk_factor_pro
+                    WHERE ts_code = %s AND trade_date <= %s
+                    ORDER BY trade_date DESC LIMIT 1
+                    ''',
+                    (ts_norm, end_d),
+                )
+                rc_row = cur.fetchone()
+                rc = rc_row[0] if rc_row and rc_row[0] is not None else None
+
+                try:
+                    hold_wan = float(Decimal(str(hold_sum)) / Decimal('10000'))
+                    hold_wan_s = f'{hold_wan:.2f}'
+                except Exception:
+                    hold_wan_s = ''
+
+                try:
+                    ratio_s = f'{float(ratio_sum):.2f}' if ratio_sum is not None else ''
+                except Exception:
+                    ratio_s = ''
+
+                chg_cls = ''
+                if n_chg_lines == 0:
+                    chg_disp = '新进'
+                else:
+                    try:
+                        chg_wan = float(Decimal(str(sum_chg or 0)) / Decimal('10000'))
+                        chg_disp = f'{chg_wan:.2f}'
+                        if chg_wan > 0:
+                            chg_cls = 'rise'
+                        elif chg_wan < 0:
+                            chg_cls = 'fall'
+                    except Exception:
+                        chg_disp = '--'
+
+                amt_yi = ''
+                if hold_sum is not None and rc is not None:
+                    try:
+                        amt_yi = f'{float(Decimal(str(hold_sum)) * Decimal(str(rc)) / Decimal("100000000")):.2f}'
+                    except Exception:
+                        amt_yi = ''
+
+                vw_bl = vwap_blend_at_date.get(end_d) if end_d is not None else None
+                vwap_s = f'{float(vw_bl):.2f}' if vw_bl is not None else '--'
+
+                period_s = str(end_d) if end_d is not None else '--'
+
+                periods_out.append(
+                    {
+                        'ts_code': ts_norm,
+                        'name': name_s,
+                        'list_date': list_s,
+                        'total_mv_yi': '--',
+                        'free_mv_yi': '--',
+                        'sw_name': sw_nm or '--',
+                        'hold_wan': hold_wan_s or '--',
+                        'hold_ratio': ratio_s or '--',
+                        'hold_change': chg_disp,
+                        'hold_change_cls': chg_cls,
+                        'amt_yi': amt_yi or '--',
+                        'vwap': vwap_s,
+                        'pct_20d': '--',
+                        'pct_vs_vwap': '--',
+                        'pct_20d_cls': '',
+                        'pct_vs_vwap_cls': '',
+                        'ann_date': ann_hist_s,
+                        'report_period': period_s,
+                    }
+                )
+    except Exception as e:
+        logger.exception('牛散历史持仓查询失败: %s', e)
+        err_msg = str(e)
+        periods_out = []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    if err_msg:
+        return {
+            'ok': False,
+            'error': err_msg,
+            'anchor_end_date': str(anchor) if anchor else None,
+            'periods': [],
+        }
+    return {
+        'ok': True,
+        'error': None,
+        'anchor_end_date': str(anchor) if anchor else None,
+        'periods': periods_out,
+    }
+
+
+def _query_niusan_floatholder_detail(ts_code: str) -> dict:
+    """锚定报告期下该股各关联人明细行 + 与主表一致的合并口径 VWAP。"""
+    ts_norm = (ts_code or '').strip().upper()
+    if not re.match(r'^\d{6}\.(SH|SZ|BJ)$', ts_norm):
+        return {'ok': False, 'error': 'invalid ts_code'}
+    hw = _niusan_holder_where_clause('t')
+    hp = _niusan_holder_params()
+    conn = pymysql.connect(**DB_CONFIG_TUSHARE)
+    rows_out: list[dict[str, str]] = []
+    err_msg: str | None = None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'SELECT MAX(end_date) FROM top10_floatholders t WHERE {hw}', hp)
+            mx = cur.fetchone()
+            report_end = mx[0] if mx and mx[0] is not None else None
+        if report_end is None:
+            return {'ok': False, 'error': 'no_anchor'}
+
+        quarter_date_list = _niusan_quarter_ends_backward_list(report_end, 48)
+        vwap_s = '--'
+        name_s = '--'
+        with conn.cursor() as cur:
+            hold_stats = _niusan_fetch_hold_stats_batch(cur, [ts_norm], quarter_date_list, hw, hp)
+            chain = _niusan_hold_chain_quarter_walk(ts_norm, report_end, hold_stats)
+            memo_v: dict[tuple[str, date], Decimal | None] = {}
+            ser = _niusan_blended_vwap_series_decimal(cur, ts_norm, chain, memo_v)
+            vw_last = ser[-1] if ser else None
+            if vw_last is not None:
+                vwap_s = f'{float(vw_last):.2f}'
+
+            # 同一报告期、同一股东名可能多条（不同 ann_date 修订/重复入库）；明细弹窗按股东去重，保留最新公告日一行
+            cur.execute(
+                f'''
+                SELECT holder_name, hold_amount, hold_float_ratio, hold_change
+                FROM (
+                    SELECT holder_name, hold_amount, hold_float_ratio, hold_change,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY holder_name
+                            ORDER BY ann_date IS NULL ASC, ann_date DESC, hold_amount DESC
+                        ) AS rn
+                    FROM top10_floatholders t
+                    WHERE t.ts_code = %s AND t.end_date = %s AND {hw}
+                ) z
+                WHERE z.rn = 1
+                ORDER BY holder_name ASC
+                ''',
+                (ts_norm, report_end) + hp,
+            )
+            detail_rows = cur.fetchall() or []
+
+            cur.execute(
+                '''
+                SELECT close FROM stk_factor_pro
+                WHERE ts_code = %s AND trade_date <= %s
+                ORDER BY trade_date DESC LIMIT 1
+                ''',
+                (ts_norm, report_end),
+            )
+            rc_row = cur.fetchone()
+            rc = rc_row[0] if rc_row and rc_row[0] is not None else None
+
+            cur.execute(
+                'SELECT COALESCE(name,"") FROM stock_basic WHERE ts_code = %s LIMIT 1',
+                (ts_norm,),
+            )
+            nm_row = cur.fetchone()
+            if nm_row and nm_row[0]:
+                name_s = nm_row[0] or '--'
+
+        scheme_summaries = _niusan_scheme_summaries_for_report(conn, report_end)
+
+        for dr in detail_rows:
+            hn = dr[0] if dr[0] is not None else '--'
+            ham = dr[1]
+            hfr = dr[2]
+            hc = dr[3]
+            try:
+                hold_wan_s = (
+                    f'{float(Decimal(str(ham)) / Decimal("10000")):.2f}'
+                    if ham is not None
+                    else '--'
+                )
+            except Exception:
+                hold_wan_s = '--'
+            try:
+                ratio_s = f'{float(hfr):.2f}' if hfr is not None else '--'
+            except Exception:
+                ratio_s = '--'
+            chg_cls = ''
+            if hc is None:
+                chg_disp = '新进'
+            else:
+                try:
+                    chg_wan = float(Decimal(str(hc)) / Decimal('10000'))
+                    chg_disp = f'{chg_wan:.2f}'
+                    if chg_wan > 0:
+                        chg_cls = 'rise'
+                    elif chg_wan < 0:
+                        chg_cls = 'fall'
+                except Exception:
+                    chg_disp = '--'
+            amt_yi = '--'
+            if ham is not None and rc is not None:
+                try:
+                    amt_yi = f'{float(Decimal(str(ham)) * Decimal(str(rc)) / Decimal("100000000")):.2f}'
+                except Exception:
+                    amt_yi = '--'
+            rows_out.append(
+                {
+                    'holder_name': str(hn),
+                    'hold_wan': hold_wan_s,
+                    'hold_ratio': ratio_s,
+                    'hold_change': chg_disp,
+                    'hold_change_cls': chg_cls,
+                    'amt_yi': amt_yi,
+                    'vwap': vwap_s,
+                }
+            )
+
+        return {
+            'ok': True,
+            'error': None,
+            'ts_code': ts_norm,
+            'name': name_s,
+            'report_end': str(report_end),
+            'vwap_note': '合并口径持仓加权均价（该股关联人持股合计与主表一致）',
+            'scheme_summaries': scheme_summaries,
+            'rows': rows_out,
+        }
+    except Exception as e:
+        logger.exception('牛散持股明细查询失败: %s', e)
+        err_msg = str(e)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return {'ok': False, 'error': err_msg or 'unknown', 'rows': [], 'scheme_summaries': []}
+
+
+def _render_rt_monitor_niusan_no_cache():
+    """牛散持股单页：关联人 OR 合并；方案名与文案来自 niusan_holder_config.json。"""
+    payload = _query_niusan_holdings_page_rows()
+    sch = _get_active_niusan_scheme()
+    scheme_title = str(sch.get('schemeName') or '').strip() or '--'
+    holders_for_display = sch.get('holders') if isinstance(sch, dict) else None
+    if isinstance(holders_for_display, list):
+        related_join = ' / '.join(str(h).strip() for h in holders_for_display if isinstance(h, str) and h.strip())
+    else:
+        related_join = ''
+    active_sch = _get_active_niusan_scheme()
+    active_scheme_id = str(active_sch.get('id') or '') if isinstance(active_sch, dict) else ''
+    holder_cfg_embed = _niusan_holder_cfg_load()
+    resp = make_response(
+        render_template(
+            'rt_monitor_niusan.html',
+            niusan_rows=payload['rows'],
+            niusan_error=payload['error'],
+            niusan_amt_yi_total=payload.get('amt_yi_total', '0.00'),
+            niusan_scheme_title=scheme_title,
+            niusan_related_join=related_join,
+            niusan_scheme_summaries=payload.get('scheme_summaries') or [],
+            niusan_active_scheme_id=active_scheme_id,
+            niusan_holder_cfg_embed=holder_cfg_embed,
+        )
+    )
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['X-RT-Monitor-Build'] = RT_MONITOR_STATIC_VER
+    resp.headers['X-RT-Monitor-App'] = 'rt_monitor_app'
+    return resp
+
+
 # 只读 index_stat，不写表。TTL 内复用缓存，过期则重新读表
 rt_date_lists = None      # 启动时 get_historical_median() 取一次，供 API 返回 t5_dates 等
 rt_table_cache = None     # 最近一次读到的 12 行表格
@@ -1304,8 +2598,18 @@ _top_moves_cache: OrderedDict[int, tuple[float, dict]] = OrderedDict()
 MA_SIGNAL_SERIES_CACHE_TTL = 5.0
 MA_SIGNAL_SERIES_CACHE_MAX = 96
 _ma_signal_series_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
+# 申万行业页：与财报表同源底层数据，本接口为按行业维度的聚合；进程内长期有效（重启失效），LRU 见 MAX
+SW_INDUSTRY_STATS_CACHE_TTL = float('inf')
+SW_INDUSTRY_STATS_CACHE_MAX = 50
+# 响应 JSON 的 cache_ttl_sec：不可为 inf；0 表示进程内缓存、与 fina 策略一致
+SW_INDUSTRY_STATS_CACHE_TTL_API_SEC = 0
+_sw_industry_stats_cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
 FINA_ARTURN_TABLE_CACHE_TTL = 300.0  # 5 分钟：当期财报小时级以上才会变化，长 TTL 让启动预热 + 页面刷新稳定命中
-FINA_ARTURN_TABLE_CACHE_MAX = 48
+# 最多同时保留多少个「报告期」的整包 payload（每键一份全市场宽表 dict，与预热条数无必然相等；见下 FINA_ARTURN_WARMUP_*）
+# 粗算单期内存：行数约 4k～5.5k × 每行百级字段，Python 侧常落在约 10～50MB/期；50 键为上限非必占满，超出 LRU 淘汰最久未用
+FINA_ARTURN_TABLE_CACHE_MAX = 50
+# 启动后台预热：按 end_dates 顺序预取前 N 个报告期（与 MAX 独立；增大 N 会拉长启动阶段 DB 负载）
+FINA_ARTURN_WARMUP_PREFETCH_N = 3
 _fina_indicator_metric_table_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
 SLOW_API_WARN_SECONDS = 0.45
 
@@ -2797,10 +4101,9 @@ def _warmup_ma_signal_table_cache_async():
 
 
 def _warmup_fina_arturn_cache_async():
-    """启动时后台预热财报 arturn 筛选表最新报告期，避免用户首访时承担 4-8s 冷启动。
+    """启动时后台预热财报 arturn：按报告期列表顺序预取前 `FINA_ARTURN_WARMUP_PREFETCH_N` 期（默认 3），减轻首访与切换近期报告期的冷启动。
 
-    后台线程 daemon=True；失败静默（不影响启动）。预热目标直接写入 `_fina_indicator_metric_table_cache`
-    ；TTL=300s 足够覆盖"启动后 5 分钟内首次打开页面"的典型窗口。
+    后台线程 daemon=True；失败静默（不影响启动）。写入 `_fina_indicator_metric_table_cache`，TTL 与接口路径一致。
     """
     import threading
 
@@ -2811,25 +4114,72 @@ def _warmup_fina_arturn_cache_async():
             end_dates = _query_arturn_end_dates(limit_n=120)
             if not end_dates:
                 return
-            selected = end_dates[0]
-            cache_key = ('arturn_days', selected, 'sb_act_3')
-            hit = _small_ttl_cache_get(_fina_indicator_metric_table_cache, cache_key, time.time())
-            if hit is not None:
-                return
-            payload = _query_fina_arturn_table(selected)
-            if payload and not payload.get('error'):
-                _small_ttl_cache_put(
-                    _fina_indicator_metric_table_cache,
-                    cache_key,
-                    payload,
-                    FINA_ARTURN_TABLE_CACHE_TTL,
-                    FINA_ARTURN_TABLE_CACHE_MAX,
-                )
-                logger.info('财报 arturn 缓存已预热：end_date=%s rows=%d', selected, len(payload.get('rows') or []))
+            now_ts = time.time()
+            n = max(0, int(FINA_ARTURN_WARMUP_PREFETCH_N))
+            for idx in range(min(n, len(end_dates))):
+                selected = end_dates[idx]
+                cache_key = ('arturn_days', selected, 'sb_act_7')
+                if _small_ttl_cache_get(_fina_indicator_metric_table_cache, cache_key, now_ts) is not None:
+                    continue
+                payload = _query_fina_arturn_table(selected)
+                if payload and not payload.get('error'):
+                    _small_ttl_cache_put(
+                        _fina_indicator_metric_table_cache,
+                        cache_key,
+                        payload,
+                        FINA_ARTURN_TABLE_CACHE_TTL,
+                        FINA_ARTURN_TABLE_CACHE_MAX,
+                    )
+                    logger.info(
+                        '财报 arturn 缓存已预热 [%d/%d]：end_date=%s rows=%d',
+                        idx + 1,
+                        min(n, len(end_dates)),
+                        selected,
+                        len(payload.get('rows') or []),
+                    )
         except Exception as e:
             logger.warning('财报 arturn 预热失败（忽略不影响启动）: %s', e)
 
     t = threading.Thread(target=_worker, daemon=True, name='warmup-fina-arturn')
+    t.start()
+
+
+def _warmup_sw_industry_cache_async():
+    """启动时后台预热申万页默认一级行业视图（cache_key 与 `GET /api/sw_industry_stats?level=l1` 一致：`l1|||x8`）。
+
+    经 Flask test_client 走真实路由，结果写入 `_sw_industry_stats_cache`（与手动开页相同）。daemon 线程，失败仅打日志。
+    """
+    import threading
+
+    def _worker():
+        try:
+            import time as _t
+
+            _t.sleep(1.0)  # 与财报预热对齐，避免与启动峰值叠在同一瞬间
+            ck = 'l1|||x8'
+            now_ts = time.time()
+            if _small_ttl_cache_get(_sw_industry_stats_cache, ck, now_ts) is not None:
+                logger.debug('申万行业预热跳过：默认 L1 已在缓存')
+                return
+            with app.app_context():
+                with app.test_client() as tc:
+                    rv = tc.get('/api/sw_industry_stats?level=l1')
+            if rv.status_code != 200:
+                logger.warning(
+                    '申万行业预热 HTTP status=%s（忽略不影响启动）',
+                    getattr(rv, 'status_code', '?'),
+                )
+                return
+            try:
+                data = rv.get_json(silent=True) or {}
+                nrows = len(data.get('rows') or [])
+            except Exception:
+                nrows = -1
+            logger.info('申万行业统计缓存已预热：默认 L1（l1|||x8） rows=%s', nrows)
+        except Exception as e:
+            logger.warning('申万行业预热失败（忽略不影响启动）: %s', e)
+
+    t = threading.Thread(target=_worker, daemon=True, name='warmup-sw-industry')
     t.start()
 
 
@@ -3404,6 +4754,780 @@ def rt_monitor_margin():
     return _render_rt_monitor_margin_no_cache()
 
 
+@app.route('/rt-monitor/sw', strict_slashes=False)
+def rt_monitor_sw():
+    """申万一级行业分析页：展示行业代码、行业名称、家数。"""
+    return _render_rt_monitor_sw_no_cache()
+
+
+@app.route('/rt-monitor/niusan', strict_slashes=False)
+def rt_monitor_niusan():
+    """牛散持股页：配置见 niusan_holder_config.json（方案名展示，关联人参与匹配）。"""
+    return _render_rt_monitor_niusan_no_cache()
+
+
+@app.route('/rt-monitor/niusan/config', strict_slashes=False)
+def rt_monitor_niusan_config():
+    """牛散持股方案编辑：方案名、启用方案、关联人列表。"""
+    resp = make_response(render_template('rt_monitor_niusan_config.html'))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['X-RT-Monitor-Build'] = RT_MONITOR_STATIC_VER
+    resp.headers['X-RT-Monitor-App'] = 'rt_monitor_app'
+    return resp
+
+
+@app.route('/api/niusan_holder_config', methods=['GET', 'POST'], strict_slashes=False)
+def api_niusan_holder_config():
+    """读写牛散方案 JSON（工程目录 niusan_holder_config.json）。"""
+    global _niusan_holder_cfg_cached
+    if request.method == 'GET':
+        _niusan_holder_cfg_cached = None
+        return jsonify(_niusan_holder_cfg_load())
+    try:
+        body = request.get_json(force=True, silent=True)
+        if not isinstance(body, dict):
+            return jsonify({'ok': False, 'error': '请求体须为 JSON 对象'}), 400
+        cfg = _niusan_holder_cfg_save(body)
+        return jsonify({'ok': True, 'config': cfg})
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+    except Exception as e:
+        logger.exception('保存 niusan_holder_config 失败: %s', e)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/niusan_floatholder_history', methods=['GET'], strict_slashes=False)
+def api_niusan_floatholder_history():
+    """牛散持股历史：某代码在锚定报告期之前的各期合并行（用于表内 + 展开）。"""
+    ts_code = str(request.args.get('ts_code') or '').strip()
+    out = _query_niusan_floatholder_history(ts_code)
+    if not out.get('ok'):
+        err = out.get('error') or ''
+        code = 400 if err == 'invalid ts_code' else 500
+        return jsonify(out), code
+    return jsonify(out)
+
+
+@app.route('/api/niusan_floatholder_detail', methods=['GET'], strict_slashes=False)
+def api_niusan_floatholder_detail():
+    """牛散持股明细：锚定报告期下该股各关联人分行 + 合并口径 VWAP。"""
+    ts_code = str(request.args.get('ts_code') or '').strip()
+    out = _query_niusan_floatholder_detail(ts_code)
+    if not out.get('ok'):
+        err = out.get('error') or ''
+        code = 400 if err in ('invalid ts_code', 'no_anchor') else 500
+        return jsonify(out), code
+    return jsonify(out)
+
+
+@app.route('/api/niusan_scheme_holdings', methods=['GET'], strict_slashes=False)
+def api_niusan_scheme_holdings():
+    """指定方案 id 的持股明细（与主页表同结构；已按 rt_k 过滤代码）。"""
+    scheme_id = str(request.args.get('scheme_id') or '').strip()
+    if not scheme_id:
+        return jsonify({'ok': False, 'error': 'missing scheme_id'}), 400
+    payload = _query_niusan_holdings_page_rows(for_scheme_id=scheme_id)
+    err = payload.get('error')
+    if err == 'scheme_not_found':
+        return jsonify({'ok': False, 'error': err}), 404
+    if err == 'scheme_no_holders':
+        return jsonify({'ok': False, 'error': err}), 400
+    if err:
+        return jsonify({'ok': False, 'error': str(err)}), 500
+    red = payload.get('report_end_date')
+    red_s = red.isoformat() if hasattr(red, 'isoformat') else (str(red) if red else None)
+    sn_disp, rj_disp = _niusan_scheme_display_meta_by_id(scheme_id)
+    return jsonify(
+        {
+            'ok': True,
+            'rows': payload.get('rows') or [],
+            'amt_yi_total': payload.get('amt_yi_total', '0.00'),
+            'report_end_date': red_s,
+            'scheme_name': sn_disp,
+            'related_join': rj_disp,
+        }
+    )
+
+
+@app.route('/api/sw_industry_stats', methods=['GET'], strict_slashes=False)
+def api_sw_industry_stats():
+    """申万行业统计（支持 level=l1/l2/l3）：家数 + 最近13季单季营收（亿）+ 营收同比增速(%)
+    + 单季扣非净利（亿）+ 扣非同比增速(%)；营收/扣非同比均为上年同季可比口径；
+    s_high/s_qoq、dtp_high/dtp_qoq 为 s*/dtp* 各季序列的新高与环比连升次数（同 qcf_high/qcf_qoq 口径）；
+    + dnk{idx}：行业全样本上年同季负、当季正；可选扩展 has_sw_extend_metrics 时每季另含
+    ycf{idx} 单季经营现金流净额同比增速(%)（拆单季后与营收 y{idx} 同可比累加口径）、
+    ycfnk{idx}：ycf 为空但行业单季现金流合计（与 qcf 同源）上年同季<0 且当季>0 时为真，前端显示「转正」（对齐扣非 dy/dnk）；
+    qcf{idx} 单季经营现金流行业累计（亿）、qgm{idx} 单季毛利率行业中位数（%）、qroe{idx} 单季扣非ROE 行业中位数（%）、
+    qcf_high/qcf_qoq、qgm_high/qgm_qoq、qroe_high/qroe_qoq：对上述现金流累计或中位数13季序列的新高与环比连升次数（口径同财报页 m_high/m_qoq）；
+    cl{idx} 合同负债行业累计（亿）、fa{idx} 固定资产行业累计（亿）；取数与财报页 /rt-monitor/fina 单季逻辑一致；进程内 LRU 缓存。"""
+    level = str(request.args.get('level') or 'l1').strip().lower()
+    parent_l1_code = str(request.args.get('parent_l1_code') or '').strip()
+    parent_l2_code = str(request.args.get('parent_l2_code') or '').strip()
+    if level not in ('l1', 'l2', 'l3'):
+        level = 'l1'
+    if parent_l2_code:
+        level = 'l3'
+    # 只要指定了一级行业筛选，则按二级行业明细返回（满足“选一级看二级明细”）
+    elif parent_l1_code:
+        level = 'l2'
+    # x8：在 x7 基础上 s/dtp 组增加 s_high/s_qoq、dtp_high/dtp_qoq
+    cache_key = f'{level}|{parent_l1_code}|{parent_l2_code}|x8'
+    now_ts = time.time()
+    hit = _small_ttl_cache_get(_sw_industry_stats_cache, cache_key, now_ts)
+    if hit is not None:
+        return jsonify(hit)
+
+    conn = None
+    try:
+        has_sw_extend_metrics = False
+        conn = pymysql.connect(**DB_CONFIG_TUSHARE)
+        sql_sw = (
+            "SELECT z.ts_code, z.l1_code, z.l1_name, z.l2_code, z.l2_name, z.l3_code, z.l3_name "
+            "FROM ( "
+            "  SELECT m.ts_code, m.l1_code, m.l1_name, m.l2_code, m.l2_name, m.l3_code, m.l3_name, "
+            "    ROW_NUMBER() OVER (PARTITION BY m.ts_code ORDER BY m.in_date DESC, m.l1_code ASC, m.l2_code ASC, m.l2_name ASC) AS rn "
+            "  FROM stock_tushare.index_member_all_sw m "
+            "  WHERE (m.is_new = 'Y' OR m.is_new IS NULL) "
+            "    AND m.l1_code IS NOT NULL AND m.l1_code <> '' "
+            "    AND m.l1_name IS NOT NULL AND m.l1_name <> '' "
+            "    AND m.l2_code IS NOT NULL AND m.l2_code <> '' "
+            "    AND m.l2_name IS NOT NULL AND m.l2_name <> '' "
+            ") z "
+            "WHERE z.rn = 1"
+        )
+        with conn.cursor() as cur:
+            cur.execute(sql_sw)
+            sw_rows = cur.fetchall() or []
+        if not sw_rows:
+            payload = {
+                'success': True,
+                'rows': [],
+                'summary_row': None,
+                'periods': [],
+                'has_q_dtprofit': False,
+                'level': level,
+                'selected_l1_code': parent_l1_code,
+                'selected_l1_name': None,
+                'selected_l2_code': parent_l2_code,
+                'selected_l2_name': None,
+                'l1_options': [],
+                'l2_options': [],
+                'count': 0,
+                'has_sw_extend_metrics': False,
+                'cache_ttl_sec': SW_INDUSTRY_STATS_CACHE_TTL_API_SEC,
+            }
+            _small_ttl_cache_put(
+                _sw_industry_stats_cache,
+                cache_key,
+                payload,
+                SW_INDUSTRY_STATS_CACHE_TTL,
+                SW_INDUSTRY_STATS_CACHE_MAX,
+            )
+            return jsonify(payload)
+
+        ts_to_ind: dict[str, tuple[str, str]] = {}
+        ts_to_parent: dict[str, tuple[str, str]] = {}
+        ind_meta: dict[str, dict] = {}
+        l1_option_map: dict[str, str] = {}
+        l2_option_map: dict[str, str] = {}
+        for row in sw_rows:
+            ts_code = str(row[0] or '').strip()
+            l1_code = str(row[1] or '').strip()
+            l1_name = str(row[2] or '').strip()
+            l2_code = str(row[3] or '').strip()
+            l2_name = str(row[4] or '').strip()
+            l3_code = str(row[5] or '').strip()
+            l3_name = str(row[6] or '').strip()
+            if not ts_code or not l1_code or not l2_code:
+                continue
+            l1_option_map[l1_code] = l1_name
+            if not parent_l1_code or l1_code == parent_l1_code:
+                l2_option_map[l2_code] = l2_name
+            if parent_l1_code and l1_code != parent_l1_code:
+                continue
+            if parent_l2_code and l2_code != parent_l2_code:
+                continue
+            if level == 'l2':
+                group_code = l2_code
+                group_name = l2_name
+            elif level == 'l3':
+                if not l3_code or not l3_name:
+                    continue
+                group_code = l3_code
+                group_name = l3_name
+            else:
+                group_code = l1_code
+                group_name = l1_name
+            ts_to_ind[ts_code] = (group_code, group_name)
+            ts_to_parent[ts_code] = (l1_code, l1_name)
+            if group_code not in ind_meta:
+                ind_meta[group_code] = {'l1_name': group_name, 'company_count': 0}
+            ind_meta[group_code]['company_count'] += 1
+        ts_by_l1: dict[str, list[str]] = defaultdict(list)
+        for _ts, (_lc, _) in ts_to_ind.items():
+            ts_by_l1[_lc].append(_ts)
+        ts_codes = sorted(ts_to_ind.keys())
+        if not ts_codes:
+            payload = {
+                'success': True,
+                'rows': [],
+                'summary_row': None,
+                'periods': [],
+                'has_q_dtprofit': False,
+                'level': level,
+                'selected_l1_code': parent_l1_code,
+                'selected_l1_name': l1_option_map.get(parent_l1_code),
+                'selected_l2_code': parent_l2_code,
+                'selected_l2_name': l2_option_map.get(parent_l2_code),
+                'l1_options': [{'l1_code': k, 'l1_name': v} for k, v in sorted(l1_option_map.items(), key=lambda x: x[1])],
+                'l2_options': [{'l2_code': k, 'l2_name': v} for k, v in sorted(l2_option_map.items(), key=lambda x: x[1])],
+                'count': 0,
+                'has_sw_extend_metrics': False,
+                'cache_ttl_sec': SW_INDUSTRY_STATS_CACHE_TTL_API_SEC,
+            }
+            _small_ttl_cache_put(
+                _sw_industry_stats_cache,
+                cache_key,
+                payload,
+                SW_INDUSTRY_STATS_CACHE_TTL,
+                SW_INDUSTRY_STATS_CACHE_MAX,
+            )
+            return jsonify(payload)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT end_date FROM stock_tushare.income "
+                "WHERE end_date IS NOT NULL "
+                "ORDER BY end_date DESC LIMIT 13"
+            )
+            raw_periods = cur.fetchall() or []
+        periods = [_normalize_end_date_yyyymmdd(r[0]) for r in raw_periods if r and r[0] is not None]
+        periods = [p for p in periods if p]
+
+        has_inc_rt = _tushare_column_exists(conn, 'income', 'report_type')
+        date_keys = _fina_income_date_keys_with_yoy_for_periods(periods)
+        rev_nested = _fina_batch_income_total_revenue(conn, ts_codes, date_keys, has_inc_rt)
+
+        has_q_dtprofit = _tushare_column_exists(conn, 'fina_indicator', 'q_dtprofit')
+        has_fi_rt = _tushare_column_exists(conn, 'fina_indicator', 'report_type')
+        dtp_nested: dict[str, dict[str, float]] = {}
+        if has_q_dtprofit:
+            dtp_period_keys = _fina_periods_union_yoy_for_q_dtprofit(periods)
+            dtp_nested = _fina_batch_fina_indicator_q_dtprofit(
+                conn, ts_codes, dtp_period_keys, has_fi_rt
+            )
+
+        ind_rev: dict[str, dict[str, float]] = defaultdict(dict)
+        for l1_code in ind_meta.keys():
+            for p in periods:
+                ind_rev[l1_code][p] = 0.0
+        for ts_code, rev_map in rev_nested.items():
+            ind_info = ts_to_ind.get(ts_code)
+            if ind_info is None:
+                continue
+            l1_code = ind_info[0]
+            for p in periods:
+                yq = _fina_yq_from_anchor(p)
+                if not yq:
+                    continue
+                sq = _fina_quarter_single_revenue(rev_map, yq[0], yq[1])
+                if sq is not None:
+                    ind_rev[l1_code][p] += float(sq)
+
+        # 申万锁定区新增：总市值/自由市值（口径对齐财报页）
+        # total_mv_yi: stk_factor_pro.total_mv(万元)/10000 => 亿元
+        # free_mv_yi: stk_factor_pro.free_share(万股) * rt_k.close(元/股) /10000 => 亿元
+        ind_total_mv: dict[str, float] = defaultdict(float)
+        ind_free_mv: dict[str, float] = defaultdict(float)
+        market_total_mv = 0.0
+        market_free_mv = 0.0
+        has_tmv = _tushare_column_exists(conn, 'stk_factor_pro', 'total_mv')
+        has_fs = _tushare_column_exists(conn, 'stk_factor_pro', 'free_share')
+        if has_tmv or has_fs:
+            max_d = None
+            with conn.cursor() as cur:
+                cur.execute('SELECT MAX(trade_date) FROM stock_tushare.stk_factor_pro')
+                mx = cur.fetchone()
+                if mx and mx[0] is not None:
+                    max_d = mx[0]
+            sfp_map: dict[str, tuple[float | None, float | None]] = {}
+            if max_d is not None:
+                sel_cols = ['ts_code']
+                if has_tmv:
+                    sel_cols.append('total_mv')
+                if has_fs:
+                    sel_cols.append('free_share')
+                col_sql = ', '.join(sel_cols)
+                chunk = 480
+                for i in range(0, len(ts_codes), chunk):
+                    part = ts_codes[i : i + chunk]
+                    if not part:
+                        continue
+                    ph = ', '.join(['%s'] * len(part))
+                    sql = (
+                        f'SELECT {col_sql} FROM stock_tushare.stk_factor_pro '
+                        f'WHERE trade_date = %s AND ts_code IN ({ph})'
+                    )
+                    with conn.cursor() as cur:
+                        cur.execute(sql, (max_d, *part))
+                        for raw in cur.fetchall() or []:
+                            if not raw or raw[0] is None:
+                                continue
+                            tc = str(raw[0]).strip()
+                            if not tc:
+                                continue
+                            idx = 1
+                            tmv_v = None
+                            fs_v = None
+                            if has_tmv:
+                                tmv_v = raw[idx] if len(raw) > idx else None
+                                idx += 1
+                            if has_fs:
+                                fs_v = raw[idx] if len(raw) > idx else None
+                            tmv_num = None
+                            fs_num = None
+                            try:
+                                if tmv_v is not None:
+                                    tmv_num = float(tmv_v) / 10000.0
+                            except (TypeError, ValueError):
+                                tmv_num = None
+                            try:
+                                if fs_v is not None:
+                                    fs_num = float(fs_v)
+                            except (TypeError, ValueError):
+                                fs_num = None
+                            sfp_map[tc] = (tmv_num, fs_num)
+
+            close_map: dict[str, float] = {}
+            if has_fs:
+                try:
+                    conn_w = pymysql.connect(**DB_CONFIG)
+                    try:
+                        chunk = 480
+                        for i in range(0, len(ts_codes), chunk):
+                            part = ts_codes[i : i + chunk]
+                            if not part:
+                                continue
+                            ph = ', '.join(['%s'] * len(part))
+                            sql = (
+                                'SELECT ts_code, close FROM ('
+                                '  SELECT ts_code, close, '
+                                '    ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_time DESC) AS rn '
+                                '  FROM rt_k WHERE ts_code IN (' + ph + ')'
+                                ') x WHERE rn = 1'
+                            )
+                            with conn_w.cursor() as cur:
+                                cur.execute(sql, tuple(part))
+                                for r2 in cur.fetchall() or []:
+                                    if not r2 or r2[0] is None or r2[1] is None:
+                                        continue
+                                    tc2 = str(r2[0]).strip()
+                                    if not tc2:
+                                        continue
+                                    try:
+                                        close_map[tc2] = float(r2[1])
+                                    except (TypeError, ValueError):
+                                        continue
+                    finally:
+                        conn_w.close()
+                except Exception as e:
+                    logger.warning('sw_industry_stats 查询 rt_k close 失败，自由市值将不完整: %s', e)
+
+            for tc in ts_codes:
+                ind_info = ts_to_ind.get(tc)
+                if ind_info is None:
+                    continue
+                l1_code = ind_info[0]
+                pair = sfp_map.get(tc)
+                if not pair:
+                    continue
+                tmv_yi, fs_wangu = pair
+                if tmv_yi is not None:
+                    ind_total_mv[l1_code] += float(tmv_yi)
+                    market_total_mv += float(tmv_yi)
+                if fs_wangu is not None:
+                    close_v = close_map.get(tc)
+                    if close_v is not None:
+                        free_yi = float(fs_wangu) * float(close_v) / 10000.0
+                        ind_free_mv[l1_code] += free_yi
+                        market_free_mv += free_yi
+
+        period_keys_for_dtp: set[str] = set()
+        ind_dtp: dict[str, dict[str, float]] = defaultdict(dict)
+        market_dtp_by_p: dict[str, float] = defaultdict(float)
+        if has_q_dtprofit:
+            period_keys_for_dtp = set(periods)
+            for _p in periods:
+                _pp = _fina_yoy_anchor_end_date(_p)
+                if _pp:
+                    period_keys_for_dtp.add(_pp)
+            for l1_code in ind_meta.keys():
+                for pk in period_keys_for_dtp:
+                    ind_dtp[l1_code][pk] = 0.0
+            for ts_code, ed_map in dtp_nested.items():
+                ind_info = ts_to_ind.get(ts_code)
+                if ind_info is None:
+                    continue
+                l1_code = ind_info[0]
+                for pk in period_keys_for_dtp:
+                    pv = ed_map.get(pk)
+                    if pv is not None:
+                        ind_dtp[l1_code][pk] += float(pv)
+            for l1_code in ind_meta.keys():
+                for pk in period_keys_for_dtp:
+                    market_dtp_by_p[pk] += float(ind_dtp[l1_code][pk])
+
+        # 扩展指标（口径对齐财报页 fina-arturn）：经营现金流单季(亿，行业个股累计)、毛利率/ROE扣非(行业均值)、合同负债/固定资产(亿，累计)
+        cf_nested_sw: dict[str, dict[str, float]] = {}
+        margin_nested_sw: dict[str, dict[str, tuple[float | None, float | None]]] = {}
+        bs_cf_nested_sw: dict[str, dict[str, tuple[float | None, float | None]]] = {}
+        if periods and ts_codes:
+            has_n_cf_sw = _tushare_column_exists(conn, 'cashflow', 'n_cashflow_act')
+            has_cf_rt_sw = _tushare_column_exists(conn, 'cashflow', 'report_type')
+            has_q_gs_sw = _tushare_column_exists(conn, 'fina_indicator', 'q_gsprofit_margin')
+            has_q_dt_roe_sw = _tushare_column_exists(conn, 'fina_indicator', 'q_dt_roe')
+            has_bs_rt_sw = _tushare_column_exists(conn, 'balancesheet', 'report_type')
+            has_adv_sw = _tushare_column_exists(conn, 'balancesheet', 'adv_receipts')
+            has_cl_sw = _tushare_column_exists(conn, 'balancesheet', 'contract_liab')
+            has_fa_sw = _tushare_column_exists(conn, 'balancesheet', 'fix_assets_total')
+            cf_keys_sq = _fina_income_date_keys_with_yoy_for_periods(periods)
+            if has_n_cf_sw:
+                try:
+                    cf_nested_sw = _fina_batch_cashflow_n_cashflow_act(
+                        conn, ts_codes, cf_keys_sq, has_cf_rt_sw
+                    )
+                    has_sw_extend_metrics = True
+                except Exception as e:
+                    logger.warning('sw_industry_stats 经营现金流批量读取失败: %s', e)
+            if has_q_gs_sw or has_q_dt_roe_sw:
+                try:
+                    margin_nested_sw = _fina_batch_fina_indicator_q_gs_margin_q_dt_roe(
+                        conn,
+                        ts_codes,
+                        periods,
+                        has_fi_rt,
+                        has_q_gs_sw,
+                        has_q_dt_roe_sw,
+                    )
+                    has_sw_extend_metrics = True
+                except Exception as e:
+                    logger.warning('sw_industry_stats 毛利率/ROE(扣非)批量读取失败: %s', e)
+            if has_cl_sw or has_fa_sw:
+                try:
+                    bs_cf_nested_sw = _fina_batch_balancesheet_contract_fix_yi(
+                        conn,
+                        ts_codes,
+                        periods,
+                        has_bs_rt=has_bs_rt_sw,
+                        has_adv=has_adv_sw,
+                        has_contract=has_cl_sw,
+                        has_fix=has_fa_sw,
+                    )
+                    has_sw_extend_metrics = True
+                except Exception as e:
+                    logger.warning('sw_industry_stats 合同负债/固定资产批量读取失败: %s', e)
+
+        rows = []
+        for l1_code in sorted(ind_meta.keys()):
+            row = {
+                'l1_code': l1_code,
+                'l1_name': ind_meta[l1_code].get('l1_name'),
+                'company_count': int(ind_meta[l1_code].get('company_count') or 0),
+                'total_mv_yi': round(float(ind_total_mv.get(l1_code, 0.0)), 2),
+                'free_mv_yi': round(float(ind_free_mv.get(l1_code, 0.0)), 2),
+            }
+            for idx, p in enumerate(periods):
+                row[f's{idx}'] = round((ind_rev.get(l1_code, {}).get(p, 0.0) / 100000000.0), 2)
+            if has_q_dtprofit:
+                for idx, p in enumerate(periods):
+                    cur_raw = float(ind_dtp.get(l1_code, {}).get(p, 0.0))
+                    row[f'dtp{idx}'] = round(cur_raw / 100000000.0, 2)
+                    pp = _fina_yoy_anchor_end_date(p)
+                    prev_raw = float(ind_dtp.get(l1_code, {}).get(pp, 0.0)) if pp else 0.0
+                    row[f'dnk{idx}'] = bool(pp and prev_raw < 0 and cur_raw > 0)
+            else:
+                for idx in range(len(periods)):
+                    row[f'dtp{idx}'] = None
+            _sw_attach_high_qoq_pair(row, 's', 's_high', 's_qoq', len(periods))
+            _sw_attach_high_qoq_pair(row, 'dtp', 'dtp_high', 'dtp_qoq', len(periods))
+            for idx, p in enumerate(periods):
+                yv = _sw_rev_yoy_yoypct_for_codes(ts_by_l1.get(l1_code, []), rev_nested, p)
+                row[f'y{idx}'] = round(yv, 2) if yv is not None else None
+            if has_q_dtprofit:
+                for idx, p in enumerate(periods):
+                    dyv = _sw_dtp_yoy_yoypct_for_codes(ts_by_l1.get(l1_code, []), dtp_nested, p)
+                    row[f'dy{idx}'] = round(dyv, 2) if dyv is not None else None
+            if has_sw_extend_metrics:
+                ts_list = ts_by_l1.get(l1_code, [])
+                for idx, p in enumerate(periods):
+                    ycfv = _sw_cf_yoy_yoypct_for_codes(
+                        ts_list, cf_nested_sw, p
+                    )
+                    row[f'ycf{idx}'] = (
+                        round(ycfv, 2) if ycfv is not None else None
+                    )
+                    pp_y = _fina_yoy_anchor_end_date(p)
+                    if pp_y:
+                        cur_cf_y = _sw_cf_industry_single_q_sum_yuan(
+                            ts_list, cf_nested_sw, p
+                        )
+                        prev_cf_y = _sw_cf_industry_single_q_sum_yuan(
+                            ts_list, cf_nested_sw, pp_y
+                        )
+                        row[f'ycfnk{idx}'] = bool(
+                            cur_cf_y is not None
+                            and prev_cf_y is not None
+                            and prev_cf_y < 0
+                            and cur_cf_y > 0
+                        )
+                    else:
+                        row[f'ycfnk{idx}'] = False
+                for idx, p in enumerate(periods):
+                    tot_yuan = 0.0
+                    any_ocf = False
+                    for tc in ts_list:
+                        yq = _fina_yq_from_anchor(p)
+                        if not yq:
+                            continue
+                        sq = _fina_quarter_single_revenue(
+                            cf_nested_sw.get(tc, {}), yq[0], yq[1]
+                        )
+                        if sq is not None:
+                            tot_yuan += float(sq)
+                            any_ocf = True
+                    row[f'qcf{idx}'] = (
+                        round(tot_yuan / 100000000.0, 2) if any_ocf else None
+                    )
+                    gms: list[float] = []
+                    roes: list[float] = []
+                    for tc in ts_list:
+                        tup_m = margin_nested_sw.get(tc, {}).get(p)
+                        if not tup_m:
+                            continue
+                        if tup_m[0] is not None:
+                            gms.append(float(tup_m[0]))
+                        if tup_m[1] is not None:
+                            roes.append(float(tup_m[1]))
+                    row[f'qgm{idx}'] = _sw_median_rounded(gms)
+                    row[f'qroe{idx}'] = _sw_median_rounded(roes)
+                    cs = 0.0
+                    fs = 0.0
+                    any_cl = False
+                    any_fa = False
+                    for tc in ts_list:
+                        tup_b = bs_cf_nested_sw.get(tc, {}).get(p)
+                        if not tup_b:
+                            continue
+                        if tup_b[0] is not None:
+                            cs += float(tup_b[0])
+                            any_cl = True
+                        if tup_b[1] is not None:
+                            fs += float(tup_b[1])
+                            any_fa = True
+                    row[f'cl{idx}'] = round(cs, 2) if any_cl else None
+                    row[f'fa{idx}'] = round(fs, 2) if any_fa else None
+                _sw_attach_high_qoq_pair(
+                    row, 'qcf', 'qcf_high', 'qcf_qoq', len(periods)
+                )
+                _sw_attach_high_qoq_pair(
+                    row, 'qgm', 'qgm_high', 'qgm_qoq', len(periods)
+                )
+                _sw_attach_high_qoq_pair(
+                    row, 'qroe', 'qroe_high', 'qroe_qoq', len(periods)
+                )
+            else:
+                for idx in range(len(periods)):
+                    row[f'ycf{idx}'] = None
+                    row[f'ycfnk{idx}'] = None
+                    row[f'qcf{idx}'] = None
+                    row[f'qgm{idx}'] = None
+                    row[f'qroe{idx}'] = None
+                    row[f'cl{idx}'] = None
+                    row[f'fa{idx}'] = None
+                row['qcf_high'] = None
+                row['qcf_qoq'] = None
+                row['qgm_high'] = None
+                row['qgm_qoq'] = None
+                row['qroe_high'] = None
+                row['qroe_qoq'] = None
+            rows.append(row)
+
+        summary_row: dict | None = None
+        if rows:
+            selected_l1_name = l1_option_map.get(parent_l1_code) if parent_l1_code else None
+            selected_l2_name = l2_option_map.get(parent_l2_code) if parent_l2_code else None
+            summary_row = {
+                'l1_code': '',
+                'l1_name': selected_l2_name or selected_l1_name or '全部A股',
+                'company_count': sum(int(r.get('company_count') or 0) for r in rows),
+                'total_mv_yi': round(float(market_total_mv), 2),
+                'free_mv_yi': round(float(market_free_mv), 2),
+                'is_summary': True,
+            }
+            for idx in range(len(periods)):
+                summary_row[f's{idx}'] = round(
+                    sum(float(r.get(f's{idx}') or 0) for r in rows), 2
+                )
+            if has_q_dtprofit:
+                for idx in range(len(periods)):
+                    summary_row[f'dtp{idx}'] = round(
+                        sum(float(r.get(f'dtp{idx}') or 0) for r in rows), 2
+                    )
+                for idx, p in enumerate(periods):
+                    pp = _fina_yoy_anchor_end_date(p)
+                    cur_m = float(market_dtp_by_p.get(p, 0.0))
+                    prev_m = float(market_dtp_by_p.get(pp, 0.0)) if pp else 0.0
+                    summary_row[f'dnk{idx}'] = bool(pp and prev_m < 0 and cur_m > 0)
+            else:
+                for idx in range(len(periods)):
+                    summary_row[f'dtp{idx}'] = None
+            for idx, p in enumerate(periods):
+                ysum = _sw_rev_yoy_yoypct_for_codes(ts_codes, rev_nested, p)
+                summary_row[f'y{idx}'] = round(ysum, 2) if ysum is not None else None
+            if has_q_dtprofit:
+                for idx, p in enumerate(periods):
+                    dys = _sw_dtp_yoy_yoypct_for_codes(ts_codes, dtp_nested, p)
+                    summary_row[f'dy{idx}'] = round(dys, 2) if dys is not None else None
+            _sw_attach_high_qoq_pair(
+                summary_row, 's', 's_high', 's_qoq', len(periods)
+            )
+            _sw_attach_high_qoq_pair(
+                summary_row, 'dtp', 'dtp_high', 'dtp_qoq', len(periods)
+            )
+            if has_sw_extend_metrics:
+                for idx, p in enumerate(periods):
+                    ycfv_s = _sw_cf_yoy_yoypct_for_codes(
+                        ts_codes, cf_nested_sw, p
+                    )
+                    summary_row[f'ycf{idx}'] = (
+                        round(ycfv_s, 2) if ycfv_s is not None else None
+                    )
+                    pp_s = _fina_yoy_anchor_end_date(p)
+                    if pp_s:
+                        cur_cf_s = _sw_cf_industry_single_q_sum_yuan(
+                            ts_codes, cf_nested_sw, p
+                        )
+                        prev_cf_s = _sw_cf_industry_single_q_sum_yuan(
+                            ts_codes, cf_nested_sw, pp_s
+                        )
+                        summary_row[f'ycfnk{idx}'] = bool(
+                            cur_cf_s is not None
+                            and prev_cf_s is not None
+                            and prev_cf_s < 0
+                            and cur_cf_s > 0
+                        )
+                    else:
+                        summary_row[f'ycfnk{idx}'] = False
+                for idx, p in enumerate(periods):
+                    tot_yuan = 0.0
+                    any_ocf = False
+                    for tc in ts_codes:
+                        yq = _fina_yq_from_anchor(p)
+                        if not yq:
+                            continue
+                        sq = _fina_quarter_single_revenue(
+                            cf_nested_sw.get(tc, {}), yq[0], yq[1]
+                        )
+                        if sq is not None:
+                            tot_yuan += float(sq)
+                            any_ocf = True
+                    summary_row[f'qcf{idx}'] = (
+                        round(tot_yuan / 100000000.0, 2) if any_ocf else None
+                    )
+                    gms_m: list[float] = []
+                    roes_m: list[float] = []
+                    for tc in ts_codes:
+                        tup_mm = margin_nested_sw.get(tc, {}).get(p)
+                        if not tup_mm:
+                            continue
+                        if tup_mm[0] is not None:
+                            gms_m.append(float(tup_mm[0]))
+                        if tup_mm[1] is not None:
+                            roes_m.append(float(tup_mm[1]))
+                    summary_row[f'qgm{idx}'] = _sw_median_rounded(gms_m)
+                    summary_row[f'qroe{idx}'] = _sw_median_rounded(roes_m)
+                    cs_m = 0.0
+                    fs_m = 0.0
+                    any_cl_m = False
+                    any_fa_m = False
+                    for tc in ts_codes:
+                        tup_bm = bs_cf_nested_sw.get(tc, {}).get(p)
+                        if not tup_bm:
+                            continue
+                        if tup_bm[0] is not None:
+                            cs_m += float(tup_bm[0])
+                            any_cl_m = True
+                        if tup_bm[1] is not None:
+                            fs_m += float(tup_bm[1])
+                            any_fa_m = True
+                    summary_row[f'cl{idx}'] = round(cs_m, 2) if any_cl_m else None
+                    summary_row[f'fa{idx}'] = round(fs_m, 2) if any_fa_m else None
+                _sw_attach_high_qoq_pair(
+                    summary_row, 'qcf', 'qcf_high', 'qcf_qoq', len(periods)
+                )
+                _sw_attach_high_qoq_pair(
+                    summary_row, 'qgm', 'qgm_high', 'qgm_qoq', len(periods)
+                )
+                _sw_attach_high_qoq_pair(
+                    summary_row, 'qroe', 'qroe_high', 'qroe_qoq', len(periods)
+                )
+            elif summary_row is not None:
+                for idx in range(len(periods)):
+                    summary_row[f'ycf{idx}'] = None
+                    summary_row[f'ycfnk{idx}'] = None
+                    summary_row[f'qcf{idx}'] = None
+                    summary_row[f'qgm{idx}'] = None
+                    summary_row[f'qroe{idx}'] = None
+                    summary_row[f'cl{idx}'] = None
+                    summary_row[f'fa{idx}'] = None
+                summary_row['qcf_high'] = None
+                summary_row['qcf_qoq'] = None
+                summary_row['qgm_high'] = None
+                summary_row['qgm_qoq'] = None
+                summary_row['qroe_high'] = None
+                summary_row['qroe_qoq'] = None
+
+        payload = {
+            'success': True,
+            'rows': rows,
+            'summary_row': summary_row,
+            'periods': periods,
+            'has_q_dtprofit': bool(has_q_dtprofit),
+            'has_rev_yoy': len(periods) > 0,
+            'has_dtp_yoy': bool(has_q_dtprofit and len(periods) > 0),
+            'level': level,
+            'selected_l1_code': parent_l1_code,
+            'selected_l1_name': l1_option_map.get(parent_l1_code),
+            'selected_l2_code': parent_l2_code,
+            'selected_l2_name': l2_option_map.get(parent_l2_code),
+            'l1_options': [{'l1_code': k, 'l1_name': v} for k, v in sorted(l1_option_map.items(), key=lambda x: x[1])],
+            'l2_options': [{'l2_code': k, 'l2_name': v} for k, v in sorted(l2_option_map.items(), key=lambda x: x[1])],
+            'count': len(rows),
+            'has_sw_extend_metrics': bool(
+                has_sw_extend_metrics and len(periods) > 0
+            ),
+            'cache_ttl_sec': SW_INDUSTRY_STATS_CACHE_TTL_API_SEC,
+        }
+        _small_ttl_cache_put(
+            _sw_industry_stats_cache,
+            cache_key,
+            payload,
+            SW_INDUSTRY_STATS_CACHE_TTL,
+            SW_INDUSTRY_STATS_CACHE_MAX,
+        )
+        return jsonify(payload)
+    except Exception as e:
+        logger.error('读取申万行业统计（含单季营收/扣非净利）失败: %s', e)
+        return jsonify({'success': False, 'error': str(e), 'rows': []}), 500
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 @app.route('/api/rt_median')
 def get_rt_median():
     """行情涨跌中位数 API：只读 index_stat。按 TTL 重新读表以拿到盘中实时统计写入的最新数据。
@@ -3974,6 +6098,17 @@ def _fina_yq_from_anchor(anchor_yyyymmdd: str) -> tuple[int, int] | None:
     return int(s[:4]), qmap[m]
 
 
+def _fina_yoy_anchor_end_date(anchor_yyyymmdd: str) -> str | None:
+    """上年同季财报期末 YYYYMMDD（同比锚点），如 20260331→20250331。"""
+    yq = _fina_yq_from_anchor(anchor_yyyymmdd)
+    if not yq:
+        return None
+    y, q = yq
+    if y <= 1900:
+        return None
+    return _fina_end_date_str_from_yq(y - 1, q)
+
+
 def _fina_ttm_income_date_keys(anchor_yyyymmdd: str) -> set[str]:
     """TTM 单季拆解所需的 income.end_date 键集合（YYYYMMDD）。"""
     yq = _fina_yq_from_anchor(anchor_yyyymmdd)
@@ -4007,6 +6142,207 @@ def _fina_income_date_keys_for_single_quarter_revenue(period_yyyymmdd_list: list
         if q > 1:
             out.add(_fina_end_date_str_from_yq(y, q - 1))
     return out
+
+
+def _fina_income_date_keys_with_yoy_for_periods(period_yyyymmdd_list: list[str]) -> set[str]:
+    """单季营收展示期对应的 income 键 + 各期「上年同季」拆单季营收所需键（用于同比增速）。"""
+    out = _fina_income_date_keys_for_single_quarter_revenue(period_yyyymmdd_list)
+    for raw in period_yyyymmdd_list:
+        norm = _normalize_end_date_yyyymmdd(raw)
+        if not norm:
+            continue
+        prev_ed = _fina_yoy_anchor_end_date(norm)
+        if not prev_ed:
+            continue
+        out |= _fina_income_date_keys_for_single_quarter_revenue([prev_ed])
+    return out
+
+
+def _sw_median_rounded(values: list[float], ndigits: int = 2) -> float | None:
+    """申万扩展列 qgm/qroe：对行业内（或全市场）有值个股的样本求中位数；空样本返回 None。"""
+    if not values:
+        return None
+    return round(float(statistics.median(values)), ndigits)
+
+
+def _sw_attach_high_qoq_pair(
+    row_obj: dict,
+    metric_prefix: str,
+    high_key: str,
+    qoq_key: str,
+    series_len: int,
+) -> None:
+    """对齐财报页 _fina_arturn_attach_quarter_margins 内 _attach_high_qoq：prefix0 为最新季，序列内新高与环比连升次数。"""
+    m0v = row_obj.get(f'{metric_prefix}0')
+    if m0v is None:
+        row_obj[high_key] = None
+        row_obj[qoq_key] = None
+        return
+    m_present: list[float] = []
+    for i in range(series_len):
+        mv = row_obj.get(f'{metric_prefix}{i}')
+        if mv is not None:
+            m_present.append(float(mv))
+    row_obj[high_key] = int(1 if m_present and float(m0v) == max(m_present) else 0)
+    rise_count = 0
+    prev = row_obj.get(f'{metric_prefix}0')
+    if prev is None:
+        row_obj[qoq_key] = None
+        return
+    for i in range(1, series_len):
+        curr = row_obj.get(f'{metric_prefix}{i}')
+        if curr is None:
+            break
+        if float(prev) > float(curr):
+            rise_count += 1
+            prev = curr
+            continue
+        break
+    row_obj[qoq_key] = int(rise_count)
+
+
+def _sw_rev_yoy_yoypct_for_codes(
+    ts_list: list[str],
+    rev_nested: dict[str, dict[str, float]],
+    anchor_p: str,
+) -> float | None:
+    """单季营收同比增速(%)。
+
+    可比口径（披露期）：仅以 anchor 季已能拆出单季营收的股票为样本；仅当上年同季亦能拆出单季营收时，
+    将该股票的本季与上年同季收入同时计入分子分母之和，再 (sum_curr−sum_prev)/sum_prev×100。
+    """
+    prev_ed = _fina_yoy_anchor_end_date(anchor_p)
+    if not prev_ed:
+        return None
+    yq_c = _fina_yq_from_anchor(anchor_p)
+    yq_p = _fina_yq_from_anchor(prev_ed)
+    if not yq_c or not yq_p:
+        return None
+    cy, cq = yq_c
+    py, pq = yq_p
+    sum_c = 0.0
+    sum_p = 0.0
+    for ts in ts_list:
+        rm = rev_nested.get(ts)
+        if not rm:
+            continue
+        sq_c = _fina_quarter_single_revenue(rm, cy, cq)
+        if sq_c is None:
+            continue
+        sq_p = _fina_quarter_single_revenue(rm, py, pq)
+        if sq_p is None:
+            continue
+        sum_c += float(sq_c)
+        sum_p += float(sq_p)
+    if sum_p <= 0:
+        return None
+    return (sum_c - sum_p) / sum_p * 100.0
+
+
+def _sw_cf_yoy_yoypct_for_codes(
+    ts_list: list[str],
+    cf_nested: dict[str, dict[str, float]],
+    anchor_p: str,
+) -> float | None:
+    """单季经营现金流净额同比增速(%)，口径对齐 _sw_rev_yoy_yoypct_for_codes（拆单季后行业成分股双期可算则累加）。"""
+    prev_ed = _fina_yoy_anchor_end_date(anchor_p)
+    if not prev_ed:
+        return None
+    yq_c = _fina_yq_from_anchor(anchor_p)
+    yq_p = _fina_yq_from_anchor(prev_ed)
+    if not yq_c or not yq_p:
+        return None
+    cy, cq = yq_c
+    py, pq = yq_p
+    sum_c = 0.0
+    sum_p = 0.0
+    for ts in ts_list:
+        cm = cf_nested.get(ts)
+        if not cm:
+            continue
+        sq_c = _fina_quarter_single_revenue(cm, cy, cq)
+        if sq_c is None:
+            continue
+        sq_p = _fina_quarter_single_revenue(cm, py, pq)
+        if sq_p is None:
+            continue
+        sum_c += float(sq_c)
+        sum_p += float(sq_p)
+    if sum_p <= 0:
+        return None
+    return (sum_c - sum_p) / sum_p * 100.0
+
+
+def _sw_cf_industry_single_q_sum_yuan(
+    ts_list: list[str],
+    cf_nested: dict[str, dict[str, float]],
+    anchor_p: str,
+) -> float | None:
+    """行业内单季经营现金流（元）合计：与 qcf 列同源（有单季拆解值的股票才计入）。"""
+    yq = _fina_yq_from_anchor(anchor_p)
+    if not yq:
+        return None
+    tot = 0.0
+    any_v = False
+    for ts in ts_list:
+        cm = cf_nested.get(ts)
+        if not cm:
+            continue
+        sq = _fina_quarter_single_revenue(cm, yq[0], yq[1])
+        if sq is None:
+            continue
+        tot += float(sq)
+        any_v = True
+    return tot if any_v else None
+
+
+def _fina_periods_union_yoy_for_q_dtprofit(period_yyyymmdd_list: list[str]) -> list[str]:
+    """fina_indicator.q_dtprofit 批量拉取：展示期 ∪ 各期上年同季 end_date（用于扣非同比增速）。"""
+    out: set[str] = set()
+    for raw in period_yyyymmdd_list:
+        norm = _normalize_end_date_yyyymmdd(raw)
+        if not norm:
+            continue
+        out.add(norm)
+        prev_ed = _fina_yoy_anchor_end_date(norm)
+        if prev_ed:
+            out.add(prev_ed)
+    return sorted(out)
+
+
+def _sw_dtp_yoy_yoypct_for_codes(
+    ts_list: list[str],
+    dtp_nested: dict[str, dict[str, float]],
+    anchor_p: str,
+) -> float | None:
+    """单季扣非净利润同比增速(%)。
+
+    可比口径与营收同比一致：仅以 anchor 报告期已存在 q_dtprofit 的股票为样本；
+    仅当上年同季亦有 q_dtprofit 时，将两期金额（元）分别累加后算增速。
+    """
+    p = _normalize_end_date_yyyymmdd(anchor_p)
+    if not p:
+        return None
+    p_prev = _fina_yoy_anchor_end_date(p)
+    if not p_prev:
+        return None
+    sum_c = 0.0
+    sum_p = 0.0
+    for ts in ts_list:
+        mp = dtp_nested.get(ts)
+        if not mp:
+            continue
+        v_c = mp.get(p)
+        if v_c is None:
+            continue
+        v_p = mp.get(p_prev)
+        if v_p is None:
+            continue
+        sum_c += float(v_c)
+        sum_p += float(v_p)
+    if sum_p <= 0:
+        return None
+    return (sum_c - sum_p) / sum_p * 100.0
 
 
 def _fina_parse_income_total_revenue(raw) -> float | None:
@@ -4160,6 +6496,232 @@ def _fina_batch_income_total_revenue(
     return {k: dict(v) for k, v in out.items()}
 
 
+def _fina_batch_fina_indicator_q_dtprofit(
+    conn,
+    ts_codes: list[str],
+    periods_yyyymmdd: list[str],
+    has_fi_rt: bool,
+) -> dict[str, dict[str, float]]:
+    """ts_code -> { YYYYMMDD -> q_dtprofit 元 }，选行与财报表 _fina_arturn_attach_q_dtprofit_yi 一致。"""
+    if not ts_codes or not periods_yyyymmdd:
+        return {}
+    fi_rt_ord = (
+        '      CASE WHEN fi.report_type = 1 THEN 0 ELSE 1 END, '
+        if has_fi_rt else
+        ''
+    )
+    date_objs: list = []
+    seen: set[str] = set()
+    for d in periods_yyyymmdd:
+        norm = _normalize_end_date_yyyymmdd(d)
+        if norm and len(norm) == 8 and norm not in seen:
+            seen.add(norm)
+            date_objs.append(datetime.strptime(norm, '%Y%m%d').date())
+    if not date_objs:
+        return {}
+    out: dict[str, dict[str, float]] = defaultdict(dict)
+    chunk = 450
+    for i in range(0, len(ts_codes), chunk):
+        part = ts_codes[i : i + chunk]
+        ph_ts = ','.join(['%s'] * len(part))
+        ph_dt = ','.join(['%s'] * len(date_objs))
+        sql = (
+            'SELECT z.ts_code, z.end_date, z.q_dtprofit '
+            'FROM ('
+            '  SELECT fi.ts_code, fi.end_date, fi.q_dtprofit, '
+            '    ROW_NUMBER() OVER ('
+            '      PARTITION BY fi.ts_code, fi.end_date '
+            '      ORDER BY '
+            '        CASE WHEN fi.q_dtprofit IS NOT NULL THEN 0 ELSE 1 END, '
+            '        CASE WHEN fi.update_flag = \'1\' THEN 0 ELSE 1 END, '
+            f'        {fi_rt_ord}'
+            '        fi.ann_date DESC'
+            '    ) AS rn '
+            '  FROM stock_tushare.fina_indicator fi '
+            f'  WHERE fi.ts_code IN ({ph_ts}) '
+            f'    AND fi.end_date IN ({ph_dt})'
+            ') z '
+            'WHERE z.rn = 1'
+        )
+        params = tuple(part) + tuple(date_objs)
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            for row in cur.fetchall() or []:
+                tc = str(row[0]).strip() if row[0] else ''
+                k = _normalize_end_date_yyyymmdd(row[1])
+                qv = _to_float_or_none(row[2] if len(row) > 2 else None)
+                if not tc or not k:
+                    continue
+                if qv is not None:
+                    out[tc][k] = float(qv)
+    return {k: dict(v) for k, v in out.items()}
+
+
+def _fina_batch_fina_indicator_q_gs_margin_q_dt_roe(
+    conn,
+    ts_codes: list[str],
+    periods_yyyymmdd: list[str],
+    has_fi_rt: bool,
+    has_q_gs: bool,
+    has_q_dt_roe: bool,
+) -> dict[str, dict[str, tuple[float | None, float | None]]]:
+    """ts_code -> { end_date -> (q_gsprofit_margin, q_dt_roe) }，选行与财报页单季毛利率/ROE(扣非)一致。"""
+    if not ts_codes or not periods_yyyymmdd or (not has_q_gs and not has_q_dt_roe):
+        return {}
+    fi_rt_ord = (
+        '      CASE WHEN fi.report_type = 1 THEN 0 ELSE 1 END, '
+        if has_fi_rt else
+        ''
+    )
+    gm_sel = 'fi.q_gsprofit_margin' if has_q_gs else 'NULL AS q_gsprofit_margin'
+    qroe_sel = 'fi.q_dt_roe' if has_q_dt_roe else 'NULL AS q_dt_roe'
+    gm_ord = 'CASE WHEN fi.q_gsprofit_margin IS NOT NULL THEN 0 ELSE 1 END, ' if has_q_gs else ''
+    qroe_ord = 'CASE WHEN fi.q_dt_roe IS NOT NULL THEN 0 ELSE 1 END, ' if has_q_dt_roe else ''
+    date_objs: list = []
+    seen: set[str] = set()
+    for d in periods_yyyymmdd:
+        norm = _normalize_end_date_yyyymmdd(d)
+        if norm and len(norm) == 8 and norm not in seen:
+            seen.add(norm)
+            date_objs.append(datetime.strptime(norm, '%Y%m%d').date())
+    if not date_objs:
+        return {}
+    out: dict[str, dict[str, tuple[float | None, float | None]]] = defaultdict(dict)
+    chunk = 450
+    for i in range(0, len(ts_codes), chunk):
+        part = ts_codes[i : i + chunk]
+        ph_ts = ','.join(['%s'] * len(part))
+        ph_dt = ','.join(['%s'] * len(date_objs))
+        sql = (
+            'SELECT z.ts_code, z.end_date, z.q_gsprofit_margin, z.q_dt_roe '
+            'FROM ('
+            '  SELECT fi.ts_code, fi.end_date, '
+            f'    {gm_sel}, '
+            f'    {qroe_sel}, '
+            '    ROW_NUMBER() OVER ('
+            '      PARTITION BY fi.ts_code, fi.end_date '
+            '      ORDER BY '
+            f'        {gm_ord}'
+            f'        {qroe_ord}'
+            '        CASE WHEN fi.update_flag = \'1\' THEN 0 ELSE 1 END, '
+            f'        {fi_rt_ord}'
+            '        fi.ann_date DESC'
+            '    ) AS rn '
+            '  FROM stock_tushare.fina_indicator fi '
+            f'  WHERE fi.ts_code IN ({ph_ts}) '
+            f'    AND fi.end_date IN ({ph_dt})'
+            ') z '
+            'WHERE z.rn = 1'
+        )
+        params = tuple(part) + tuple(date_objs)
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            for row in cur.fetchall() or []:
+                tc = str(row[0]).strip() if row[0] else ''
+                ed = _normalize_end_date_yyyymmdd(row[1] if len(row) > 1 else None)
+                gm = _to_float_or_none(row[2] if len(row) > 2 else None)
+                qroe = _to_float_or_none(row[3] if len(row) > 3 else None)
+                if not tc or not ed:
+                    continue
+                out[tc][ed] = (gm, qroe)
+    return {k: dict(v) for k, v in out.items()}
+
+
+def _fina_batch_balancesheet_contract_fix_yi(
+    conn,
+    ts_codes: list[str],
+    periods_yyyymmdd: list[str],
+    *,
+    has_bs_rt: bool,
+    has_adv: bool,
+    has_contract: bool,
+    has_fix: bool,
+) -> dict[str, dict[str, tuple[float | None, float | None]]]:
+    """ts_code -> { end_date -> (合同负债+预收亿, 固定资产亿) }，口径对齐财报页 balancesheet 选行。"""
+    if not ts_codes or not periods_yyyymmdd or (not has_contract and not has_fix):
+        return {}
+    bs_rt = (
+        '          CASE WHEN bs.report_type = 1 THEN 0 ELSE 1 END, '
+        if has_bs_rt else
+        ''
+    )
+    if has_contract and has_adv:
+        cy_expr = (
+            '(COALESCE(bs.contract_liab, 0) + COALESCE(bs.adv_receipts, 0)) / 100000000.0 AS contract_yi'
+        )
+        pref_where = (
+            '(bs.contract_liab IS NOT NULL OR bs.adv_receipts IS NOT NULL OR bs.fix_assets_total IS NOT NULL)'
+        )
+        pref_ord = (
+            'CASE WHEN (bs.contract_liab IS NOT NULL OR bs.adv_receipts IS NOT NULL) THEN 0 ELSE 1 END, '
+        )
+    elif has_contract:
+        cy_expr = '(COALESCE(bs.contract_liab, 0) / 100000000.0) AS contract_yi'
+        pref_where = '(bs.contract_liab IS NOT NULL OR bs.fix_assets_total IS NOT NULL)'
+        pref_ord = 'CASE WHEN bs.contract_liab IS NOT NULL THEN 0 ELSE 1 END, '
+    else:
+        cy_expr = 'NULL AS contract_yi'
+        pref_where = 'bs.fix_assets_total IS NOT NULL'
+        pref_ord = 'CASE WHEN bs.fix_assets_total IS NOT NULL THEN 0 ELSE 1 END, '
+    fx_expr = (
+        '(COALESCE(bs.fix_assets_total, 0) / 100000000.0) AS fix_yi'
+        if has_fix else
+        'NULL AS fix_yi'
+    )
+    date_objs: list = []
+    seen: set[str] = set()
+    for d in periods_yyyymmdd:
+        norm = _normalize_end_date_yyyymmdd(d)
+        if norm and len(norm) == 8 and norm not in seen:
+            seen.add(norm)
+            date_objs.append(datetime.strptime(norm, '%Y%m%d').date())
+    if not date_objs:
+        return {}
+    out: dict[str, dict[str, tuple[float | None, float | None]]] = defaultdict(dict)
+    chunk = 450
+    for i in range(0, len(ts_codes), chunk):
+        part = ts_codes[i : i + chunk]
+        ph_ts = ','.join(['%s'] * len(part))
+        ph_dt = ','.join(['%s'] * len(date_objs))
+        sql = (
+            f'SELECT z.ts_code, z.end_date, z.contract_yi, z.fix_yi '
+            f'FROM ( '
+            f'  SELECT bs.ts_code, bs.end_date, {cy_expr}, {fx_expr}, '
+            f'    ROW_NUMBER() OVER ( '
+            f'      PARTITION BY bs.ts_code, bs.end_date '
+            f'      ORDER BY '
+            f'        {pref_ord}'
+            f'        CASE WHEN bs.update_flag = \'1\' THEN 0 ELSE 1 END, '
+            f'        {bs_rt}'
+            f'        bs.ann_date DESC '
+            f'    ) AS rn '
+            f'  FROM stock_tushare.balancesheet bs '
+            f'  WHERE bs.ts_code IN ({ph_ts}) AND bs.end_date IN ({ph_dt}) '
+            f'    AND {pref_where} '
+            f') z WHERE z.rn = 1'
+        )
+        params = tuple(part) + tuple(date_objs)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                for row in cur.fetchall() or []:
+                    tc = str(row[0]).strip() if row[0] else ''
+                    ed = _normalize_end_date_yyyymmdd(row[1] if len(row) > 1 else None)
+                    cv = _to_float_or_none(row[2] if len(row) > 2 else None)
+                    fv = _to_float_or_none(row[3] if len(row) > 3 else None)
+                    if not tc or not ed:
+                        continue
+                    if not has_contract:
+                        cv = None
+                    if not has_fix:
+                        fv = None
+                    out[tc][ed] = (cv, fv)
+        except Exception as e:
+            logger.warning('balancesheet contract/fix 批量读取失败: %s', e)
+            return {}
+    return {k: dict(v) for k, v in out.items()}
+
+
 def _fina_batch_accounts_receiv(
     conn,
     ts_codes: list[str],
@@ -4211,6 +6773,250 @@ def _fina_batch_accounts_receiv(
                 except (TypeError, ValueError):
                     pass
     return out
+
+
+def _fina_arturn_attach_stock_company_fields(conn, rows: list[dict]) -> None:
+    """为财报表每行写入 stock_company.province、city、website（批量 IN；缺表或查询失败则跳过）。"""
+    if not rows:
+        return
+    try:
+        if not _tushare_column_exists(conn, 'stock_company', 'ts_code'):
+            return
+    except Exception:
+        return
+    codes_uniq: list[str] = []
+    seen: set[str] = set()
+    for r in rows:
+        tc = str(r.get('ts_code') or '').strip()
+        if tc and tc not in seen:
+            seen.add(tc)
+            codes_uniq.append(tc)
+    if not codes_uniq:
+        return
+    ph = ','.join(['%s'] * len(codes_uniq))
+    sql = (
+        'SELECT ts_code, COALESCE(`province`,\'\'), COALESCE(`city`,\'\'), COALESCE(`website`,\'\') '
+        f'FROM stock_tushare.stock_company WHERE ts_code IN ({ph})'
+    )
+    mp: dict[str, tuple[str, str, str]] = {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, tuple(codes_uniq))
+            for rr in cur.fetchall() or []:
+                if not rr or rr[0] is None:
+                    continue
+                tsc = str(rr[0]).strip()
+                pv = str(rr[1] or '').strip() if len(rr) > 1 else ''
+                ct = str(rr[2] or '').strip() if len(rr) > 2 else ''
+                wb = str(rr[3] or '').strip() if len(rr) > 3 else ''
+                mp[tsc] = (pv, ct, wb)
+    except Exception as e:
+        logger.warning('fina_arturn attach stock_company 跳过: %s', e)
+        return
+    for r in rows:
+        tc = str(r.get('ts_code') or '').strip()
+        triple = mp.get(tc, ('', '', ''))
+        r['province'] = triple[0]
+        r['city'] = triple[1]
+        r['website'] = triple[2]
+
+
+def _fina_arturn_attach_top10_holders_top3(conn, rows: list[dict]) -> None:
+    """就地写入 holders_top3_pct、holders_top3_detail、holders_top3_end_date。
+
+    口径：top10_holders 按 ts_code 取最新 end_date，在该期末快照内按 hold_ratio 降序取前 3，合计占比（%）；
+    明细含 holder_name、holder_type、hold_amount、hold_ratio、end_date。
+    """
+    if not rows:
+        return
+    try:
+        if not _tushare_column_exists(conn, 'top10_holders', 'ts_code'):
+            return
+        if not _tushare_column_exists(conn, 'top10_holders', 'hold_ratio'):
+            return
+    except Exception:
+        return
+
+    for r in rows:
+        r['holders_top3_pct'] = None
+        r['holders_top3_detail'] = []
+        r['holders_top3_end_date'] = ''
+
+    codes_uniq: list[str] = []
+    seen: set[str] = set()
+    for r in rows:
+        tc = str(r.get('ts_code') or '').strip()
+        if tc and tc not in seen:
+            seen.add(tc)
+            codes_uniq.append(tc)
+    if not codes_uniq:
+        return
+
+    def _dt_iso(v: object) -> str:
+        if v is None:
+            return ''
+        if hasattr(v, 'strftime'):
+            try:
+                return v.strftime('%Y-%m-%d')
+            except Exception:
+                return str(v)[:10]
+        s = str(v).strip()
+        return s[:10] if len(s) >= 10 else s
+
+    def _to_float(v: object) -> float | None:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    chunk_size = 450
+    by_code: dict[str, list] = {}
+    try:
+        for i in range(0, len(codes_uniq), chunk_size):
+            part = codes_uniq[i : i + chunk_size]
+            ph = ','.join(['%s'] * len(part))
+            sql = (
+                'WITH latest AS ( '
+                '  SELECT ts_code, MAX(end_date) AS mx '
+                '  FROM stock_tushare.top10_holders '
+                f'  WHERE ts_code IN ({ph}) '
+                '  GROUP BY ts_code '
+                '), ranked AS ( '
+                '  SELECT h.ts_code, h.end_date, h.holder_name, h.holder_type, h.hold_amount, h.hold_ratio, '
+                '    ROW_NUMBER() OVER (PARTITION BY h.ts_code ORDER BY h.hold_ratio DESC) AS rk '
+                '  FROM stock_tushare.top10_holders h '
+                '  INNER JOIN latest l ON l.ts_code = h.ts_code AND l.mx = h.end_date '
+                ') '
+                'SELECT ts_code, end_date, holder_name, holder_type, hold_amount, hold_ratio '
+                'FROM ranked WHERE rk <= 3 '
+                'ORDER BY ts_code, rk'
+            )
+            with conn.cursor() as cur:
+                cur.execute(sql, tuple(part))
+                for rr in cur.fetchall() or []:
+                    if not rr or rr[0] is None:
+                        continue
+                    tsc = str(rr[0]).strip()
+                    if tsc not in by_code:
+                        by_code[tsc] = []
+                    by_code[tsc].append(
+                        (
+                            rr[1],
+                            rr[2],
+                            rr[3],
+                            rr[4],
+                            rr[5],
+                        )
+                    )
+    except Exception as e:
+        logger.warning('fina_arturn attach top10_holders top3 跳过: %s', e)
+        return
+
+    for r in rows:
+        tc = str(r.get('ts_code') or '').strip()
+        lst = by_code.get(tc)
+        if not lst:
+            continue
+        details: list[dict] = []
+        ratio_sum = 0.0
+        end_iso = ''
+        for end_dt, hname, htype, hamt, hratio in lst:
+            if not end_iso:
+                end_iso = _dt_iso(end_dt)
+            rf = _to_float(hratio)
+            if rf is not None:
+                ratio_sum += rf
+            details.append(
+                {
+                    'holder_name': str(hname or '').strip(),
+                    'holder_type': str(htype or '').strip(),
+                    'hold_amount': _to_float(hamt),
+                    'hold_ratio': rf,
+                    'end_date': _dt_iso(end_dt),
+                }
+            )
+        r['holders_top3_pct'] = round(ratio_sum, 6) if ratio_sum else None
+        r['holders_top3_detail'] = details
+        r['holders_top3_end_date'] = end_iso
+
+
+def _fina_arturn_attach_stk_holdernumber_quarters(
+    conn, rows: list[dict], quarter_periods: list[str]
+) -> None:
+    """就地写入 hn0..hn8（户）：stk_holdernumber.holder_num，与 contractPeriods 九季 end_date 对齐；同季多行取 ann_date 最大。"""
+    for row in rows:
+        for i in range(9):
+            row[f'hn{i}'] = None
+    if not rows:
+        return
+    if not _tushare_column_exists(conn, 'stk_holdernumber', 'holder_num'):
+        return
+    norm_slots: list[str | None] = []
+    for p in (quarter_periods or [])[:9]:
+        norm_slots.append(_normalize_end_date_yyyymmdd(p))
+    periods_u = sorted({x for x in norm_slots if x})
+    if not periods_u:
+        return
+    codes_seen: list[str] = []
+    seen: set[str] = set()
+    for r in rows:
+        tc = str(r.get('ts_code') or '').strip()
+        if tc and tc not in seen:
+            seen.add(tc)
+            codes_seen.append(tc)
+    if not codes_seen:
+        return
+    dfmt = '%Y%m%d'
+    by_pair: dict[tuple[str, str], int | None] = {}
+    chunk_size = 400
+    try:
+        for i0 in range(0, len(codes_seen), chunk_size):
+            part = codes_seen[i0 : i0 + chunk_size]
+            ts_ph = ', '.join(['%s'] * len(part))
+            pd_ph = ', '.join(['%s'] * len(periods_u))
+            sql = (
+                'SELECT sh.ts_code, DATE_FORMAT(sh.end_date, %s) AS edk, sh.holder_num '
+                'FROM stock_tushare.stk_holdernumber sh '
+                'INNER JOIN ( '
+                '  SELECT ts_code, end_date, MAX(ann_date) AS ma '
+                '  FROM stock_tushare.stk_holdernumber '
+                f'  WHERE ts_code IN ({ts_ph}) '
+                f'    AND DATE_FORMAT(end_date, %s) IN ({pd_ph}) '
+                '  GROUP BY ts_code, end_date '
+                ') z ON sh.ts_code = z.ts_code AND sh.end_date = z.end_date AND sh.ann_date = z.ma'
+            )
+            params = (dfmt, *part, dfmt, *periods_u)
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                raw = cur.fetchall() or []
+            for rr in raw:
+                if not rr or len(rr) < 3:
+                    continue
+                tsc = str(rr[0] or '').strip()
+                edk = str(rr[1] or '').strip()
+                hn = rr[2]
+                if not tsc or len(edk) != 8:
+                    continue
+                if hn is None:
+                    by_pair[(tsc, edk)] = None
+                else:
+                    try:
+                        by_pair[(tsc, edk)] = int(round(float(hn)))
+                    except (TypeError, ValueError):
+                        by_pair[(tsc, edk)] = None
+    except Exception as e:
+        logger.warning('fina_arturn attach stk_holdernumber 九季跳过: %s', e)
+        return
+    for row in rows:
+        tc = str(row.get('ts_code') or '').strip()
+        if not tc:
+            continue
+        for idx, pk in enumerate(norm_slots):
+            if not pk:
+                continue
+            row[f'hn{idx}'] = by_pair.get((tc, pk))
 
 
 def _fina_arturn_attach_stock_basic_act(conn, rows: list[dict]) -> None:
@@ -4477,6 +7283,22 @@ def _fina_arturn_attach_stk_factor_mv_pe(rows: list[dict], conn_ext=None) -> Non
                     row['free_mv_yi'] = round(float(fs_v) * float(cl) / 10000.0, 2)
                 except (TypeError, ValueError):
                     pass
+
+
+def _fina_arturn_attach_free_float_ratio_pct(rows: list[dict]) -> None:
+    """就地写入自由流通比(%)：free_mv_yi / total_mv_yi ×100，保留两位小数；缺总市值或≤0 时为 None。"""
+    for row in rows:
+        row['free_float_ratio_pct'] = None
+        tm = row.get('total_mv_yi')
+        fm = row.get('free_mv_yi')
+        try:
+            tmv = float(tm) if tm is not None else None
+            fmv = float(fm) if fm is not None else None
+        except (TypeError, ValueError):
+            continue
+        if tmv is None or fmv is None or tmv <= 0:
+            continue
+        row['free_float_ratio_pct'] = round((fmv / tmv) * 100.0, 2)
 
 
 def _fina_arturn_attach_money_cap_ratio(rows: list[dict], conn, selected_end_date: str) -> None:
@@ -6909,6 +9731,9 @@ def _query_fina_arturn_table(selected_end_date: str) -> dict:
         _fina_arturn_attach_stk_factor_mv_pe(rows, conn_ext=conn)
         _stage_times.append(('stk_factor_mv_pe', time.perf_counter() - _t_stage))
         _t_stage = time.perf_counter()
+        _fina_arturn_attach_free_float_ratio_pct(rows)
+        _stage_times.append(('free_float_ratio_pct', time.perf_counter() - _t_stage))
+        _t_stage = time.perf_counter()
         _fina_arturn_attach_money_cap_ratio(rows, conn, periods[0])
         _stage_times.append(('money_cap_ratio', time.perf_counter() - _t_stage))
         _t_stage = time.perf_counter()
@@ -6923,6 +9748,15 @@ def _query_fina_arturn_table(selected_end_date: str) -> dict:
         _t_stage = time.perf_counter()
         _fina_arturn_attach_stock_basic_act(conn, rows)
         _stage_times.append(('stock_basic_act', time.perf_counter() - _t_stage))
+        _t_stage = time.perf_counter()
+        _fina_arturn_attach_stock_company_fields(conn, rows)
+        _stage_times.append(('stock_company_fields', time.perf_counter() - _t_stage))
+        _t_stage = time.perf_counter()
+        _fina_arturn_attach_top10_holders_top3(conn, rows)
+        _stage_times.append(('top10_holders_top3', time.perf_counter() - _t_stage))
+        _t_stage = time.perf_counter()
+        _fina_arturn_attach_stk_holdernumber_quarters(conn, rows, contractPeriods)
+        _stage_times.append(('stk_holdernumber_q', time.perf_counter() - _t_stage))
         # 阶段耗时埋点：默认 DEBUG 级不输出，性能退化排查时把 rt_monitor 日志级改 DEBUG 即可。
         # 关键字：fina_arturn_stage_timing（配合 fast_path / main_sql 可一眼分辨走了新路径还是降级）。
         if logger.isEnabledFor(10):  # logging.DEBUG
@@ -6965,7 +9799,7 @@ def get_fina_arturn_days_table():
             return jsonify({'rows': [], 'periods': [], 'end_dates': [], 'error': '未找到可用报告期'}), 200
         selected_end_date = requested_end_date if requested_end_date in end_dates else end_dates[0]
 
-        cache_key = ('arturn_days', selected_end_date, 'sb_act_3')
+        cache_key = ('arturn_days', selected_end_date, 'sb_act_7')
         payload = _small_ttl_cache_get(_fina_indicator_metric_table_cache, cache_key, time.time())
         if payload is None:
             payload = _query_fina_arturn_table(selected_end_date)
@@ -8115,6 +10949,27 @@ def _query_stock_basic_sec_list_act(conn, ts_code: str) -> dict[str, str]:
     return out
 
 
+def _query_stock_company_website(conn, ts_code: str) -> str:
+    """读 stock_company.website（公司主页）；缺表/缺列/缺行返回空串。"""
+    ts = str(ts_code or '').strip()
+    if not ts:
+        return ''
+    try:
+        if not _tushare_column_exists(conn, 'stock_company', 'website'):
+            return ''
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(`website`,'') FROM stock_tushare.stock_company WHERE ts_code=%s LIMIT 1",
+                (ts,),
+            )
+            nr = cur.fetchone()
+        if nr and nr[0] is not None:
+            return str(nr[0]).strip()
+    except Exception as e:
+        logger.debug('stock_company website 查询失败 ts=%s: %s', ts, e)
+    return ''
+
+
 def _query_fina_fixed_assets_revenue_series(ts_code: str, selected_end_date: str, limit_n: int = 25) -> dict:
     """固定资产(亿)+存货(亿)+在建工程(亿)+单季度营收(亿)+合同负债(亿)序列：按 end_date 对齐，默认最近 25 季，少于 25 季取全部。"""
     try:
@@ -8254,6 +11109,7 @@ def _query_fina_fixed_assets_revenue_series(ts_code: str, selected_end_date: str
         list_date_api = sb_head['list_date']
         act_name = sb_head['act_name']
         act_ent_type = sb_head['act_ent_type']
+        website_sc = _query_stock_company_website(conn, ts)
         extras = _fina_fixed_assets_modal_extra_metrics(conn, ts, end_dt)
         mainbz_top3 = _fina_fixed_assets_modal_mainbz_top3(conn, ts, end_dt)
         anchor_iso = f'{end_dt[:4]}-{end_dt[4:6]}-{end_dt[6:8]}' if len(end_dt) == 8 else ''
@@ -8265,6 +11121,7 @@ def _query_fina_fixed_assets_revenue_series(ts_code: str, selected_end_date: str
             'list_date': list_date_api or None,
             'act_name': act_name or None,
             'act_ent_type': act_ent_type or None,
+            'website': website_sc or None,
             'metrics_anchor_date': anchor_iso,
             'pe_ttm': extras.get('pe_ttm'),
             'ttm_revenue_yi': extras.get('ttm_revenue_yi'),
@@ -8294,7 +11151,8 @@ def get_fina_fixed_assets_revenue_series():
     fina_quarter_metrics：fcf_star_ttm_yi（四季 q_fcf_star TTM）、netdebt_yi（优先 netdebt_opt，回退 netdebt）、debt_to_assets、ccc_q；
     各行含 recv_pct：balancesheet 期末(accounts_receiv+oth_receiv)/单季营业收入(q_revenue_yi)×100；
     list_date：stock_basic.list_date（与财报表「上市日」同源）；
-    act_name / act_ent_type：stock_basic（优先四列查询；缺列 1054 时回退两列）。"""
+    act_name / act_ent_type：stock_basic（优先四列查询；缺列 1054 时回退两列）；
+    website：stock_company.website（公司主页）。"""
     ts_code = str(request.args.get('ts_code') or '').strip()
     req_end = _normalize_end_date_yyyymmdd(request.args.get('end_date'))
     if not ts_code:
@@ -10306,6 +13164,7 @@ if __name__ == '__main__':
     load_initial_cache()
     _warmup_ma_signal_table_cache_async()
     _warmup_fina_arturn_cache_async()
+    _warmup_sw_industry_cache_async()
     try:
         signal.signal(signal.SIGINT, _handle_exit_signal)
         signal.signal(signal.SIGTERM, _handle_exit_signal)
@@ -10821,3 +13680,103 @@ if __name__ == '__main__':
 # 代码更新时间：2026-04-27 17:37 RT_MONITOR_STATIC_VER 20260427-25（单季度净利率/ROE(扣非)新增 n_high/n_qoq、t_high/t_qoq）
 # 代码更新时间：2026-04-27 17:52 RT_MONITOR_STATIC_VER 20260427-25（财报表头错位修正：空结果 colspan 与总列一致）
 # 代码更新时间：2026-04-27 17:56 RT_MONITOR_STATIC_VER 20260427-25（财报表分组边界索引修正）
+# 代码更新时间：2026-04-27 22:24 RT_MONITOR_STATIC_VER 20260427-26（主监控新增申万行业分析入口与独立页面；消息窗口下移避免遮挡）
+# 代码更新时间：2026-04-27 22:43 RT_MONITOR_STATIC_VER 20260427-27（申万行业页改实时9季单季营收聚合，服务端180秒缓存削峰）
+# 代码更新时间：2026-04-28 10:28 RT_MONITOR_STATIC_VER 20260427-28（申万行业页增9季单季扣非净利汇总，源 fina_indicator.q_dtprofit；与财报表 dtp 列同源）
+# 代码更新时间：2026-04-28 10:38 RT_MONITOR_STATIC_VER 20260427-29（申万行业页表头：行业（一级）、家数）
+# 代码更新时间：2026-04-28 10:50 RT_MONITOR_STATIC_VER 20260427-30（申万行业页首行汇总：全部A股，家数与各季营收/扣非列按行业加总）
+# 代码更新时间：2026-04-28 11:46 RT_MONITOR_STATIC_VER 20260428-32（申万行业页：负值绿字、sw-industry-table+动态粗竖线）
+# 代码更新时间：2026-04-28 11:51 RT_MONITOR_STATIC_VER 20260428-33（申万页标题/行业列名；单季营收列展示一位小数）
+# 代码更新时间：2026-04-28 12:01 RT_MONITOR_STATIC_VER 20260428-34（申万页：单季营收同比增速%，上年同季可比口径；扩展 income 键集）
+# 代码更新时间：2026-04-28 12:14 RT_MONITOR_STATIC_VER 20260428-35（申万页：单季扣非净利同比增速%，fina_indicator 上年同季可比口径）
+# 代码更新时间：2026-04-28 12:19 RT_MONITOR_STATIC_VER 20260428-36（申万页布局：块级卡片+横滚+列宽，对齐财报页防竖排字）
+# 代码更新时间：2026-04-28 12:25 RT_MONITOR_STATIC_VER 20260428-37（申万页前三列 position:sticky 横向冻结）
+# 代码更新时间：2026-04-28 12:27 RT_MONITOR_STATIC_VER 20260428-38（申万同比增速列单元格去掉 % 后缀，表头仍含（%））
+# 代码更新时间：2026-04-28 12:46 RT_MONITOR_STATIC_VER 20260428-39（申万页：双表分栏 CSS 对齐财报；列收紧居中；去 sticky 叠层）
+# 代码更新时间：2026-04-28 12:51 RT_MONITOR_STATIC_VER 20260428-40（申万扣非：行业汇总上年同季负→当季正标 dnk+前端「扭亏」红）
+# 代码更新时间：2026-04-28 12:53 RT_MONITOR_STATIC_VER 20260428-41（申万页表头不换行 nowrap；冻结列宽微调）
+# 代码更新时间：2026-04-28 12:57 RT_MONITOR_STATIC_VER 20260428-42（申万页单元格对称 padding + 表头居中强化）
+# 代码更新时间：2026-04-28 13:04 RT_MONITOR_STATIC_VER 20260428-43（扭亏标在扣非同比增速列，亿元列仅数值）
+# 代码更新时间：2026-04-28 13:13 RT_MONITOR_STATIC_VER 20260428-44（申万滚动表分割线 thead/tbody 对齐）
+# 代码更新时间：2026-04-28 13:16 RT_MONITOR_STATIC_VER 20260428-45（申万 applySwIndustryVlines：分组 thead 第3/4 格 nth-child 修正）
+# 代码更新时间：2026-04-28 13:20 RT_MONITOR_STATIC_VER 20260428-46（申万冻结表头第二行行业名称；与季度行对齐）
+# 代码更新时间：2026-04-28 13:25 RT_MONITOR_STATIC_VER 20260428-47（申万标题冻结列上居中；汇总行首列「汇总」）
+# 代码更新时间：2026-04-28 13:29 RT_MONITOR_STATIC_VER 20260428-48（申万冻结表去掉 thead 占位行）
+# 代码更新时间：2026-04-28 13:35 RT_MONITOR_STATIC_VER 20260428-49（申万双表 thead 行高同步+resize 校正）
+# 代码更新时间：2026-04-28 14:12 RT_MONITOR_STATIC_VER 20260428-50（申万冻结占位改为左右 thead 总高差同步，修复家数与26Q1错位）
+# 代码更新时间：2026-04-28 14:25 RT_MONITOR_STATIC_VER 20260428-51（申万冻结占位行纯隐形，去边线避免视觉多一行）
+# 代码更新时间：2026-04-28 14:40 RT_MONITOR_STATIC_VER 20260428-52（申万双表改固定双行表头结构，移除运行时高度测量与延时重算）
+# 代码更新时间：2026-04-28 14:46 RT_MONITOR_STATIC_VER 20260428-53（申万左右 tbody 行高强制一致，消除逐行错位）
+# 代码更新时间：2026-04-28 14:50 RT_MONITOR_STATIC_VER 20260428-54（申万左表头改上隐形占位+下正常列名，修复列名行过高）
+# 代码更新时间：2026-04-28 14:56 RT_MONITOR_STATIC_VER 20260428-55（申万左侧caption承接首行高度并移除thead占位行，修复整体下沉）
+# 代码更新时间：2026-04-28 15:16 RT_MONITOR_STATIC_VER 20260428-56（申万冻结区新增总市值/自由市值，口径对齐财报页）
+# 代码更新时间：2026-04-28 15:24 RT_MONITOR_STATIC_VER 20260428-57（申万页新增列头排序+筛选弹层，覆盖总市值/自由市值及26Q1等后续列）
+# 代码更新时间：2026-04-28 15:26 RT_MONITOR_STATIC_VER 20260428-58（申万冻结区总市值/自由市值显示改为整数）
+# 代码更新时间：2026-04-28 15:31 RT_MONITOR_STATIC_VER 20260428-59（申万列头增加双击筛选与可见排序提示，提升可发现性）
+# 代码更新时间：2026-04-28 15:35 RT_MONITOR_STATIC_VER 20260428-60（申万列头显式“⇅/筛”控件，点击筛按钮可直接弹筛选）
+# 代码更新时间：2026-04-28 16:04 RT_MONITOR_STATIC_VER 20260428-61（申万列头改为财报同款结构：fina-sort-btn + fina-filter-btn）
+# 代码更新时间：2026-04-28 16:09 RT_MONITOR_STATIC_VER 20260428-62（申万页营收同比/扣非同比显示精度改为两位小数）
+# 代码更新时间：2026-04-28 16:10 RT_MONITOR_STATIC_VER 20260428-63（行业代码/行业名称/家数移除排序筛选，仅保留后续列）
+# 代码更新时间：2026-04-28 16:20 RT_MONITOR_STATIC_VER 20260428-64（申万右侧四组季度列宽适度收紧）
+# 代码更新时间：2026-04-28 16:36 RT_MONITOR_STATIC_VER 20260428-65（申万页新增一级/二级下拉切换，默认一级）
+# 代码更新时间：2026-04-28 16:54 RT_MONITOR_STATIC_VER 20260428-66（申万页前三行 sticky：标题+两行表头）
+# 代码更新时间：2026-04-28 17:12 RT_MONITOR_STATIC_VER 20260428-67（修复申万 sticky 未生效：容器 overflow 口径改为纵向 visible）
+# 代码更新时间：2026-04-28 17:29 RT_MONITOR_STATIC_VER 20260428-68（申万三行 sticky 偏移层级修正）
+# 代码更新时间：2026-04-28 17:43 RT_MONITOR_STATIC_VER 20260428-69（申万改容器内滚动+左右纵向同步，三行锁定稳定生效）
+# 代码更新时间：2026-04-28 17:48 RT_MONITOR_STATIC_VER 20260428-70（申万表头/行高渲染后动态同步，修复缩放与按钮撑高导致的再次错位）
+# 代码更新时间：2026-04-28 17:55 RT_MONITOR_STATIC_VER 20260428-71（申万右侧表头 sticky 偏移改为 0/row1，修复再次错位）
+# 代码更新时间：2026-04-28 18:04 RT_MONITOR_STATIC_VER 20260428-72（申万新增一级行业筛选下拉，支持按一级过滤展示二级明细并回传对应汇总口径）
+# 代码更新时间：2026-04-28 18:07 RT_MONITOR_STATIC_VER 20260428-73（选择一级行业时强制二级明细口径，修复仍显示一级聚合问题）
+# 代码更新时间：2026-04-28 18:13 RT_MONITOR_STATIC_VER 20260428-74（新增二级行业筛选下拉，选择后自动切三级并输出l3明细）
+# 代码更新时间：2026-04-28 18:19 RT_MONITOR_STATIC_VER 20260428-75（隐藏左侧冻结区滚动条，仅保留右侧主滚动条）
+# 代码更新时间：2026-04-28 18:22 RT_MONITOR_STATIC_VER 20260428-76（四组季度列顺序调整为：营收同比→扣非同比→营收→扣非）
+# 代码更新时间：2026-04-30 08:23 RT_MONITOR_STATIC_VER 20260428-77（申万扩展五组 nine 季指标：单季经营现金流/毛利率/ROE扣非/合同负债/固资；缓存 key x1；前端 swColumnMeta）
+# 代码更新时间：2026-04-30 08:58 RT_MONITOR_STATIC_VER 20260428-78（申万 qgm/qroe 由算术平均改为行业中位数；API 缓存 key x2）
+# 代码更新时间：2026-04-30 09:03 RT_MONITOR_STATIC_VER 20260428-79（申万页合同负债/固定资产列显示一位小数）
+# 代码更新时间：2026-04-30 09:08 RT_MONITOR_STATIC_VER 20260428-80（申万表头：毛利率/ROE扣非列名标明中位数）
+# 代码更新时间：2026-04-30 09:17 RT_MONITOR_STATIC_VER 20260428-81（申万毛利率/ROE中位数组：新高+环比+九季，口径对齐财报 m_high/m_qoq；缓存 x3）
+# 代码更新时间：2026-04-30 18:35 RT_MONITOR_STATIC_VER 20260428-82（申万九组指标窗口由9季扩至13季；qgm/qroe新高环比序列同步扩展）
+# 代码更新时间：2026-05-01 07:20 RT_MONITOR_STATIC_VER 20260428-83（申万经营现金流净额 ycf* 同比增速，口径对齐营收 y*；现金流批量键含同比锚点；缓存 x5）
+# 代码更新时间：2026-05-01 07:27 RT_MONITOR_STATIC_VER 20260428-84（申万页 ycf 列组移至扣非同比右侧；列宽与表头/体同步）
+# 代码更新时间：2026-05-01 07:39 RT_MONITOR_STATIC_VER 20260428-85（申万 ycf 空且行业现金流负转正时 ycfnk+前端「转正」；缓存 x6）
+# 代码更新时间：2026-05-01 07:43 RT_MONITOR_STATIC_VER 20260428-86（申万 qcf 组 qcf_high/qcf_qoq 新高环比，口径同 qroe；缓存 x7）
+# 代码更新时间：2026-05-01 07:53 RT_MONITOR_STATIC_VER 20260428-87（申万 s/dtp 组 s_high、s_qoq、dtp_high、dtp_qoq；缓存 x8）
+# 代码更新时间：2026-05-01 10:14 RT_MONITOR_STATIC_VER 20260430-1（牛散持股页 /rt-monitor/niusan；侧栏入口）
+# 代码更新时间：2026-05-01 10:15 RT_MONITOR_STATIC_VER 20260430-2（牛散侧栏链接样式 rt_monitor.css）
+# 代码更新时间：2026-05-01 10:31 RT_MONITOR_STATIC_VER 20260430-3（牛散页 UI 对齐财报页 fina-arturn 卡片布局；去掉口径说明文案）
+# 代码更新时间：2026-05-01 10:44 RT_MONITOR_STATIC_VER 20260430-4（牛散列：自由市值整数亿、sw_name、比例两位、增减红绿、金额/VWAP两位、报告期）
+# 代码更新时间：2026-05-01 10:49 RT_MONITOR_STATIC_VER 20260430-5（牛散表恢复总市值(亿) 整数，与自由市值并列）
+# 代码更新时间：2026-05-01 10:56 RT_MONITOR_STATIC_VER 20260430-6（牛散：20日涨跌%、相对VWAP%；rt_k 最新价 + stk_factor 历史）
+# 代码更新时间：2026-05-01 11:07 RT_MONITOR_STATIC_VER 20260430-7（牛散：20日/相对VWAP 列正值红负值绿）
+# 代码更新时间：2026-05-01 11:10 RT_MONITOR_STATIC_VER 20260430-8（牛散表列顺序：报告期置末等）
+# 代码更新时间：2026-05-01 11:21 RT_MONITOR_STATIC_VER 20260430-9（牛散页 UI：层次、列宽、居中、渐变标题与表头）
+# 代码更新时间：2026-05-01 11:28 RT_MONITOR_STATIC_VER 20260430-10（牛散：列宽收紧；涨跌色选择器压过 tbody 字色）
+# 代码更新时间：2026-05-01 11:52 RT_MONITOR_STATIC_VER 20260430-11（牛散表头：章建平/关联人说明行 + 合计持仓金额亿）
+# 代码更新时间：2026-05-01 12:03 RT_MONITOR_STATIC_VER 20260430-12（牛散持仓变化 + 展开历史报告期至新进；/api/niusan_floatholder_history）
+# 代码更新时间：2026-05-01 12:31 RT_MONITOR_STATIC_VER 20260430-13（牛散展开钮移至报告期格右下角）
+# 代码更新时间：2026-05-01 13:01 RT_MONITOR_STATIC_VER 20260430-14（报告期与+同一行、不增高行）
+# 代码更新时间：2026-05-01 13:07 RT_MONITOR_STATIC_VER 20260430-15（牛散 VWAP：新进起按季边际 VWAP 与持仓变化 blend）
+# 代码更新时间：2026-05-01 15:10 RT_MONITOR_STATIC_VER 20260501-1（牛散 VWAP 链：自然季回溯，缺季止、新进止后再 blend）
+# 代码更新时间：2026-05-01 15:15 RT_MONITOR_STATIC_VER 20260501-2（牛散：公告日 ann_date，列在报告期左侧）
+# 代码更新时间：2026-05-01 15:23 RT_MONITOR_STATIC_VER 20260501-3（牛散：公告日字体对齐报告期；金额/市值等列申万式排序）
+# 代码更新时间：2026-05-01 15:34 RT_MONITOR_STATIC_VER 20260501-4（牛散方案 niusan_holder_config.json：方案名展示、关联人 OR 匹配；配置页）
+# 代码更新时间：2026-05-01 15:53 RT_MONITOR_STATIC_VER 20260501-6（牛散页：方案配置弹窗左置；股票名点出关联人明细；/api/niusan_floatholder_detail）
+# 代码更新时间：2026-05-01 16:09 RT_MONITOR_STATIC_VER 20260501-7（牛散：标题行方案配置；明细弹窗拖拽缩放；明细内各方案持股数/金额汇总）
+# 代码更新时间：2026-05-01 16:20 RT_MONITOR_STATIC_VER 20260501-8（牛散：方案汇总条移至主表上方；明细接口预取缓存秒开）
+# 代码更新时间：2026-05-01 16:37 RT_MONITOR_STATIC_VER 20260501-9（牛散：rt_k 过滤代码；方案条横排点击明细；配置下拉单方案编辑；/api/niusan_scheme_holdings）
+# 代码更新时间：2026-05-01 16:58 RT_MONITOR_STATIC_VER 20260501-10（牛散：点击方案卡在主表区切换，不再弹窗；API 返回 scheme_name/related_join）
+# 代码更新时间：2026-05-01 17:00 RT_MONITOR_STATIC_VER 20260501-11（牛散主表股票名称列：黑色字，保留下划线可点）
+# 代码更新时间：2026-05-01 17:10 RT_MONITOR_STATIC_VER 20260501-12（牛散：空闲预取各方案持股 JSON 缓存切换秒开；表头说明行黑字）
+# 代码更新时间：2026-05-01 17:17 RT_MONITOR_STATIC_VER 20260501-13（牛散：方案配置内嵌 JSON 首击秒开；预取延迟 500ms 减争用）
+# 代码更新时间：2026-05-01 17:31 RT_MONITOR_STATIC_VER 20260501-14（牛散表：总市值/自由市值列收窄；申万二级行业列加宽）
+# 代码更新时间：2026-05-01 18:11 RT_MONITOR_STATIC_VER 20260501-15（牛散关联人明细：top10_floatholders 按 holder_name+最新 ann_date 去重）
+# 代码更新时间：2026-05-01 18:22 RT_MONITOR_STATIC_VER 20260501-16（牛散主表/方案条/批量季统计/历史链：聚合前同口径按股东去重，与明细一致）
+# 代码更新时间：2026-05-02 19:59 RT_MONITOR_STATIC_VER 20260502-1（财报筛选 stock_company 省/市/网站；固定资产序列 website；fina 缓存键 sb_act_4）
+# 代码更新时间：2026-05-03 09:15 fina_arturn 附加 top10_holders 前三持股合计/明细；缓存键 sb_act_5；RT_MONITOR_STATIC_VER 20260503-16
+# 代码更新时间：2026-05-03 09:30 RT_MONITOR_STATIC_VER 20260503-17（前三持股明细弹窗表内与副标题居中）
+# 代码更新时间：2026-05-03 10:12 FINA_ARTURN_TABLE_CACHE_MAX 48→50，旁注单期 payload 粗算体量
+# 代码更新时间：2026-05-03 10:21 _warmup_fina_arturn_cache_async 预取前 N 个报告期（FINA_ARTURN_WARMUP_PREFETCH_N=3）
+# 代码更新时间：2026-05-03 10:37 sw_industry_stats 进程内长期缓存+LRU(50)+no-store；cache_ttl_sec 响应用 0
+# 代码更新时间：2026-05-03 10:41 _warmup_sw_industry_cache_async 默认 L1（test_client GET sw_industry_stats?level=l1）
+# 代码更新时间：2026-05-03 11:05 fina_arturn 自由流通比 free_mv/total_mv×100；_fina_arturn_attach_free_float_ratio_pct；缓存键 sb_act_6；RT_MONITOR_STATIC_VER 20260503-18
+# 代码更新时间：2026-05-03 13:11 fina_arturn 股东人数 hn0–hn8（stk_holdernumber）；_fina_arturn_attach_stk_holdernumber_quarters；缓存键 sb_act_7；RT_MONITOR_STATIC_VER 20260503-19

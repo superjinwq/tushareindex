@@ -653,6 +653,32 @@ body.rt-monitor :where(button, a, input:not([type="hidden"]), select, textarea, 
 .rt-monitor-fina-link-wrap .rt-monitor-margin-link:hover {
     color: #0d47a1;
 }
+.rt-monitor-sw-link-wrap {
+    margin: 2px 0 0 0;
+    padding: 0;
+    line-height: 1.2;
+}
+.rt-monitor-sw-link-wrap .rt-monitor-sw-link {
+    font-size: 12px;
+    color: #1565c0;
+    text-decoration: underline;
+}
+.rt-monitor-sw-link-wrap .rt-monitor-sw-link:hover {
+    color: #0d47a1;
+}
+.rt-monitor-niusan-link-wrap {
+    margin: 2px 0 0 0;
+    padding: 0;
+    line-height: 1.2;
+}
+.rt-monitor-niusan-link-wrap .rt-monitor-niusan-link {
+    font-size: 12px;
+    color: #1565c0;
+    text-decoration: underline;
+}
+.rt-monitor-niusan-link-wrap .rt-monitor-niusan-link:hover {
+    color: #0d47a1;
+}
 /* 主监控已迁出内嵌两融图：顶栏「刷新日频」仅服务两融，隐藏以免无效点击 */
 body.rt-monitor-main #btn-refresh-daily {
     display: none !important;
@@ -1519,9 +1545,25 @@ body.rt-monitor-fina-page .container {
     gap: 2px;
     min-width: 0;
 }
-/* 前三列表头（第二行）：与整表 3px 缝体系一致，略紧于默认 gap */
-.fina-arturn-table tr.fina-arturn-thead-cols th:nth-child(-n + 5) .fina-arturn-th-inner {
+/* 前十列表头（第二行）：上市日、省份、城市、前三持股、自由流通比、企业性质、市值/货币、负债率×2、营收(TTM)；略紧于默认 gap */
+.fina-arturn-table tr.fina-arturn-thead-cols th:nth-child(-n + 10) .fina-arturn-th-inner {
     gap: 1px;
+}
+/* 省份、城市：紧凑型列宽。border-box 下 sortBtn(含 border ≈22) + filterBtn(≈22) + 2字 label(≈26)
+   + padding(4) + border-left(1) ≈ 75px，取 76 留 1px 容错；两列等宽。
+   width/min/max-width 三连写死，避免 fixed table-layout 下个别 col 因 td 内容触发布局抖动；
+   长地名（≥3 字）由 nowrap + ellipsis 截断，td title 属性 hover 可看完整文本。
+   注意：下文 .fina-arturn-thead-cols th .fina-arturn-th-inner 全局居中，需在其后单独覆盖 loc 列 */
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th.fina-arturn-loc-col,
+#fina-arturn-table.median-table tbody td.fina-arturn-loc-col {
+    text-align: left;
+    width: 76px;
+    min-width: 76px;
+    max-width: 76px;
+    padding: 4px 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .fina-sort-btn {
     display: inline-flex;
@@ -1559,9 +1601,9 @@ body.rt-monitor-fina-page .container {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-/* 第 6 列起（PE…至固定资产；scroll 表列序随市值/负债列增列后顺延）：数值与表头控件整体居中，收紧左右内边距 */
+/* 第 11 列起（PE…至固定资产；含省份/城市/前三持股/自由流通比/企业性质增列后顺延）：数值与表头控件整体居中，收紧左右内边距 */
 .fina-arturn-wrap .fina-arturn-table.median-table tr.fina-arturn-thead-cols th,
-.fina-arturn-wrap .fina-arturn-table.median-table tbody td:nth-child(n + 6) {
+.fina-arturn-wrap .fina-arturn-table.median-table tbody td:nth-child(n + 11) {
     padding-left: 0;
     padding-right: 0;
 }
@@ -1588,16 +1630,13 @@ body.rt-monitor-fina-page .container {
 /* 分栏后：scroll 表列编号 = 旧单表列号 - 6（冻结列数）；
    上市日（旧 col7）现为 scroll col1，无左线（nth-child(n+2) 从 col2 起）；不再需要单独清除 */
 
-/* ── scroll 表 thead 第二行列间细竖线（排除分组边界列）──
-   分组边界列（scroll 内绝对位置）：5=营收 8=ROE 12=应收 16=毛利率 20=经营/经营 24=经营/营收
-   28=s_high 38=cf_high 48=oi_high 58=dtp_high 68=fst_high 78=ocs_high
-   89=oco0 98=r0 107=u0 116=v0 125=m_high 136=n_high 147=t_high 158=invchg 170=kchg 182=fchg */
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(n+2):not(:nth-child(5)):not(:nth-child(8)):not(:nth-child(12)):not(:nth-child(16)):not(:nth-child(20)):not(:nth-child(24)):not(:nth-child(28)):not(:nth-child(38)):not(:nth-child(48)):not(:nth-child(58)):not(:nth-child(68)):not(:nth-child(78)):not(:nth-child(89)):not(:nth-child(98)):not(:nth-child(107)):not(:nth-child(116)):not(:nth-child(125)):not(:nth-child(136)):not(:nth-child(147)):not(:nth-child(158)):not(:nth-child(170)):not(:nth-child(182)) {
+/* ── scroll 表 thead 第二行列间细竖线（排除分组边界列）；增列「前三持股、自由流通比、企业性质」后分组边界顺延 ── */
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(n+2):not(:nth-child(10)):not(:nth-child(13)):not(:nth-child(17)):not(:nth-child(21)):not(:nth-child(25)):not(:nth-child(29)):not(:nth-child(33)):not(:nth-child(43)):not(:nth-child(53)):not(:nth-child(63)):not(:nth-child(73)):not(:nth-child(83)):not(:nth-child(94)):not(:nth-child(103)):not(:nth-child(112)):not(:nth-child(121)):not(:nth-child(130)):not(:nth-child(141)):not(:nth-child(152)):not(:nth-child(163)):not(:nth-child(175)):not(:nth-child(187)):not(:nth-child(197)) {
     border-left: 1px solid var(--fina-arturn-vline-col, #e8e8e8);
 }
 
 /* ── scroll 表 thead 第一行（分组行）分组竖线：scroll 内相对位置（旧 n-2）──
-   旧 4=TTM 5=ROE 6=应收 7=毛利率 … 23=固定资产，现在 scroll 行第 2-21 格 */
+   旧 4=TTM 5=ROE 6=应收 7=毛利率 … 24=股东人数，现在 scroll 行第 2-22 格 */
 #fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(2),
 #fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(3),
 #fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(4),
@@ -1620,62 +1659,65 @@ body.rt-monitor-fina-page .container {
 #fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(21),
 #fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(22),
 #fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(23),
+#fina-arturn-table thead tr.fina-arturn-thead-group th.fina-arturn-th-group:nth-child(24),
 
-/* ── scroll 表 thead 第二行 + tbody 分组粗竖线（列编号 = 旧 - 6）──
-   5=营收(TTM) 8=roe0(ROE) 12=p0(应收) 16=g0(毛利率) 20=c0(经营/经营) 24=o0(经营/营收)
-   28=s_high(单季收入) 38=cf_high(单季现金) 48=oi_high(单季经营) 58=dtp_high(单季扣非)
-   68=fst_high(FCF) 78=ocs_high(单季现金/营收%) 89=oco0(单季现金/经营%)
-   98=r0(营收同比) 107=u0(营业利润) 116=v0(利润增速−收入增速) 125=m_high(毛利率新高/环比)
-   136=n_high(净利率新高/环比) 147=t_high(ROE扣非新高/环比) 158=invchg(存货) 170=kchg(合同负债) 182=fchg(固定资产) */
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(5),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(8),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(12),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(16),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(20),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(24),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(28),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(38),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(48),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(58),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(68),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(78),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(89),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(98),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(107),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(116),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(125),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(136),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(147),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(158),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(170),
-#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(182),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(5),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(8),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(12),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(16),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(20),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(24),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(28),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(38),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(48),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(58),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(68),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(78),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(89),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(98),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(107),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(116),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(125),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(136),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(147),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(158),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(170),
-#fina-arturn-table.median-table tbody > tr > td:nth-child(182) {
+/* ── scroll 表 thead 第二行 + tbody 分组粗竖线（110 列 scroll 版：含前三持股/自由流通比/企业性质）──
+   10=营收 13=roe0 17=p0 21=g0 25=c0 29=o0 33=s_high 43=cf_high … 187=fchg 197=hnchg */
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(10),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(13),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(17),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(21),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(25),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(29),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(33),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(43),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(53),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(63),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(73),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(83),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(94),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(103),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(112),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(121),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(130),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(141),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(152),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(163),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(175),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(187),
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th:nth-child(197),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(10),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(13),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(17),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(21),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(25),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(29),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(33),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(43),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(53),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(63),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(73),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(83),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(94),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(103),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(112),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(121),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(130),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(141),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(152),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(163),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(175),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(187),
+#fina-arturn-table.median-table tbody > tr > td:nth-child(197) {
     border-left: var(--fina-arturn-vline-group-width, 2px) solid var(--fina-arturn-vline-group, #6d7d8b);
 }
 .fina-arturn-table tr.fina-arturn-thead-cols th .fina-arturn-th-inner {
     justify-content: center;
     gap: 0;
+}
+/* 省份/城市表头：左对齐（仅作用于这两列） */
+#fina-arturn-table.median-table thead tr.fina-arturn-thead-cols th.fina-arturn-loc-col .fina-arturn-th-inner {
+    justify-content: flex-start;
 }
 /* 年份列表头：去掉排序钮右侧余量，四列控件贴紧 */
 .fina-arturn-table tr.fina-arturn-thead-cols th .fina-sort-btn {
@@ -1962,7 +2004,7 @@ body.rt-monitor-fina-page .container {
 }
 /* 右侧工具列内：条宽随列，不再重复左右外边距（由首行 flex gap 承担） */
 .rt-monitor-toolbar-col .rt-monitor-bias-strip {
-    margin: 0;
+    margin-top: 8px;
     width: 100%;
 }
 
@@ -2242,6 +2284,43 @@ body.rt-monitor-fina-page .container {
 #fina-arturn-scheme-modal-overlay.bias-series-modal-overlay .fina-arturn-scheme-modal-shell {
     pointer-events: auto;
 }
+/* 牛散持股页：方案配置 / 关联人明细弹窗（与财报方案弹窗同款穿透遮罩） */
+#niusan-scheme-modal-overlay.bias-series-modal-overlay {
+    background: transparent;
+    backdrop-filter: none;
+    pointer-events: none;
+    z-index: 210;
+}
+#niusan-scheme-modal-overlay.bias-series-modal-overlay .bias-series-modal {
+    pointer-events: auto;
+}
+#niusan-detail-modal-overlay.bias-series-modal-overlay {
+    background: transparent;
+    backdrop-filter: none;
+    pointer-events: none;
+    z-index: 211;
+}
+#niusan-detail-modal-overlay.bias-series-modal-overlay .bias-series-modal {
+    pointer-events: auto;
+}
+/* 牛散方案表单：需宽于财报筛选方案窄条（288px） */
+#niusan-scheme-modal-overlay.bias-series-modal-overlay .bias-series-modal.fina-arturn-scheme-modal-shell.niusan-scheme-modal-extra {
+    width: min(560px, 92vw);
+    min-width: 280px;
+}
+.bias-series-modal.niusan-detail-modal-shell {
+    width: min(960px, 96vw);
+    min-width: 320px;
+    max-width: min(96vw, 100%);
+    max-height: min(88vh, 95vh);
+    box-sizing: border-box;
+    overflow: auto;
+    resize: both;
+}
+.bias-series-modal-body.niusan-detail-modal-body {
+    min-height: 0;
+    overflow: auto;
+}
 /* 行情监控主页：弹窗遮罩与财报页一致（透明、去 blur、穿透点背后页面；弹窗壳可交互；关弹窗用关闭钮或 Esc） */
 body.rt-monitor-main .bias-series-modal-overlay,
 body.rt-monitor-main .lbzt-detail-modal-overlay {
@@ -2251,6 +2330,14 @@ body.rt-monitor-main .lbzt-detail-modal-overlay {
 }
 body.rt-monitor-main .bias-series-modal-overlay .bias-series-modal,
 body.rt-monitor-main .lbzt-detail-modal-overlay .lbzt-detail-modal-shell {
+    pointer-events: auto;
+}
+body.rt-monitor-niusan-page .bias-series-modal-overlay {
+    background: transparent;
+    backdrop-filter: none;
+    pointer-events: none;
+}
+body.rt-monitor-niusan-page .bias-series-modal-overlay .bias-series-modal {
     pointer-events: auto;
 }
 .bias-series-modal-overlay.is-open {
@@ -2478,6 +2565,76 @@ body.rt-monitor-main .lbzt-detail-modal-overlay .lbzt-detail-modal-shell {
 .bias-series-modal-header.fina-cap-eff-modal-header {
     padding: 8px 14px 7px;
 }
+/* 财报表：前十股东前三合计明细（表格弹窗，拖拽+resize+localStorage） */
+.bias-series-modal.fina-top3-holders-modal-shell {
+    display: flex;
+    flex-direction: column;
+    width: min(720px, 96vw);
+    min-width: 320px;
+    min-height: 320px;
+    height: min(56vh, 90vh);
+    max-width: min(96vw, 100%);
+    max-height: 95vh;
+    box-sizing: border-box;
+    overflow: auto;
+    resize: both;
+}
+.bias-series-modal-header.fina-top3-holders-modal-header {
+    padding: 8px 14px 7px;
+}
+.fina-top3-holders-modal-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+.fina-top3-holders-modal-sub {
+    margin: 0 0 8px;
+    font-size: var(--rt-monitor-font-data, 13px);
+    color: var(--rt-monitor-text-muted, #666);
+    line-height: 1.45;
+    text-align: center;
+}
+.fina-top3-holders-modal-table-wrap {
+    flex: 1;
+    min-height: 120px;
+    overflow: auto;
+    border: 1px solid #f0f0f0;
+    border-radius: 6px;
+}
+/* 无明细占位：与表内同居中 */
+.fina-top3-holders-modal-table-wrap .fina-top3-holders-modal-empty {
+    padding: 12px;
+    text-align: center;
+    color: var(--rt-monitor-text-muted, #666);
+    font-size: var(--rt-monitor-font-data, 13px);
+}
+table.fina-top3-holders-detail-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--rt-monitor-font-data, 13px);
+}
+table.fina-top3-holders-detail-table th,
+table.fina-top3-holders-detail-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #f0f0f0;
+    line-height: var(--rt-monitor-line-height-table, 1.5);
+    text-align: center;
+    vertical-align: middle;
+}
+table.fina-top3-holders-detail-table th {
+    background: #fafafa;
+    color: #555;
+    font-weight: 600;
+}
+table.fina-top3-holders-detail-table td {
+    font-variant-numeric: tabular-nums;
+}
+.fina-top3-holders-clickable {
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+}
 /* 固定资产弹窗：顶栏快照与上边缘保持 1px 缝隙 */
 .bias-series-modal.fina-fixed-assets-modal-shell .bias-series-modal-body {
     padding-top: 1px;
@@ -2676,13 +2833,30 @@ body.rt-monitor-main .lbzt-detail-modal-overlay .lbzt-detail-modal-shell {
     gap: 6px;
     min-width: min-content;
 }
-/* 固定资产弹窗指标：第一行基本面（报告期→成长/盈利→FCF·杠杆·CCC）；第二行估值·市值·行业 */
+/* 固定资产弹窗指标：第一行基本面；第二行上市/PE/市值/行业；第三行公司主页（与上行同一字号/标签色，无分隔线） */
 .fina-fixed-assets-metrics-row {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
     justify-content: center;
     gap: 0;
+}
+.fina-fixed-assets-metrics-row--website {
+    flex-wrap: nowrap;
+    justify-content: center;
+    align-items: baseline;
+    width: 100%;
+    box-sizing: border-box;
+    gap: 4px;
+}
+.fina-fixed-assets-metrics-row--website .fina-fixed-assets-website-a {
+    color: #1f6feb;
+    text-decoration: underline;
+    word-break: break-all;
+    text-align: center;
+}
+.fina-fixed-assets-metrics-row--website .fina-fixed-assets-website-a:hover {
+    color: #1558c0;
 }
 .fina-fixed-assets-metrics-row--market .fina-fixed-assets-metric:last-child .fina-fixed-assets-metric-v {
     white-space: normal;
@@ -3298,6 +3472,229 @@ body.rt-monitor-main .lbzt-detail-modal-overlay .lbzt-detail-modal-shell {
     color: #27ae60;
 }
 
+/* 申万行业页：对齐财报 fina-arturn —— 卡片块级；双表分栏无 position:sticky;left */
+body.rt-monitor-sw-page main.container.sw-industry-main {
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px;
+}
+body.rt-monitor-sw-page .median-table-wrap.sw-industry-card {
+    display: block;
+    width: auto;
+    max-width: 100%;
+    margin: 0 var(--rt-monitor-quad-gap, 12px) var(--rt-monitor-section-v-gap, 12px);
+    overflow-x: visible;
+    overflow-y: visible;
+}
+body.rt-monitor-sw-page .sw-industry-split-wrap {
+    --sw-head-row1-h: 32px;
+    --sw-head-row2-h: 32px;
+    --sw-body-row-h: 32px;
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    width: 100%;
+    max-width: 100%;
+    min-height: 0;
+    max-height: calc(100vh - 90px);
+    overflow: hidden;
+}
+body.rt-monitor-sw-page .sw-industry-frozen-pane {
+    flex-shrink: 0;
+    max-height: calc(100vh - 90px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: none; /* 左侧冻结区不显示滚动条，仅保留右侧滚动条 */
+    position: relative;
+    z-index: 2;
+    border-right: 2px solid #6d7d8b;
+}
+body.rt-monitor-sw-page .sw-industry-frozen-pane::-webkit-scrollbar {
+    width: 0 !important;
+    height: 0 !important;
+}
+body.rt-monitor-sw-page .sw-industry-frozen-pane .sw-industry-frozen-caption {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0 !important;
+    height: var(--sw-head-row1-h);
+    line-height: var(--sw-head-row1-h);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: sticky;
+    top: 0;
+    z-index: 12;
+    background: #fafafa;
+}
+body.rt-monitor-sw-page .sw-industry-scroll-pane {
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: calc(100vh - 90px);
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+}
+body.rt-monitor-sw-page .sw-industry-scroll-pane::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+}
+body.rt-monitor-sw-page .sw-industry-scroll-pane::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.22);
+    border-radius: 4px;
+}
+
+/* 冻结三列：收紧宽度；全表居中（覆盖 .median-table 默认 td 右对齐） */
+body.rt-monitor-sw-page .sw-industry-frozen-table.sw-industry-table {
+    table-layout: fixed;
+    /* 表头 nowrap：列宽需容下「行业代码」「行业名称」「家数/总市值/自由市值」 */
+    --sw-fz1: 5.5rem;
+    --sw-fz2: 6rem;
+    --sw-fz3: 3.5rem;
+    --sw-fz4: 4.8rem;
+    --sw-fz5: 4.8rem;
+    width: calc(var(--sw-fz1) + var(--sw-fz2) + var(--sw-fz3) + var(--sw-fz4) + var(--sw-fz5));
+    border-collapse: separate;
+    border-spacing: 0;
+}
+body.rt-monitor-sw-page .sw-industry-frozen-table th:nth-child(1),
+body.rt-monitor-sw-page .sw-industry-frozen-table td:nth-child(1) {
+    width: var(--sw-fz1);
+}
+body.rt-monitor-sw-page .sw-industry-frozen-table th:nth-child(2),
+body.rt-monitor-sw-page .sw-industry-frozen-table td:nth-child(2) {
+    width: var(--sw-fz2);
+}
+body.rt-monitor-sw-page .sw-industry-frozen-table th:nth-child(3),
+body.rt-monitor-sw-page .sw-industry-frozen-table td:nth-child(3) {
+    width: var(--sw-fz3);
+}
+body.rt-monitor-sw-page .sw-industry-frozen-table th:nth-child(4),
+body.rt-monitor-sw-page .sw-industry-frozen-table td:nth-child(4) {
+    width: var(--sw-fz4);
+}
+body.rt-monitor-sw-page .sw-industry-frozen-table th:nth-child(5),
+body.rt-monitor-sw-page .sw-industry-frozen-table td:nth-child(5) {
+    width: var(--sw-fz5);
+}
+body.rt-monitor-sw-page .sw-industry-frozen-table th,
+body.rt-monitor-sw-page .sw-industry-frozen-table td,
+body.rt-monitor-sw-page .sw-industry-scroll-table th,
+body.rt-monitor-sw-page .sw-industry-scroll-table td {
+    text-align: center !important;
+    vertical-align: middle;
+    box-sizing: border-box;
+    /* 覆盖全局 .median-table th,td 的 6px 10px，左右对称便于视觉居中 */
+    padding: 6px 8px !important;
+}
+/* 左右 tbody 行高强制一致，彻底避免冻结区与滚动区逐行漂移 */
+body.rt-monitor-sw-page .sw-industry-frozen-table tbody tr,
+body.rt-monitor-sw-page .sw-industry-scroll-table tbody tr {
+    height: var(--sw-body-row-h);
+}
+body.rt-monitor-sw-page .sw-industry-frozen-table tbody td,
+body.rt-monitor-sw-page .sw-industry-scroll-table tbody td {
+    height: var(--sw-body-row-h);
+    line-height: 1.2;
+    white-space: nowrap;
+}
+body.rt-monitor-sw-page .sw-industry-frozen-table thead th,
+body.rt-monitor-sw-page .sw-industry-scroll-table thead th {
+    white-space: nowrap;
+    text-align: center !important;
+}
+body.rt-monitor-sw-page .sw-industry-frozen-table .sw-industry-fz-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 冻结区：caption 负责第一行高度，thead 仅保留第二行列名 */
+body.rt-monitor-sw-page .sw-industry-frozen-table thead tr.sw-industry-fz-head-row > th {
+    height: var(--sw-head-row2-h);
+    border-bottom: 2px solid #6d7d8b;
+    position: sticky;
+    top: var(--sw-head-row1-h);
+    z-index: 11;
+    background: #fafafa;
+}
+body.rt-monitor-sw-page .sw-industry-frozen-table tbody td:nth-child(n + 2),
+body.rt-monitor-sw-page .sw-industry-frozen-table thead tr.sw-industry-fz-head-row th:nth-child(n + 2) {
+    border-left: 1px solid #e8e8e8;
+}
+
+body.rt-monitor-sw-page .sw-industry-scroll-table.sw-industry-table.median-table {
+    width: max-content;
+    /* separate+0：竖线在 thead/tbody 交界处不因 collapse 合并舍入错位；仍由左缘 border 画线 */
+    border-collapse: separate;
+    border-spacing: 0;
+}
+/* 右侧四组季度列：适度收紧列宽（表头+数据同步收紧，避免竖线错位） */
+body.rt-monitor-sw-page .sw-industry-scroll-table th,
+body.rt-monitor-sw-page .sw-industry-scroll-table td {
+    padding: 6px 5px !important;
+}
+body.rt-monitor-sw-page .sw-industry-scroll-table .fina-arturn-th-inner {
+    gap: 2px;
+}
+body.rt-monitor-sw-page .sw-industry-scroll-table .fina-sort-btn,
+body.rt-monitor-sw-page .sw-industry-scroll-table .fina-filter-btn {
+    min-width: 16px;
+    height: 16px;
+    line-height: 14px;
+    padding: 0 2px;
+    font-size: 9px;
+}
+body.rt-monitor-sw-page .sw-industry-scroll-table .median-table-num {
+    min-width: 0;
+    padding: 6px 5px !important;
+}
+
+/* 申万滚动区：列间浅竖线；分组粗竖线由页内 JS 注入 #sw-industry-scroll-table */
+body.rt-monitor-sw-page #sw-industry-scroll-table.sw-industry-scroll-table.median-table tbody td:nth-child(n + 2) {
+    border-left: 1px solid #e8e8e8;
+}
+body.rt-monitor-sw-page #sw-industry-scroll-table.sw-industry-scroll-table.median-table thead tr:first-child > th:nth-child(n + 2) {
+    border-left: 1px solid #e8e8e8;
+}
+body.rt-monitor-sw-page #sw-industry-scroll-table.sw-industry-scroll-table.median-table thead tr:first-child > th {
+    height: var(--sw-head-row1-h);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: #fafafa;
+}
+body.rt-monitor-sw-page #sw-industry-scroll-table.sw-industry-scroll-table.median-table thead tr:nth-child(2) > th {
+    height: var(--sw-head-row2-h);
+    border-left: 1px solid #e8e8e8;
+    border-bottom: 2px solid #6d7d8b;
+    position: sticky;
+    top: var(--sw-head-row1-h);
+    z-index: 9;
+    background: #fafafa;
+}
+body.rt-monitor-sw-page .sw-industry-scroll-table .median-cell-value.fall {
+    color: #27ae60;
+}
+body.rt-monitor-sw-page .sw-industry-scroll-table .sw-industry-yoy-niukui {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* 双表同行悬停（由页内 JS 加 .sw-industry-row-hover） */
+body.rt-monitor-sw-page .sw-industry-frozen-table tbody tr.sw-industry-row-hover td,
+body.rt-monitor-sw-page .sw-industry-scroll-table tbody tr.sw-industry-row-hover td {
+    background: #f5f5f5 !important;
+}
+body.rt-monitor-sw-page .sw-industry-frozen-table tbody tr.sw-industry-summary-row.sw-industry-row-hover td,
+body.rt-monitor-sw-page .sw-industry-scroll-table tbody tr.sw-industry-summary-row.sw-industry-row-hover td {
+    background: #eef2f6 !important;
+}
+
 /* 首行四表：与内嵌样式一致（外链备份） */
 .rt-monitor .container .median-quad-row {
     display: flex !important;
@@ -3424,3 +3821,31 @@ body.rt-monitor-main .lbzt-detail-modal-overlay .lbzt-detail-modal-shell {
 /* 代码更新时间：2026-04-27 14:35 财报 scroll 表分组竖线边界列更新（m 组由 9 列改 11 列后，后续边界整体右移 2 列） */
 /* 代码更新时间：2026-04-27 17:37 财报 scroll 表分组边界列更新：新增 n/t 的新高+环比后边界重排 */
 /* 代码更新时间：2026-04-27 17:56 修正分组边界列索引：invchg/kchg/fchg 实际起始列应为 158/170/182，解决表头错位 */
+/* 代码更新时间：2026-04-28 12:19 申万行业页：sw-industry-card 块级+内层横滚+前三列 min-width，修复宽表列被压成竖排字；RT_MONITOR_STATIC_VER 20260428-36 */
+/* 代码更新时间：2026-04-28 12:25 申万表前三列 sticky 冻结+第三列右侧阴影分隔；RT_MONITOR_STATIC_VER 20260428-37 */
+/* 代码更新时间：2026-04-28 12:46 申万页改双表分栏（.sw-industry-split-wrap）、收紧列宽、全表居中、同行 hover；RT_MONITOR_STATIC_VER 20260428-39 */
+/* 代码更新时间：2026-04-28 12:51 申万扣非列扭亏标签 .sw-industry-dtp-niukui；RT_MONITOR_STATIC_VER 20260428-40 */
+/* 代码更新时间：2026-04-28 12:53 申万页表头 thead white-space:nowrap；冻结列宽略增容字；RT_MONITOR_STATIC_VER 20260428-41 */
+/* 代码更新时间：2026-04-28 12:57 申万页全表 padding 左右对称 + 表头显式居中；RT_MONITOR_STATIC_VER 20260428-42 */
+/* 代码更新时间：2026-04-28 13:04 扭亏改标在扣非同比增速列（.sw-industry-yoy-niukui）；RT_MONITOR_STATIC_VER 20260428-43 */
+/* 代码更新时间：2026-04-28 13:13 申万滚动表 separate+0、数值格 padding 与表头一致，修正分割线竖线对齐；RT_MONITOR_STATIC_VER 20260428-44 */
+/* 代码更新时间：2026-04-28 13:16 申万分组粗竖线 thead nth-child JS 修正（模板 rt_monitor_sw.html）；RT_MONITOR_STATIC_VER 20260428-45 */
+/* 代码更新时间：2026-04-28 13:20 冻结表头占位行+行业名称；RT_MONITOR_STATIC_VER 20260428-46 */
+/* 代码更新时间：2026-04-28 13:25 申万标题移至冻结列上方；汇总行首列文案「汇总」；RT_MONITOR_STATIC_VER 20260428-47 */
+/* 代码更新时间：2026-04-28 13:35 申万冻结 thead 两行（占位行+列名）；占位高度由 JS 对齐滚动分组行；RT_MONITOR_STATIC_VER 20260428-49 */
+/* 代码更新时间：2026-04-28 14:25 申万冻结占位行改纯隐形高度（去边线/背景），避免视觉出现“多一行”；RT_MONITOR_STATIC_VER 20260428-51 */
+/* 代码更新时间：2026-04-28 14:46 申万冻结/滚动 tbody 强制同高行（--sw-body-row-h），修复逐行错位；RT_MONITOR_STATIC_VER 20260428-53 */
+/* 代码更新时间：2026-04-28 14:50 申万冻结列名恢复正常高度（上隐形占位+下列名），修复“行业代码行过高”；RT_MONITOR_STATIC_VER 20260428-54 */
+/* 代码更新时间：2026-04-28 14:56 左侧caption精确对齐右侧首行高度并移除thead占位行，修复左侧整体下沉；RT_MONITOR_STATIC_VER 20260428-55 */
+/* 代码更新时间：2026-04-28 15:16 申万冻结区新增总市值/自由市值两列（财报同口径）并扩展列宽；RT_MONITOR_STATIC_VER 20260428-56 */
+/* 代码更新时间：2026-04-28 16:20 申万右侧四组季度列收紧（th/td padding 与排序筛选按钮尺寸下调）；RT_MONITOR_STATIC_VER 20260428-64 */
+/* 代码更新时间：2026-04-28 16:54 申万页前三行 sticky（标题+两行表头），对齐财报页锁定体验；RT_MONITOR_STATIC_VER 20260428-66 */
+/* 代码更新时间：2026-04-28 17:12 申万 sticky 失效修复：split/frozen/scroll 容器改纵向 visible，避免祖先 overflow 锁死；RT_MONITOR_STATIC_VER 20260428-67 */
+/* 代码更新时间：2026-04-28 17:29 申万三行锁定层级修正：标题/分组/季度按 0/32/64 偏移固定，避免覆盖错判；RT_MONITOR_STATIC_VER 20260428-68 */
+/* 代码更新时间：2026-04-28 17:43 申万改容器内纵向滚动（左右面板同高）+ 三行sticky，避免依赖页面滚动；RT_MONITOR_STATIC_VER 20260428-69 */
+/* 代码更新时间：2026-04-28 17:55 申万右侧两行sticky偏移修正为0/row1，消除整体下移导致的再次错位；RT_MONITOR_STATIC_VER 20260428-70 */
+/* 代码更新时间：2026-04-28 14:40 申万冻结列改跨两行固定表头，移除占位高度测量与延时重算；RT_MONITOR_STATIC_VER 20260428-52 */
+/* 代码更新时间：2026-05-03 财报表增前三持股/企业性质列、分组竖线 nth-child+2、前三持股明细弹窗；RT_MONITOR_STATIC_VER 20260503-16 */
+/* 代码更新时间：2026-05-03 09:30 前三持股明细弹窗副标题与表头/单元格居中（压过 .median-table td 右对齐）；RT_MONITOR_STATIC_VER 20260503-17 */
+/* 代码更新时间：2026-05-03 11:05 财报表增自由流通比列：前缀 thead gap、细/粗竖线 nth-child+1、110 列 scroll 版；RT_MONITOR_STATIC_VER 20260503-18 */
+/* 代码更新时间：2026-05-03 13:11 股东人数分组：thead :not(197)、粗线 nth-child(197)、分组行 nth-child(24)；RT_MONITOR_STATIC_VER 20260503-19 */

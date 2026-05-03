@@ -63,6 +63,10 @@ var finaSchemeModalLayoutOpenTs = 0;
 var finaSchemeModalSaveTimer = null;
 /** 弹窗几何快照（px）：用于关窗时避免同步 getBoundingClientRect 触发整页（含大表 sticky）回流卡顿 */
 var finaSchemeModalLayoutMemory = null;
+/** 前三持股明细弹窗：几何持久化（与固定资产弹窗同一套路） */
+var FINA_TOP3_HOLDERS_MODAL_LAYOUT_STORAGE_KEY = 'rt_monitor_fina_top3_holders_modal_layout_v1';
+var finaTop3HoldersModalLayoutOpenTs = 0;
+var finaTop3HoldersModalSaveTimer = null;
 var _finaModalOpenCount = 0;
 function _modalOpened() {
     _finaModalOpenCount += 1;
@@ -105,6 +109,10 @@ var finaArturnState = {
         tsCode: '', secName: '', swName: '',
         total_mv_yi: '', free_mv_yi: '',
         a0: '', listDate: '',
+        province: '', city: '',
+        holders_top3_pct: '',
+        free_float_ratio_pct: '',
+        act_ent_type: '',
         money_cap_ratio_pct: '',
         fqm_debt_to_assets: '',
         fqm_interestdebt_ratio: '',
@@ -146,6 +154,8 @@ var finaArturnState = {
         k0: '', k1: '', k2: '', k3: '', k4: '', k5: '', k6: '', k7: '', k8: '',
         fchg: '',
         f0: '', f1: '', f2: '', f3: '', f4: '', f5: '', f6: '', f7: '',         f8: '',
+        hnchg: '',
+        hn0: '', hn1: '', hn2: '', hn3: '', hn4: '', hn5: '', hn6: '', hn7: '', hn8: '',
         u0: '', u1: '', u2: '', u3: '', u4: '', u5: '', u6: '', u7: '', u8: '',
         v0: '', v1: '', v2: '', v3: '', v4: '', v5: '', v6: '', v7: '', v8: ''
     },
@@ -218,6 +228,8 @@ function _finaMetricState() {
 */
 var FINA_FILTER_TYPE = {
     tsCode: 'text', secName: 'text', swName: 'text',
+    province: 'text', city: 'text',
+    act_ent_type: 'text',
     a0: 'date', listDate: 'date',
     s_high: 'binary01', cf_high: 'binary01', oi_high: 'binary01',
     dtp_high: 'binary01', fst_high: 'binary01', ocs_high: 'binary01',
@@ -474,6 +486,13 @@ var FINA_FIXED_ASSETS_DUAL_PAL = {
     ratioGmLine: 'rgba(109, 40, 217, 1)',
     ratioRoeLine: 'rgba(13, 148, 136, 1)',
 };
+
+function finaNormalizeExternalHttpUrl(raw) {
+    var s = String(raw || '').trim();
+    if (!s) return '';
+    if (/^https?:\/\//i.test(s)) return s;
+    return 'http://' + s.replace(/^\/+/, '');
+}
 
 function clearFinaFixedAssetsMetricsBar() {
     var el = document.getElementById('fina-fixed-assets-modal-metrics');
@@ -878,6 +897,25 @@ function renderFinaFixedAssetsMetricsBar(payload, arturnRow) {
             wrapMetricValue(actEntEsc, '') +
             '</span>'
     );
+    var websiteRaw = '';
+    if (payload && payload.website != null && String(payload.website).trim() !== '') {
+        websiteRaw = String(payload.website).trim();
+    } else if (arturnRow && arturnRow.website != null && String(arturnRow.website).trim() !== '') {
+        websiteRaw = String(arturnRow.website).trim();
+    }
+    var rowWebsiteBlock = '';
+    if (websiteRaw) {
+        var hrefW = finaNormalizeExternalHttpUrl(websiteRaw);
+        var labelW = websiteRaw.length > 64 ? websiteRaw.slice(0, 61) + '...' : websiteRaw;
+        rowWebsiteBlock =
+            '<div class="fina-fixed-assets-metrics-row fina-fixed-assets-metrics-row--website">' +
+            '<span class="fina-fixed-assets-metric-k">公司主页：</span>' +
+            '<a class="fina-fixed-assets-website-a" href="' + escapeHtmlAttr(hrefW) + '" ' +
+            'target="_blank" rel="noopener noreferrer" title="' + escapeHtmlAttr(websiteRaw) + '" ' +
+            'aria-label="在新窗口打开公司主页">' +
+            escapeHtmlAttr(labelW) +
+            '</a></div>';
+    }
     el.innerHTML =
         '<div class="fina-fixed-assets-metrics-inner">' +
         '<div class="fina-fixed-assets-metrics-row fina-fixed-assets-metrics-row--fundamentals">' +
@@ -886,6 +924,7 @@ function renderFinaFixedAssetsMetricsBar(payload, arturnRow) {
         '<div class="fina-fixed-assets-metrics-row fina-fixed-assets-metrics-row--market">' +
             rowMarket.join(sep) +
         '</div>' +
+        rowWebsiteBlock +
         '</div>';
 }
 
@@ -956,6 +995,158 @@ function scheduleSaveFinaFixedAssetsModalLayout(modalEl) {
         if (Date.now() - finaFixedAssetsModalLayoutOpenTs < 700) return;
         saveFinaFixedAssetsModalLayout(modalEl);
     }, 400);
+}
+
+function loadFinaTop3HoldersModalLayout() {
+    try {
+        if (typeof localStorage === 'undefined') return null;
+        var raw = localStorage.getItem(FINA_TOP3_HOLDERS_MODAL_LAYOUT_STORAGE_KEY);
+        if (!raw) return null;
+        var o = JSON.parse(raw);
+        if (typeof o.w !== 'number' || typeof o.h !== 'number') return null;
+        if (o.w < 320 || o.h < 320) return null;
+        return {
+            w: o.w,
+            h: o.h,
+            l: typeof o.l === 'number' ? o.l : null,
+            t: typeof o.t === 'number' ? o.t : null,
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+function saveFinaTop3HoldersModalLayout(modalEl) {
+    try {
+        if (!modalEl || typeof localStorage === 'undefined') return;
+        var rect = modalEl.getBoundingClientRect();
+        var w = Math.round(rect.width);
+        var h = Math.round(rect.height);
+        var l = Math.round(rect.left);
+        var t = Math.round(rect.top);
+        if (w < 320 || h < 320) return;
+        localStorage.setItem(
+            FINA_TOP3_HOLDERS_MODAL_LAYOUT_STORAGE_KEY,
+            JSON.stringify({ w: w, h: h, l: l, t: t })
+        );
+    } catch (e) {
+        /* ignore */
+    }
+}
+
+function applyFinaTop3HoldersModalSavedLayout() {
+    var overlay = document.getElementById('fina-top3-holders-modal-overlay');
+    var modal = overlay && overlay.querySelector('.fina-top3-holders-modal-shell');
+    if (!modal) return;
+    var lay = loadFinaTop3HoldersModalLayout();
+    if (!lay) return;
+    var vw = window.innerWidth || document.documentElement.clientWidth;
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    var minW = 320;
+    var minH = 320;
+    var w = Math.min(Math.max(lay.w, minW), Math.max(minW, vw - 4));
+    var h = Math.min(Math.max(lay.h, minH), Math.max(minH, vh - 4));
+    modal.style.width = w + 'px';
+    modal.style.height = h + 'px';
+    modal.style.transform = 'none';
+    var l = lay.l != null ? lay.l : (vw - w) / 2;
+    var t = lay.t != null ? lay.t : (vh - h) / 2;
+    l = Math.max(0, Math.min(l, vw - w));
+    t = Math.max(0, Math.min(t, vh - h));
+    modal.style.left = l + 'px';
+    modal.style.top = t + 'px';
+}
+
+function scheduleSaveFinaTop3HoldersModalLayout(modalEl) {
+    if (!modalEl) return;
+    clearTimeout(finaTop3HoldersModalSaveTimer);
+    finaTop3HoldersModalSaveTimer = setTimeout(function () {
+        if (Date.now() - finaTop3HoldersModalLayoutOpenTs < 700) return;
+        saveFinaTop3HoldersModalLayout(modalEl);
+    }, 400);
+}
+
+function formatFinaTop3HoldAmountCell(v) {
+    if (v === null || v === undefined || v === '') return '--';
+    var n = parseFloat(v);
+    if (isNaN(n)) return '--';
+    if (Math.abs(n) >= 1e8) return (n / 1e8).toFixed(2) + ' 亿';
+    if (Math.abs(n) >= 1e4) return (n / 1e4).toFixed(2) + ' 万';
+    return n.toFixed(2);
+}
+
+/** 表格单元格正文转义（非 HTML 属性上下文） */
+function escapeHtmlText(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function renderFinaTop3HoldersDetailTable(detailList) {
+    var wrap = document.getElementById('fina-top3-holders-modal-table-wrap');
+    if (!wrap) return;
+    var rows = Array.isArray(detailList) ? detailList : [];
+    if (!rows.length) {
+        wrap.innerHTML = '<div class="fina-top3-holders-modal-empty">暂无明细数据</div>';
+        return;
+    }
+    var html = [
+        '<table class="median-table fina-top3-holders-detail-table">',
+        '<thead><tr>',
+        '<th scope="col">股东名称</th>',
+        '<th scope="col">性质</th>',
+        '<th scope="col">持股数量</th>',
+        '<th scope="col">持股比例(%)</th>',
+        '<th scope="col">报告期截止</th>',
+        '</tr></thead><tbody>',
+    ];
+    rows.forEach(function (d) {
+        var nm = d && d.holder_name != null ? String(d.holder_name) : '';
+        var tp = d && d.holder_type != null ? String(d.holder_type) : '';
+        var ed = d && d.end_date != null ? String(d.end_date) : '';
+        html.push(
+            '<tr>' +
+                '<td>' + escapeHtmlText(nm) + '</td>' +
+                '<td>' + escapeHtmlText(tp) + '</td>' +
+                '<td>' + escapeHtmlText(formatFinaTop3HoldAmountCell(d && d.hold_amount)) + '</td>' +
+                '<td>' + escapeHtmlText(formatFinaArturnValue(d && d.hold_ratio, 2)) + '</td>' +
+                '<td>' + escapeHtmlText(ed) + '</td>' +
+            '</tr>'
+        );
+    });
+    html.push('</tbody></table>');
+    wrap.innerHTML = html.join('');
+}
+
+function openFinaTop3HoldersModal(tsCode, secName, detailList, endDateStr) {
+    var overlay = document.getElementById('fina-top3-holders-modal-overlay');
+    if (!overlay) return;
+    finaTop3HoldersModalLayoutOpenTs = Date.now();
+    var sub = document.getElementById('fina-top3-holders-modal-sub');
+    var tc = String(tsCode || '').trim();
+    var sn = String(secName || '').trim();
+    var ed = String(endDateStr || '').trim();
+    if (sub) {
+        sub.textContent =
+            (tc ? tc : '') +
+            (sn ? (tc ? ' · ' : '') + sn : '') +
+            (ed ? ' · 报告期截止 ' + ed : '');
+    }
+    renderFinaTop3HoldersDetailTable(Array.isArray(detailList) ? detailList : []);
+    overlay.classList.add('is-open');
+    _modalOpened();
+    applyFinaTop3HoldersModalSavedLayout();
+}
+
+function closeFinaTop3HoldersModal() {
+    var overlay = document.getElementById('fina-top3-holders-modal-overlay');
+    if (!overlay) return;
+    var wasOpen = overlay.classList.contains('is-open');
+    var modal = overlay.querySelector('.fina-top3-holders-modal-shell');
+    if (wasOpen && modal) saveFinaTop3HoldersModalLayout(modal);
+    overlay.classList.remove('is-open');
+    if (wasOpen) _modalClosed();
 }
 
 function loadFinaCashCreateModalLayout() {
@@ -3837,6 +4028,11 @@ function buildFinaMetricFilterShapeFrom(src) {
         free_mv_yi: String(s.free_mv_yi || ''),
         a0: String(s.a0 || ''),
         listDate: String(s.listDate || ''),
+        province: String(s.province || ''),
+        city: String(s.city || ''),
+        holders_top3_pct: String(s.holders_top3_pct || ''),
+        free_float_ratio_pct: String(s.free_float_ratio_pct || ''),
+        act_ent_type: String(s.act_ent_type || ''),
         money_cap_ratio_pct: String(s.money_cap_ratio_pct || ''),
         fqm_debt_to_assets: String(s.fqm_debt_to_assets || ''),
         fqm_interestdebt_ratio: String(s.fqm_interestdebt_ratio || ''),
@@ -4000,6 +4196,16 @@ function buildFinaMetricFilterShapeFrom(src) {
         f6: String(s.f6 || ''),
         f7: String(s.f7 || ''),
         f8: String(s.f8 || ''),
+        hnchg: String(s.hnchg || ''),
+        hn0: String(s.hn0 || ''),
+        hn1: String(s.hn1 || ''),
+        hn2: String(s.hn2 || ''),
+        hn3: String(s.hn3 || ''),
+        hn4: String(s.hn4 || ''),
+        hn5: String(s.hn5 || ''),
+        hn6: String(s.hn6 || ''),
+        hn7: String(s.hn7 || ''),
+        hn8: String(s.hn8 || ''),
         u0: String(s.u0 || ''),
         u1: String(s.u1 || ''),
         u2: String(s.u2 || ''),
@@ -4236,6 +4442,14 @@ function computeFixedAssetsChg(row) {
     return ((cur / avg) - 1) * 100;
 }
 
+/** 股东人数：最新季 hn0 ÷ 次新 hn1 − 1（百分点），用于 Chg% 列与排序筛选 */
+function computeHolderNumChg(row) {
+    var cur = parseFloat(row && row.hn0);
+    var prev = parseFloat(row && row.hn1);
+    if (isNaN(cur) || isNaN(prev) || prev === 0) return null;
+    return ((cur / prev) - 1) * 100;
+}
+
 function finaArturnGetSortCell(row, key) {
     if (key === 'tsCode') return row.ts_code;
     if (key === 'secName') return row.sec_name;
@@ -4244,6 +4458,11 @@ function finaArturnGetSortCell(row, key) {
     if (key === 'free_mv_yi') return row.free_mv_yi;
     if (key === 'a0') return row.a0;
     if (key === 'listDate') return row.list_date;
+    if (key === 'province') return row.province;
+    if (key === 'city') return row.city;
+    if (key === 'holders_top3_pct') return row.holders_top3_pct;
+    if (key === 'free_float_ratio_pct') return row.free_float_ratio_pct;
+    if (key === 'act_ent_type') return row.act_ent_type;
     if (key === 'money_cap_ratio_pct') return row.money_cap_ratio_pct;
     if (key === 'fqm_debt_to_assets') return row.fqm_debt_to_assets;
     if (key === 'fqm_interestdebt_ratio') return row.fqm_interestdebt_ratio;
@@ -4416,6 +4635,16 @@ function finaArturnGetSortCell(row, key) {
     if (key === 'f6') return row.f6;
     if (key === 'f7') return row.f7;
     if (key === 'f8') return row.f8;
+    if (key === 'hnchg') return computeHolderNumChg(row);
+    if (key === 'hn0') return row.hn0;
+    if (key === 'hn1') return row.hn1;
+    if (key === 'hn2') return row.hn2;
+    if (key === 'hn3') return row.hn3;
+    if (key === 'hn4') return row.hn4;
+    if (key === 'hn5') return row.hn5;
+    if (key === 'hn6') return row.hn6;
+    if (key === 'hn7') return row.hn7;
+    if (key === 'hn8') return row.hn8;
     if (key === 'u0') return row.u0;
     if (key === 'u1') return row.u1;
     if (key === 'u2') return row.u2;
@@ -4446,7 +4675,8 @@ function finaArturnNumSortProxy(v, dir) {
 
 function finaArturnCompareRows(a, b, key, dir) {
     var mult = dir === 'desc' ? -1 : 1;
-    if (key === 'tsCode' || key === 'secName' || key === 'swName') {
+    if (key === 'tsCode' || key === 'secName' || key === 'swName' ||
+            key === 'province' || key === 'city' || key === 'act_ent_type') {
         var sa = String(finaArturnGetSortCell(a, key) || '');
         var sb = String(finaArturnGetSortCell(b, key) || '');
         return mult * sa.localeCompare(sb, 'zh-CN', { numeric: true, sensitivity: 'base' });
@@ -4456,7 +4686,7 @@ function finaArturnCompareRows(a, b, key, dir) {
         var db = String(finaArturnGetSortCell(b, key) || '');
         return mult * da.localeCompare(db, 'zh-CN', { numeric: true, sensitivity: 'base' });
     }
-    if (key === 'ar_pct' || key === 'money_cap_ratio_pct' || key === 'fqm_debt_to_assets' ||
+    if (key === 'ar_pct' || key === 'holders_top3_pct' || key === 'free_float_ratio_pct' || key === 'money_cap_ratio_pct' || key === 'fqm_debt_to_assets' ||
             key === 'fqm_interestdebt_ratio' || key === 'ttm_revenue_yi' || key === 'pe_ttm' ||
             key === 'total_mv_yi' || key === 'free_mv_yi' ||
             key === 'roe0' || key === 'roe1' || key === 'roe2' || key === 'roe3' ||
@@ -4512,6 +4742,9 @@ function finaArturnCompareRows(a, b, key, dir) {
             key === 'fchg' ||
             key === 'f0' || key === 'f1' || key === 'f2' || key === 'f3' ||
             key === 'f4' || key === 'f5' || key === 'f6' || key === 'f7' || key === 'f8' ||
+            key === 'hnchg' ||
+            key === 'hn0' || key === 'hn1' || key === 'hn2' || key === 'hn3' ||
+            key === 'hn4' || key === 'hn5' || key === 'hn6' || key === 'hn7' || key === 'hn8' ||
             key === 'u0' || key === 'u1' || key === 'u2' || key === 'u3' || key === 'u4' ||
             key === 'u5' || key === 'u6' || key === 'u7' || key === 'u8' ||
             key === 'v0' || key === 'v1' || key === 'v2' || key === 'v3' || key === 'v4' ||
@@ -4528,6 +4761,11 @@ function finaArturnIsSortableColumnKey(key) {
     return key === 'swName' ||
         key === 'a0' ||
         key === 'listDate' ||
+        key === 'province' ||
+        key === 'city' ||
+        key === 'holders_top3_pct' ||
+        key === 'free_float_ratio_pct' ||
+        key === 'act_ent_type' ||
         key === 'total_mv_yi' ||
         key === 'free_mv_yi' ||
         key === 'money_cap_ratio_pct' ||
@@ -4589,6 +4827,9 @@ function finaArturnIsSortableColumnKey(key) {
         key === 'fchg' ||
         key === 'f0' || key === 'f1' || key === 'f2' || key === 'f3' ||
         key === 'f4' || key === 'f5' || key === 'f6' || key === 'f7' || key === 'f8' ||
+        key === 'hnchg' ||
+        key === 'hn0' || key === 'hn1' || key === 'hn2' || key === 'hn3' ||
+        key === 'hn4' || key === 'hn5' || key === 'hn6' || key === 'hn7' || key === 'hn8' ||
         key === 'u0' || key === 'u1' || key === 'u2' || key === 'u3' || key === 'u4' ||
         key === 'u5' || key === 'u6' || key === 'u7' || key === 'u8' ||
         key === 'v0' || key === 'v1' || key === 'v2' || key === 'v3' || key === 'v4' ||
@@ -4675,16 +4916,27 @@ function syncFinaArturnColumnWidths() {
     if (frozenTable) {
         frozenTable.style.tableLayout = 'fixed';
     }
-    /* 可滚动表：测量第二行 th 宽度，写入 colgroup */
     var scrollTable = document.getElementById('fina-arturn-table');
     if (!scrollTable) return;
     var colRow = scrollTable.querySelector('thead tr.fina-arturn-thead-cols');
     if (!colRow) return;
     var ths = Array.from(colRow.querySelectorAll('th'));
     if (!ths.length) return;
+
+    /* 省份 / 城市：紧凑型列宽 76px（与 CSS .fina-arturn-loc-col 三连写死的 width 一致）。
+       公式：sortBtn(含 border ≈22) + filterBtn(≈22) + 2字 label(≈26) + padding(4) + border(1) + 1px 容错。
+       JS 与 CSS 保持同一数值，避免 col-width(JS) 与 th/td-width(CSS) 不一致引起紧凑列再被布局调整。
+       3 字以上数据由 td 的 nowrap+ellipsis 截断（含 title）。其余列保持原 measure 逻辑。 */
+    var LOC_COL_WIDTH_PX = 76;
+
     var colHtml = ths.map(function (th) {
-        var w = Math.ceil(th.getBoundingClientRect().width);
-        if (w < 4) w = 48;
+        var w;
+        if (th.classList && th.classList.contains('fina-arturn-loc-col')) {
+            w = LOC_COL_WIDTH_PX;
+        } else {
+            w = Math.ceil(th.getBoundingClientRect().width);
+            if (w < 4) w = 48;
+        }
         return '<col style="width:' + w + 'px;min-width:' + w + 'px">';
     }).join('');
     var cg = document.getElementById('fina-arturn-colgroup');
@@ -4818,7 +5070,7 @@ function renderFinaMetricTable(panelKey) {
     var q7 = finaArturnQuarterLabel(cps[7]);
     var q8 = finaArturnQuarterLabel(cps[8]);
     /* thead 缓存：只要 periods / contractPeriods 未变，跳过整块 thead.innerHTML 重建
-       filter / sort 时通常 periods 不变，省去 185 列 HTML 拼接 + DOM 写入 + 强制 layout */
+       filter / sort 时通常 periods 不变，省去 187 列 HTML 拼接 + DOM 写入 + 强制 layout */
     var theadKey = periods.join(',') + '|' + cps.join(',');
     var skipTheadRebuild = (theadKey === st._theadKey) &&
         !!document.getElementById('fina-arturn-frozen-thead') &&
@@ -4845,7 +5097,15 @@ function renderFinaMetricTable(panelKey) {
         var sortGlyph = ascOn ? '▲' : descOn ? '▼' : '↕';
         var sortTitle = ascOn ? '当前升序，点击改为降序' : descOn ? '当前降序，点击取消排序' : '点击按升序排列';
         var sortAria = ascOn ? safeLabel + ' 升序' : descOn ? safeLabel + ' 降序' : safeLabel + ' 排序（未启用）';
-        return '<th><div class="fina-arturn-th-inner">' +
+        var thExtraCls =
+            key === 'province' ||
+            key === 'city' ||
+            key === 'holders_top3_pct' ||
+            key === 'free_float_ratio_pct' ||
+            key === 'act_ent_type'
+                ? ' class="fina-arturn-loc-col"'
+                : '';
+        return '<th' + thExtraCls + '><div class="fina-arturn-th-inner">' +
             '<button type="button" class="' + sortCls + '" data-sort-key="' + key + '" title="' +
             escapeHtmlAttr(sortTitle) + '" aria-label="' + sortAria + '">' + sortGlyph + '</button>' +
             '<span class="fina-th-label">' + safeLabel + '</span>' +
@@ -4880,7 +5140,7 @@ function renderFinaMetricTable(panelKey) {
     /* 可滚动面板 thead：从上市日开始（原第3格起） */
     thead.innerHTML =
         '<tr class="fina-arturn-thead-group">' +
-        '<th colspan="4" class="fina-arturn-th-group" scope="colgroup"></th>' +
+        '<th colspan="9" class="fina-arturn-th-group" scope="colgroup"></th>' +
         '<th colspan="3" class="fina-arturn-th-group" scope="colgroup">TTM</th>' +
         '<th colspan="4" class="fina-arturn-th-group" scope="colgroup">ROE（扣非）</th>' +
         '<th colspan="4" class="fina-arturn-th-group" scope="colgroup">应收账款周转天数</th>' +
@@ -4903,9 +5163,15 @@ function renderFinaMetricTable(panelKey) {
         '<th colspan="12" class="fina-arturn-th-group" scope="colgroup">存货（亿）</th>' +
         '<th colspan="12" class="fina-arturn-th-group" scope="colgroup">合同负债（亿）</th>' +
         '<th colspan="10" class="fina-arturn-th-group" scope="colgroup">固定资产（亿）</th>' +
+        '<th colspan="10" class="fina-arturn-th-group" scope="colgroup">股东人数（户）</th>' +
         '</tr>' +
         '<tr class="fina-arturn-thead-cols">' +
         buildTh('上市日', 'listDate') +
+        buildTh('省份', 'province') +
+        buildTh('城市', 'city') +
+        buildTh('前三持股', 'holders_top3_pct') +
+        buildTh('自由流通比', 'free_float_ratio_pct') +
+        buildTh('企业性质', 'act_ent_type') +
         buildTh('市值/货币', 'money_cap_ratio_pct') +
         buildTh('资产负债率', 'fqm_debt_to_assets') +
         buildTh('带息负债率', 'fqm_interestdebt_ratio') +
@@ -5096,6 +5362,16 @@ function renderFinaMetricTable(panelKey) {
         buildTh(q6, 'f6') +
         buildTh(q7, 'f7') +
         buildTh(q8, 'f8') +
+        buildTh('Chg%', 'hnchg') +
+        buildTh(q0, 'hn0') +
+        buildTh(q1, 'hn1') +
+        buildTh(q2, 'hn2') +
+        buildTh(q3, 'hn3') +
+        buildTh(q4, 'hn4') +
+        buildTh(q5, 'hn5') +
+        buildTh(q6, 'hn6') +
+        buildTh(q7, 'hn7') +
+        buildTh(q8, 'hn8') +
         '</tr>';
     } else {
         /* thead 内容未变（periods/contractPeriods 一致），仅原地更新排序按钮 class / 字符 */
@@ -5122,6 +5398,11 @@ function renderFinaMetricTable(panelKey) {
     var swOrKws = finaArturnSplitSwNameOrKeywords(filters.swName);
     var ma0 = String(filters.a0 || '').trim().toLowerCase();
     var listDateKw = String(filters.listDate || '').trim().toLowerCase();
+    var provinceKw = String(filters.province || '').trim().toLowerCase();
+    var cityKw = String(filters.city || '').trim().toLowerCase();
+    var actEntKw = String(filters.act_ent_type || '').trim().toLowerCase();
+    var mHoldersTop3 = buildNumericFilterMatcher(filters.holders_top3_pct);
+    var mFreeFloatRatio = buildNumericFilterMatcher(filters.free_float_ratio_pct);
     var mTotalMv = buildNumericFilterMatcher(filters.total_mv_yi);
     var mFreeMv = buildNumericFilterMatcher(filters.free_mv_yi);
     var mMoneyCapRatio = buildNumericFilterMatcher(filters.money_cap_ratio_pct);
@@ -5250,6 +5531,16 @@ function renderFinaMetricTable(panelKey) {
     var mf6 = buildNumericFilterMatcher(filters.f6);
     var mf7 = buildNumericFilterMatcher(filters.f7);
     var mf8 = buildNumericFilterMatcher(filters.f8);
+    var mhn0 = buildNumericFilterMatcher(filters.hn0);
+    var mhn1 = buildNumericFilterMatcher(filters.hn1);
+    var mhn2 = buildNumericFilterMatcher(filters.hn2);
+    var mhn3 = buildNumericFilterMatcher(filters.hn3);
+    var mhn4 = buildNumericFilterMatcher(filters.hn4);
+    var mhn5 = buildNumericFilterMatcher(filters.hn5);
+    var mhn6 = buildNumericFilterMatcher(filters.hn6);
+    var mhn7 = buildNumericFilterMatcher(filters.hn7);
+    var mhn8 = buildNumericFilterMatcher(filters.hn8);
+    var mhnchg = buildNumericFilterMatcher(filters.hnchg);
     var mfchg = buildNumericFilterMatcher(filters.fchg);
     var mu0 = buildNumericFilterMatcher(filters.u0);
     var mu1 = buildNumericFilterMatcher(filters.u1);
@@ -5322,6 +5613,8 @@ function renderFinaMetricTable(panelKey) {
         var swName = String(row.sw_name || '');
         var a0 = String(row.a0 || '');
         var listDate = String(row.list_date || '');
+        var province = String(row.province || '');
+        var city = String(row.city || '');
         if (st.excludeBj && /\.BJ$/i.test(tsCode.trim())) return false;
         if (st.excludeSt && finaArturnIsStStockName(secName)) return false;
         if (codeKw && tsCode.toLowerCase().indexOf(codeKw) < 0) return false;
@@ -5337,6 +5630,11 @@ function renderFinaMetricTable(panelKey) {
         if (mFreeMv && !mFreeMv(row.free_mv_yi)) return false;
         if (ma0 && !finaArturnDateTextMatch(a0, ma0)) return false;
         if (listDateKw && !finaArturnDateTextMatch(listDate, listDateKw)) return false;
+        if (provinceKw && province.toLowerCase().indexOf(provinceKw) < 0) return false;
+        if (cityKw && city.toLowerCase().indexOf(cityKw) < 0) return false;
+        if (actEntKw && String(row.act_ent_type || '').toLowerCase().indexOf(actEntKw) < 0) return false;
+        if (mHoldersTop3 && !mHoldersTop3(row.holders_top3_pct)) return false;
+        if (mFreeFloatRatio && !mFreeFloatRatio(row.free_float_ratio_pct)) return false;
         if (mMoneyCapRatio && !mMoneyCapRatio(row.money_cap_ratio_pct)) return false;
         if (mFqmDebtToAssets && !mFqmDebtToAssets(row.fqm_debt_to_assets)) return false;
         if (mFqmInterestdebtRatio && !mFqmInterestdebtRatio(row.fqm_interestdebt_ratio)) return false;
@@ -5460,6 +5758,16 @@ function renderFinaMetricTable(panelKey) {
         if (mf6 && !mf6(row.f6)) return false;
         if (mf7 && !mf7(row.f7)) return false;
         if (mf8 && !mf8(row.f8)) return false;
+        if (mhn0 && !mhn0(row.hn0)) return false;
+        if (mhn1 && !mhn1(row.hn1)) return false;
+        if (mhn2 && !mhn2(row.hn2)) return false;
+        if (mhn3 && !mhn3(row.hn3)) return false;
+        if (mhn4 && !mhn4(row.hn4)) return false;
+        if (mhn5 && !mhn5(row.hn5)) return false;
+        if (mhn6 && !mhn6(row.hn6)) return false;
+        if (mhn7 && !mhn7(row.hn7)) return false;
+        if (mhn8 && !mhn8(row.hn8)) return false;
+        if (mhnchg && !mhnchg(computeHolderNumChg(row))) return false;
         if (mu0 && !mu0(row.u0)) return false;
         if (mu1 && !mu1(row.u1)) return false;
         if (mu2 && !mu2(row.u2)) return false;
@@ -5549,7 +5857,7 @@ function renderFinaMetricTable(panelKey) {
         st._renderToken = (st._renderToken || 0) + 1;
         var _ftb = document.getElementById('fina-arturn-frozen-tbody');
         if (_ftb) _ftb.innerHTML = '<tr><td colspan="6" class="median-table-cat">无匹配数据</td></tr>';
-        tbody.innerHTML = '<tr><td colspan="191" class="median-table-cat">无匹配数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="206" class="median-table-cat">无匹配数据</td></tr>';
         /* 占位已写入 tbody，trMap 已失效；下次非空时必须走全量重建 */
         st._domBuiltRowsVersion = -1;
         st._frozenTrMap = null;
@@ -5575,8 +5883,77 @@ function renderFinaMetricTable(panelKey) {
                 '<td class="median-table-num">' + escapeHtmlAttr(formatFinaArturnAnnDate(row.a0)) + '</td>' +
                 '</tr>';
             /* 可滚动面板：第 7 列起（上市日…固定资产） */
+            var entDisp =
+                row.act_ent_type != null && String(row.act_ent_type).trim()
+                    ? String(row.act_ent_type).trim()
+                    : '--';
+            var ffRatio = row.free_float_ratio_pct;
+            var ffTitle =
+                ffRatio !== null && ffRatio !== undefined && ffRatio !== ''
+                    ? ' title="' + escapeHtmlAttr(String(ffRatio)) + '"'
+                    : '';
             var sHtml = trOpen +
                 '<td class="median-table-num">' + escapeHtmlAttr(formatFinaArturnAnnDate(row.list_date)) + '</td>' +
+                (function () {
+                    var pv = (row.province && String(row.province).trim()) ? String(row.province).trim() : '--';
+                    var cv = (row.city && String(row.city).trim()) ? String(row.city).trim() : '--';
+                    var pctRaw = row.holders_top3_pct;
+                    var detail = row.holders_top3_detail;
+                    var endD = String(row.holders_top3_end_date || '').trim();
+                    var hasDetail = Array.isArray(detail) && detail.length > 0;
+                    var disp =
+                        pctRaw !== null && pctRaw !== undefined && pctRaw !== ''
+                            ? formatFinaArturnValue(pctRaw, 2)
+                            : '--';
+                    var detailJson = escapeHtmlAttr('[]');
+                    try {
+                        detailJson = escapeHtmlAttr(JSON.stringify(hasDetail ? detail : []));
+                    } catch (eJson) {
+                        detailJson = escapeHtmlAttr('[]');
+                    }
+                    var clickCls = hasDetail ? ' fina-top3-holders-clickable' : '';
+                    var titleTop3 = hasDetail ? ' title="点击查看前三持股明细"' : '';
+                    return (
+                        '<td class="median-table-cat fina-arturn-loc-col" title="' +
+                        escapeHtmlAttr(pv) +
+                        '">' +
+                        escapeHtmlAttr(pv) +
+                        '</td>' +
+                        '<td class="median-table-cat fina-arturn-loc-col" title="' +
+                        escapeHtmlAttr(cv) +
+                        '">' +
+                        escapeHtmlAttr(cv) +
+                        '</td>' +
+                        '<td class="median-table-num fina-arturn-loc-col' +
+                        clickCls +
+                        '"' +
+                        titleTop3 +
+                        ' data-top3-detail-json="' +
+                        detailJson +
+                        '"' +
+                        ' data-top3-end-date="' +
+                        escapeHtmlAttr(endD) +
+                        '"' +
+                        ' data-top3-ts-code="' +
+                        escapeHtmlAttr(row.ts_code || '') +
+                        '"' +
+                        ' data-top3-sec-name="' +
+                        escapeHtmlAttr(row.sec_name || '') +
+                        '">' +
+                        escapeHtmlAttr(disp) +
+                        '</td>'
+                    );
+                })() +
+                '<td class="median-table-num fina-arturn-loc-col"' +
+                ffTitle +
+                '>' +
+                formatFinaArturnValue(row.free_float_ratio_pct, 2) +
+                '</td>' +
+                '<td class="median-table-cat fina-arturn-loc-col" title="' +
+                escapeHtmlAttr(entDisp === '--' ? '' : entDisp) +
+                '">' +
+                escapeHtmlAttr(entDisp) +
+                '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.money_cap_ratio_pct, 1) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.fqm_debt_to_assets, 2) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.fqm_interestdebt_ratio, 2) + '</td>' +
@@ -5767,6 +6144,16 @@ function renderFinaMetricTable(panelKey) {
                 '<td class="median-table-num">' + formatFinaArturnValue(row.f6) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.f7) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.f8) + '</td>' +
+                '<td class="median-table-num' + finaArturnNegClass(computeHolderNumChg(row)) + '">' + formatFinaArturnValue(computeHolderNumChg(row), 2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.hn0, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.hn1, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.hn2, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.hn3, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.hn4, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.hn5, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.hn6, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.hn7, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.hn8, 0) + '</td>' +
                 '</tr>';
             return { f: fHtml, s: sHtml };
         };
@@ -6223,7 +6610,10 @@ function computeFinaMetricFilterKeyTitle(panelKey, filterKey) {
     var labelMap = {
         tsCode: '股票代码（包含匹配）',
         secName: '股票名称（包含匹配）',
-        swName: '申万二级行业（包含匹配；多条件用英文 or 分隔，或关系）'
+        swName: '申万二级行业（包含匹配；多条件用英文 or 分隔，或关系）',
+        province: '省份（包含匹配）',
+        city: '城市（包含匹配）',
+        act_ent_type: '企业性质（包含匹配，stock_basic.act_ent_type）'
     };
     var title = labelMap[filterKey];
     if (!title && /^roe[0-3]$/.test(filterKey)) {
@@ -6242,6 +6632,10 @@ function computeFinaMetricFilterKeyTitle(panelKey, filterKey) {
         title = '公告日（支持包含匹配）';
     } else if (!title && /^listDate$/.test(filterKey)) {
         title = '上市日（支持包含匹配）';
+    } else if (!title && filterKey === 'holders_top3_pct') {
+        title = '前三持股（top10_holders 最新 end_date 内 hold_ratio 前三名合计，%）' + numHint;
+    } else if (!title && filterKey === 'free_float_ratio_pct') {
+        title = '自由流通比（%）= 自由市值÷总市值×100（亿元口径与总市值/自由市值列一致）' + numHint;
     } else if (!title && filterKey === 'total_mv_yi') {
         title = '总市值（亿元，stk_factor_pro.total_mv 万元/10000；表头不显示单位）' + numHint;
     } else if (!title && filterKey === 'free_mv_yi') {
@@ -6278,6 +6672,13 @@ function computeFinaMetricFilterKeyTitle(panelKey, filterKey) {
         var cpsF = Array.isArray(_finaMetricState().contractPeriods) ? _finaMetricState().contractPeriods : [];
         var rawF = cpsF[idxF];
         title = '固定资产（亿）·' + finaArturnQuarterLabel(rawF) + numHint;
+    } else if (!title && /^hnchg$/.test(filterKey)) {
+        title = '股东人数（户）·Chg%（hn0÷hn1−1，百分点）' + numHint;
+    } else if (!title && /^hn[0-8]$/.test(filterKey)) {
+        var idxHn = parseInt(filterKey.slice(2), 10);
+        var cpsHn = Array.isArray(_finaMetricState().contractPeriods) ? _finaMetricState().contractPeriods : [];
+        var rawHn = cpsHn[idxHn];
+        title = '股东人数（户）·stk_holdernumber.holder_num·' + finaArturnQuarterLabel(rawHn) + numHint;
     } else if (!title && /^(m|n|t)[0-8]$/.test(filterKey)) {
         var idxMn = parseInt(filterKey.charAt(1), 10);
         var cpsMn = Array.isArray(_finaMetricState().contractPeriods) ? _finaMetricState().contractPeriods : [];
@@ -6473,7 +6874,7 @@ function openFinaMetricFilterPopover(panelKey, filterKey, btnEl, anchorEvt) {
     if (!pop || !titleEl || !inputEl || !btnEl) return;
 
     /* Portal：首次使用时把 popover（及其配套 datalist）提升到 <body> 顶层。
-       原位置位于 <section class="fina-arturn-wrap"> 内，此 section 子树含 6000 行 × 187 列 tr，
+       原位置位于 <section class="fina-arturn-wrap"> 内，此 section 子树含 6000 行 × 193 列 tr，
        Chrome 在 click/focus/样式匹配时会沿 DOM 树做祖先/子树评估，大子树会引起显著卡顿。
        position:fixed 只解决布局，不解决 DOM 树位置；必须手动搬到 body 才能彻底隔离。 */
     if (pop.parentElement !== document.body) {
@@ -6656,6 +7057,21 @@ function initFinaMetricPanel(panelKey) {
         splitWrap.addEventListener('click', function (ev) {
             var t = ev.target;
             if (!t || !t.closest) return;
+            var hitTop3 = t.closest('.fina-top3-holders-clickable');
+            if (hitTop3) {
+                var rawJ = hitTop3.getAttribute('data-top3-detail-json') || '[]';
+                var detail = [];
+                try {
+                    detail = JSON.parse(rawJ);
+                } catch (eTop3) {
+                    detail = [];
+                }
+                var ed = String(hitTop3.getAttribute('data-top3-end-date') || '');
+                var tc3 = String(hitTop3.getAttribute('data-top3-ts-code') || '');
+                var secN = String(hitTop3.getAttribute('data-top3-sec-name') || '');
+                openFinaTop3HoldersModal(tc3, secN, detail, ed);
+                return;
+            }
             var hit = t.closest('.fina-fixed-assets-clickable');
             if (!hit) return;
             var tsCode = String(hit.getAttribute('data-fixed-assets-ts-code') || '').trim();
@@ -6899,6 +7315,11 @@ function initFinaMetricPanel(panelKey) {
                 var ceOvNow = document.getElementById('fina-cap-eff-modal-overlay');
                 if (ceOvNow && ceOvNow.classList.contains('is-open')) {
                     closeFinaCapEffModal();
+                    return;
+                }
+                var top3OvNow = document.getElementById('fina-top3-holders-modal-overlay');
+                if (top3OvNow && top3OvNow.classList.contains('is-open')) {
+                    closeFinaTop3HoldersModal();
                     return;
                 }
                 setFinaFixedAssetsGrowthConfigPanelOpen(false);
@@ -7252,6 +7673,78 @@ function initFinaMetricPanel(panelKey) {
                 roCeShell.observe(capEffModal);
             }
         }
+        /* 前三持股明细弹窗：关闭、遮罩、拖拽、resize 防抖写盘 */
+        var top3Overlay = document.getElementById('fina-top3-holders-modal-overlay');
+        var top3Close = document.getElementById('fina-top3-holders-modal-close');
+        if (top3Close && !top3Close.dataset.boundTop3Close) {
+            top3Close.dataset.boundTop3Close = '1';
+            top3Close.addEventListener('click', closeFinaTop3HoldersModal);
+        }
+        if (top3Overlay && !top3Overlay.dataset.boundTop3Overlay) {
+            top3Overlay.dataset.boundTop3Overlay = '1';
+            top3Overlay.addEventListener('click', function (e) {
+                if (e.target === top3Overlay) closeFinaTop3HoldersModal();
+            });
+        }
+        var top3Modal = top3Overlay && top3Overlay.querySelector('.fina-top3-holders-modal-shell');
+        var top3Header = top3Overlay && top3Overlay.querySelector('.fina-top3-holders-modal-header');
+        if (top3Modal && top3Header && top3Overlay && top3Overlay.dataset.finaTop3LayoutBound !== '1') {
+            top3Overlay.dataset.finaTop3LayoutBound = '1';
+            top3Modal.style.position = 'fixed';
+            top3Modal.style.left = '50%';
+            top3Modal.style.top = '50%';
+            top3Modal.style.transform = 'translate(-50%, -50%)';
+            var top3Dragging = false;
+            var top3StartX = 0;
+            var top3StartY = 0;
+            var top3StartLeft = 0;
+            var top3StartTop = 0;
+            var top3DragW = 0;
+            var top3DragH = 0;
+            top3Header.style.cursor = 'move';
+            top3Header.addEventListener('mousedown', function (e) {
+                if (e.button !== 0) return;
+                var tg = e.target;
+                if (tg && tg.closest && tg.closest('input, button, label, select, textarea, a')) return;
+                top3Dragging = true;
+                top3StartX = e.clientX;
+                top3StartY = e.clientY;
+                var rect = top3Modal.getBoundingClientRect();
+                top3StartLeft = rect.left;
+                top3StartTop = rect.top;
+                top3DragW = rect.width;
+                top3DragH = rect.height;
+                top3Modal.style.transform = '';
+                e.preventDefault();
+            });
+            document.addEventListener('mousemove', function (e) {
+                if (!top3Dragging) return;
+                var dx = e.clientX - top3StartX;
+                var dy = e.clientY - top3StartY;
+                var newLeft = top3StartLeft + dx;
+                var newTop = top3StartTop + dy;
+                var vw = window.innerWidth || document.documentElement.clientWidth;
+                var vh = window.innerHeight || document.documentElement.clientHeight;
+                var maxLeft = vw - top3DragW;
+                var maxTop = vh - top3DragH;
+                if (newLeft < 0) newLeft = 0;
+                if (newTop < 0) newTop = 0;
+                if (newLeft > maxLeft) newLeft = maxLeft;
+                if (newTop > maxTop) newTop = maxTop;
+                top3Modal.style.left = newLeft + 'px';
+                top3Modal.style.top = newTop + 'px';
+            });
+            document.addEventListener('mouseup', function () {
+                if (top3Dragging) saveFinaTop3HoldersModalLayout(top3Modal);
+                top3Dragging = false;
+            });
+            if (typeof ResizeObserver !== 'undefined') {
+                var roTop3Shell = new ResizeObserver(function () {
+                    scheduleSaveFinaTop3HoldersModalLayout(top3Modal);
+                });
+                roTop3Shell.observe(top3Modal);
+            }
+        }
     })();
     fetchFinaMetricTable(panelKey, _finaMetricState().selectedEndDate || '');
 }
@@ -7406,3 +7899,18 @@ window.addEventListener('load', function () {
 /* 代码更新时间：2026-04-27 14:35 m_high/m_qoq 序列化改用 ?? 保留 0 值显示（不再渲染为 --）；RT_MONITOR_STATIC_VER 20260427-22 */
 /* 代码更新时间：2026-04-27 17:37 单季度净利率/ROE(扣非)新增新高+环比列（整数显示）并同步筛选排序与列数；RT_MONITOR_STATIC_VER 20260427-23 */
 /* 代码更新时间：2026-04-27 17:52 空结果占位 colspan 同步为 191（与当前表体总列一致），避免筛选后表头错位；RT_MONITOR_STATIC_VER 20260427-24 */
+/* 代码更新时间：2026-05-02 19:59 上市日后省份/城市列与固定资产弹窗顶栏公司主页（stock_company）；RT_MONITOR_STATIC_VER 20260502-1 */
+/* 代码更新时间：2026-05-02 公司主页移入指标区第三行（上市/市值行下）、居中；RT_MONITOR_STATIC_VER 20260502-2 */
+/* 代码更新时间：2026-05-02 20:13 财报表省份/城市列收窄并居中（.fina-arturn-loc-col）；RT_MONITOR_STATIC_VER 20260502-3 */
+/* 代码更新时间：2026-05-02 20:20 财报表省份/城市：列宽随标头、内容靠左（CSS 覆盖 thead 全局居中）；RT_MONITOR_STATIC_VER 20260502-4 */
+/* 代码更新时间：2026-05-02 20:23 固定资产弹窗第三行公司主页：去掉顶部分隔线，标签改用 .fina-fixed-assets-metric-k 与上行一致；RT_MONITOR_STATIC_VER 20260502-5 */
+/* 代码更新时间：2026-05-02 21:08 恢复全表列宽同步逻辑，仅保留省份/城市字段类名与局部样式；RT_MONITOR_STATIC_VER 20260502-10 */
+/* 代码更新时间：2026-05-02 21:11 syncFinaArturnColumnWidths：仅对 .fina-arturn-loc-col 写固定 56px，其余列保持原测量逻辑；RT_MONITOR_STATIC_VER 20260502-11 */
+/* 代码更新时间：2026-05-02 21:19 syncFinaArturnColumnWidths：省份(N=3)/城市(N=4) 列宽 = 排序钮 + N 个汉字 + 筛选钮 + gap*2 + th padding，canvas 实测字宽；RT_MONITOR_STATIC_VER 20260502-12 */
+/* 代码更新时间：2026-05-02 21:35 省份/城市改为紧凑型 N=2（按 label 字数等宽），td 注入 title + nowrap+ellipsis 防长地名撑高；RT_MONITOR_STATIC_VER 20260502-13 */
+/* 代码更新时间：2026-05-02 21:46 紧凑型双保险：CSS 给 loc-col 写死 width/min/max-width:70px，避免个别 col-width 在 fixed table-layout 下被 td 内容撑开；JS 移除一次性诊断；RT_MONITOR_STATIC_VER 20260502-14 */
+/* 代码更新时间：2026-05-02 21:50 loc-col 紧凑宽度统一为 76px：CSS 与 JS LOC_COL_WIDTH_PX 同值，避免 70 触发 nowrap+ellipsis 把 label 截成「省/城…」；RT_MONITOR_STATIC_VER 20260502-15 */
+/* 代码更新时间：2026-05-03 09:15 前三持股/企业性质列、top10_holders 批量附加、明细弹窗 localStorage；RT_MONITOR_STATIC_VER 20260503-16 */
+/* 代码更新时间：2026-05-03 09:30 前三持股明细弹窗：副标题与表头/单元格居中（压过 median-table td 右对齐）；RT_MONITOR_STATIC_VER 20260503-17 */
+/* 代码更新时间：2026-05-03 11:05 自由流通比列（前三持股右侧，紧凑 loc-col，后端 free_mv/total_mv×100）；RT_MONITOR_STATIC_VER 20260503-18 */
+/* 代码更新时间：2026-05-03 13:11 固定资产右侧股东人数 hnchg+hn0–hn8（stk_holdernumber）；空表 colspan 206；RT_MONITOR_STATIC_VER 20260503-19 */
