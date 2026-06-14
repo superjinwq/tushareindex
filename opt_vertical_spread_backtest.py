@@ -516,6 +516,7 @@ def concludeAndExport(condDf: pd.DataFrame, sigDf: pd.DataFrame, outDir: str, pr
         _bucketCostRel(cond).to_csv(os.path.join(outDir, f"concl_cost_{price_col}_{tslabel}.csv"), index=False, encoding="utf-8-sig")
         summarize(cond, ["direction", "tp_mult"]).to_csv(os.path.join(outDir, f"concl_tp_{price_col}_{tslabel}.csv"), index=False, encoding="utf-8-sig")
         summarize(cond, ["direction", "expiry_kind"]).to_csv(os.path.join(outDir, f"concl_expiry_{price_col}_{tslabel}.csv"), index=False, encoding="utf-8-sig")
+        jointTopCombos(condDf, outDir, price_col)
         _printConclusions(condDf, cond)
     if not sigDf.empty:
         sigSum = summarize(sigDf, ["code", "direction"])
@@ -523,12 +524,47 @@ def concludeAndExport(condDf: pd.DataFrame, sigDf: pd.DataFrame, outDir: str, pr
         logger.info("[信号回测B汇总]\n%s", sigSum.to_string(index=False))
 
 
-def _bucketCostRel(df: pd.DataFrame) -> pd.DataFrame:
-    bins = [0, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 1.01]
-    labels = ["<0.2", "0.2-0.3", "0.3-0.4", "0.4-0.5", "0.5-0.6", "0.6-0.7", ">0.7"]
+COST_BINS = [0, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 1.01]
+COST_LABELS = ["<0.2", "0.2-0.3", "0.3-0.4", "0.4-0.5", "0.5-0.6", "0.6-0.7", ">0.7"]
+
+
+def _addCostBucket(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
-    d["cost_bucket"] = pd.cut(d["cost_rel"], bins=bins, labels=labels)
-    return summarize(d, ["direction", "cost_bucket"])
+    d["cost_bucket"] = pd.cut(d["cost_rel"], bins=COST_BINS, labels=COST_LABELS)
+    return d
+
+
+def _bucketCostRel(df: pd.DataFrame) -> pd.DataFrame:
+    return summarize(_addCostBucket(df), ["direction", "cost_bucket"])
+
+
+def jointTopCombos(condDf: pd.DataFrame, outDir: str, price_col: str,
+                   topn: int = 3, min_n: int = 100) -> pd.DataFrame:
+    """方向正确子样本上, 按(到期月×宽度×成本桶×止盈)联合分组, 每标的×方向挑 Top 组合。"""
+    cond = condDf[condDf["dir_correct"] == True].copy()  # noqa: E712
+    if cond.empty:
+        return pd.DataFrame()
+    cond = _addCostBucket(cond)
+    keys = ["code", "direction", "expiry_kind", "width", "cost_bucket", "tp_mult"]
+    agg = cond.groupby(keys, observed=True).apply(_aggGroup, include_groups=False).reset_index()
+    agg = agg[agg["n"] >= min_n].copy()
+    if agg.empty:
+        return pd.DataFrame()
+    tslabel = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    agg.to_csv(os.path.join(outDir, f"opt_spread_joint_{price_col}_{tslabel}.csv"),
+               index=False, encoding="utf-8-sig")
+    # 每 code×direction 取期望收益(avg_ret) Top；并标周转优选(ret_per_day 最高)
+    picks: list[pd.DataFrame] = []
+    for (code, direction), sub in agg.groupby(["code", "direction"]):
+        byRet = sub.sort_values("avg_ret", ascending=False).head(topn).copy()
+        byRet["rank_by"] = "期望收益"
+        byEff = sub.sort_values("ret_per_day", ascending=False).head(1).copy()
+        byEff["rank_by"] = "周转优选"
+        picks.append(pd.concat([byRet, byEff]))
+    top = pd.concat(picks).reset_index(drop=True)
+    top.to_csv(os.path.join(outDir, f"opt_spread_top_{price_col}_{tslabel}.csv"),
+               index=False, encoding="utf-8-sig")
+    return top
 
 
 def _printConclusions(condDf: pd.DataFrame, cond: pd.DataFrame) -> None:
@@ -589,4 +625,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# 代码更新时间：2026-06-14 09:50
+# 代码更新时间：2026-06-14 11:25
