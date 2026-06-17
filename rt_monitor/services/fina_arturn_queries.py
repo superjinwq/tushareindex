@@ -971,6 +971,22 @@ _TOP10_HOLDERS_TOP3_SQL = (
     'FROM ranked WHERE rk <= 3 '
     'ORDER BY ts_code, rk'
 )
+_TOP10_HOLDERS_TOP3_SQL_WITH_CHANGE = (
+    'WITH latest AS ( '
+    '  SELECT ts_code, MAX(end_date) AS mx '
+    '  FROM stock_tushare.top10_holders '
+    '  WHERE ts_code IN ({ph}) '
+    '  GROUP BY ts_code '
+    '), ranked AS ( '
+    '  SELECT h.ts_code, h.end_date, h.holder_name, h.holder_type, h.hold_amount, h.hold_ratio, h.hold_change, '
+    '    ROW_NUMBER() OVER (PARTITION BY h.ts_code ORDER BY h.hold_ratio DESC) AS rk '
+    '  FROM stock_tushare.top10_holders h '
+    '  INNER JOIN latest l ON l.ts_code = h.ts_code AND l.mx = h.end_date '
+    ') '
+    'SELECT ts_code, end_date, holder_name, holder_type, hold_amount, hold_ratio, hold_change '
+    'FROM ranked WHERE rk <= 3 '
+    'ORDER BY ts_code, rk'
+)
 # 全市场约 5.4k 码：单次 IN 查询约 2.7s（2026-06-17 本机）；原 chunk=450 串行约 14s
 FINA_TOP10_HOLDERS_SINGLE_QUERY_MAX = int(os.getenv('FINA_TOP10_HOLDERS_SINGLE_QUERY_MAX', '8000'))
 FINA_TOP10_HOLDERS_CHUNK_SIZE = int(os.getenv('FINA_TOP10_HOLDERS_CHUNK_SIZE', '2000'))
@@ -979,24 +995,26 @@ FINA_TOP10_HOLDERS_PARALLEL_WORKERS = max(
 )
 
 
-def _group_top10_holders_top3_rows(raw_rows: list) -> dict[str, list]:
+def _group_top10_holders_top3_rows(raw_rows: list, hasHoldChange: bool = False) -> dict[str, list]:
     by_code: dict[str, list] = {}
     for rr in raw_rows or []:
         if not rr or rr[0] is None:
             continue
         tsc = str(rr[0]).strip()
+        hchg = rr[6] if hasHoldChange and len(rr) > 6 else None
         by_code.setdefault(tsc, []).append(
-            (rr[1], rr[2], rr[3], rr[4], rr[5]),
+            (rr[1], rr[2], rr[3], rr[4], rr[5], hchg),
         )
     return by_code
 
 
-def _fetch_top10_holders_top3_sql(part: list[str], conn) -> list:
+def _fetch_top10_holders_top3_sql(part: list[str], conn, hasHoldChange: bool = False) -> list:
     if not part:
         return []
     ph = ','.join(['%s'] * len(part))
+    tpl = _TOP10_HOLDERS_TOP3_SQL_WITH_CHANGE if hasHoldChange else _TOP10_HOLDERS_TOP3_SQL
     with conn.cursor() as cur:
-        cur.execute(_TOP10_HOLDERS_TOP3_SQL.format(ph=ph), tuple(part))
+        cur.execute(tpl.format(ph=ph), tuple(part))
         return cur.fetchall() or []
 
 
@@ -1004,12 +1022,27 @@ def _fetch_top10_holders_top3_map(codes: list[str], conn=None) -> dict[str, list
     """批量取最新期末 top3 股东；默认单次 IN 查全市场，超阈值再分块并行。"""
     if not codes:
         return {}
+    hasHoldChange = False
+    probeConn = conn
+    ownProbe = False
+    if probeConn is None:
+        probeConn = pymysql.connect(**DB_CONFIG_TUSHARE)
+        ownProbe = True
+    try:
+        hasHoldChange = _tushare_column_exists(probeConn, 'top10_holders', 'hold_change')
+    except Exception:
+        hasHoldChange = False
+    finally:
+        if ownProbe:
+            probeConn.close()
+
     if len(codes) <= FINA_TOP10_HOLDERS_SINGLE_QUERY_MAX:
         ownConn = conn is None
         dbConn = conn if conn is not None else pymysql.connect(**DB_CONFIG_TUSHARE)
         try:
             return _group_top10_holders_top3_rows(
-                _fetch_top10_holders_top3_sql(codes, dbConn),
+                _fetch_top10_holders_top3_sql(codes, dbConn, hasHoldChange),
+                hasHoldChange,
             )
         finally:
             if ownConn:
@@ -1024,7 +1057,8 @@ def _fetch_top10_holders_top3_map(codes: list[str], conn=None) -> dict[str, list
         dbConn = pymysql.connect(**DB_CONFIG_TUSHARE)
         try:
             return _group_top10_holders_top3_rows(
-                _fetch_top10_holders_top3_sql(part, dbConn),
+                _fetch_top10_holders_top3_sql(part, dbConn, hasHoldChange),
+                hasHoldChange,
             )
         finally:
             dbConn.close()
@@ -1041,7 +1075,7 @@ def _fina_arturn_attach_top10_holders_top3(conn, rows: list[dict]) -> None:
     """就地写入 holders_top3_pct、holders_top3_detail、holders_top3_end_date。
 
     口径：top10_holders 按 ts_code 取最新 end_date，在该期末快照内按 hold_ratio 降序取前 3，合计占比（%）；
-    明细含 holder_name、holder_type、hold_amount、hold_ratio、end_date。
+    明细含 holder_name、holder_type、hold_amount、hold_ratio、hold_change（若库有该列）、end_date。
     """
     if not rows:
         return
@@ -1101,7 +1135,7 @@ def _fina_arturn_attach_top10_holders_top3(conn, rows: list[dict]) -> None:
         details: list[dict] = []
         ratio_sum = 0.0
         end_iso = ''
-        for end_dt, hname, htype, hamt, hratio in lst:
+        for end_dt, hname, htype, hamt, hratio, hchg in lst:
             if not end_iso:
                 end_iso = _dt_iso(end_dt)
             rf = _to_float(hratio)
@@ -1113,6 +1147,7 @@ def _fina_arturn_attach_top10_holders_top3(conn, rows: list[dict]) -> None:
                     'holder_type': str(htype or '').strip(),
                     'hold_amount': _to_float(hamt),
                     'hold_ratio': rf,
+                    'hold_change': _to_float(hchg),
                     'end_date': _dt_iso(end_dt),
                 }
             )
@@ -1196,6 +1231,48 @@ def _fina_arturn_attach_stk_holdernumber_quarters(
             if not pk:
                 continue
             row[f'hn{idx}'] = by_pair.get((tc, pk))
+
+
+def _fina_arturn_attach_hn_qoq_low(rows: list[dict]) -> None:
+    """股东人数：hn_qoq=从 hn0 起连续「人数环比下降」的季数；hn_low=hn0 是否为九季已有值中的最小（0/1）。"""
+    for row in rows:
+        row['hn_qoq'] = None
+        row['hn_low'] = None
+        h0 = row.get('hn0')
+        if h0 is None:
+            continue
+        try:
+            h0f = float(h0)
+        except (TypeError, ValueError):
+            continue
+        present: list[float] = []
+        for i in range(9):
+            v = row.get(f'hn{i}')
+            if v is not None:
+                try:
+                    present.append(float(v))
+                except (TypeError, ValueError):
+                    pass
+        if not present:
+            row['hn_low'] = None
+        else:
+            row['hn_low'] = 1 if h0f == min(present) else 0
+        decl = 0
+        prev = h0f
+        for i in range(1, 9):
+            curr = row.get(f'hn{i}')
+            if curr is None:
+                break
+            try:
+                cf = float(curr)
+            except (TypeError, ValueError):
+                break
+            if prev < cf:
+                decl += 1
+                prev = cf
+                continue
+            break
+        row['hn_qoq'] = decl
 
 
 def _fina_arturn_attach_stock_basic_act(conn, rows: list[dict]) -> None:
@@ -3936,6 +4013,9 @@ def _query_fina_arturn_table(selected_end_date: str) -> dict:
         _t_stage = time.perf_counter()
         _fina_arturn_attach_stk_holdernumber_quarters(conn, rows, contractPeriods)
         _stage_times.append(('stk_holdernumber_q', time.perf_counter() - _t_stage))
+        _t_stage = time.perf_counter()
+        _fina_arturn_attach_hn_qoq_low(rows)
+        _stage_times.append(('hn_qoq_low', time.perf_counter() - _t_stage))
         # 阶段耗时埋点：默认 DEBUG 级不输出，性能退化排查时把 rt_monitor 日志级改 DEBUG 即可。
         # 关键字：fina_arturn_stage_timing（配合 fast_path / main_sql 可一眼分辨走了新路径还是降级）。
         if logger.isEnabledFor(10):  # logging.DEBUG
@@ -5365,4 +5445,4 @@ def _query_fina_fixed_assets_revenue_series(ts_code: str, selected_end_date: str
 
 
 
-# 代码更新时间：2026-06-17 19:24
+# 代码更新时间：2026-06-17 20:46

@@ -10,7 +10,7 @@ REPO_ROOT = os.path.dirname(_PKG_DIR)
 RT_MONITOR_LISTEN_PORT = int(os.getenv('RT_MONITOR_PORT', '5000'))
 
 # 静态资源版本号：更新 css/js 后递增
-RT_MONITOR_STATIC_VER = '20260617-1'
+RT_MONITOR_STATIC_VER = '20260617-2'
 
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
@@ -41,4 +41,4 @@ MA_SR_LEVELS_PATH = appPath('ma_sr_levels.json')
 APP_LOCK_FILE = appPath('.rt_monitor_app.lock')
 NIUSAN_HOLDER_CONFIG_PATH = appPath('niusan_holder_config.json')
 
-# 代码更新时间：2026-06-17 15:48
+# 代码更新时间：2026-06-17 20:46

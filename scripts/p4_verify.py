@@ -51,7 +51,20 @@ def runVerify() -> bool:
                     print('  [FAIL] arturn 响应缺少 rows/error')
                     ok = False
                 else:
-                    print('  [INFO] arturn rows=', len(data.get('rows') or []))
+                    rows = data.get('rows') or []
+                    print('  [INFO] arturn rows=', len(rows))
+                    if rows:
+                        sample = rows[0]
+                        for key in ('hn_qoq', 'hn_low'):
+                            if key not in sample:
+                                print(f'  [FAIL] arturn 行缺少 {key}')
+                                ok = False
+                        detail = sample.get('holders_top3_detail') or []
+                        if detail and 'hold_change' not in detail[0]:
+                            print('  [FAIL] holders_top3_detail 缺少 hold_change')
+                            ok = False
+                        if ok and rows:
+                            print('  [INFO] hn_qoq/hn_low/hold_change 字段齐全')
         ep = 'fina.rt_monitor_fina'
         hasEp = ep in app.view_functions
         print(f'  [{"OK" if hasEp else "FAIL"}] endpoint {ep}')

@@ -28,6 +28,58 @@ var FINA_METRIC_TABLE_FETCH_TIMEOUT_MS = 240000;
 var FINA_ARTURN_SCHEME_STORAGE_KEY = 'rt_monitor_fina_arturn_filter_schemes_v1';
 var FINA_ARTURN_VIEW_STATE_STORAGE_KEY = 'rt_monitor_fina_arturn_view_state_v1';
 var FINA_ARTURN_SCHEME_APPLY_PREF_KEY = 'rt_monitor_fina_arturn_scheme_apply_pref_v1';
+var FINA_SYSTEM_SCHEME_ZT_T1 = '__system_zt_t1_latest__';
+var FINA_SYSTEM_SCHEME_H850 = '__system_h850_latest__';
+var FINA_SYSTEM_SCHEME_HH = '__system_h_high_latest__';
+/** 财报系统方案：宽基单指数成分（value 前缀 + index_code，与后端 INDEX_MONITOR_CODES 一致） */
+var FINA_SYSTEM_INDEX_WEIGHT_PREFIX = '__system_index_weight__';
+var FINA_INDEX_WEIGHT_SYSTEM_SCHEMES = [
+    { code: '000510.SH', name: 'A500' },
+    { code: '000300.SH', name: '沪深300' },
+    { code: '000905.SH', name: '中证500' },
+    { code: '000852.SH', name: '中证1000' },
+    { code: '932000.CSI', name: '中证2000' },
+    { code: '899050.BJ', name: '北证50' },
+    { code: '000016.SH', name: '上证50' },
+    { code: '000680.SH', name: '科创综指' },
+    { code: '000688.SH', name: '科创50' },
+    { code: '399006.SZ', name: '创业板指' },
+    { code: '399102.SZ', name: '创业板综' },
+];
+
+function finaIndexWeightSystemSchemeOptionValue(indexCode) {
+    return FINA_SYSTEM_INDEX_WEIGHT_PREFIX + String(indexCode || '').trim().toUpperCase();
+}
+
+function parseFinaIndexWeightSystemSchemeName(name) {
+    var n = String(name || '');
+    if (n.indexOf(FINA_SYSTEM_INDEX_WEIGHT_PREFIX) !== 0) {
+        return null;
+    }
+    var code = n.slice(FINA_SYSTEM_INDEX_WEIGHT_PREFIX.length).trim().toUpperCase();
+    for (var i = 0; i < FINA_INDEX_WEIGHT_SYSTEM_SCHEMES.length; i++) {
+        if (FINA_INDEX_WEIGHT_SYSTEM_SCHEMES[i].code === code) {
+            return code;
+        }
+    }
+    return null;
+}
+
+function isFinaIndexWeightSystemSchemeName(name) {
+    return parseFinaIndexWeightSystemSchemeName(name) != null;
+}
+
+function finaIndexWeightDisplayNameByCode(indexCode) {
+    var c = String(indexCode || '').trim().toUpperCase();
+    for (var i = 0; i < FINA_INDEX_WEIGHT_SYSTEM_SCHEMES.length; i++) {
+        if (FINA_INDEX_WEIGHT_SYSTEM_SCHEMES[i].code === c) {
+            return FINA_INDEX_WEIGHT_SYSTEM_SCHEMES[i].name;
+        }
+    }
+    return c;
+}
+var RT_MONITOR_FINA_IMPORT_SESSION_KEY = 'rt_monitor_fina_import_v1';
+var finaPendingImportPayload = null;
 var finaFixedAssetsChartInstance = null;
 var finaCashCreateChartInstance = null;
 var finaWorkingCapTurnoverChartInstance = null;
@@ -67,6 +119,10 @@ var finaSchemeModalLayoutMemory = null;
 var FINA_TOP3_HOLDERS_MODAL_LAYOUT_STORAGE_KEY = 'rt_monitor_fina_top3_holders_modal_layout_v1';
 var finaTop3HoldersModalLayoutOpenTs = 0;
 var finaTop3HoldersModalSaveTimer = null;
+/** 流通股东前十弹窗：几何持久化（与前三持股明细同套路） */
+var FINA_FLOAT_HOLDERS_MODAL_LAYOUT_STORAGE_KEY = 'rt_monitor_fina_float_holders_modal_layout_v1';
+var finaFloatHoldersModalLayoutOpenTs = 0;
+var finaFloatHoldersModalSaveTimer = null;
 var _finaModalOpenCount = 0;
 function _modalOpened() {
     _finaModalOpenCount += 1;
@@ -155,6 +211,8 @@ var finaArturnState = {
         fchg: '',
         f0: '', f1: '', f2: '', f3: '', f4: '', f5: '', f6: '', f7: '',         f8: '',
         hnchg: '',
+        hn_qoq: '',
+        hn_low: '',
         hn0: '', hn1: '', hn2: '', hn3: '', hn4: '', hn5: '', hn6: '', hn7: '', hn8: '',
         u0: '', u1: '', u2: '', u3: '', u4: '', u5: '', u6: '', u7: '', u8: '',
         v0: '', v1: '', v2: '', v3: '', v4: '', v5: '', v6: '', v7: '', v8: ''
@@ -372,6 +430,35 @@ function finaArturnSplitSwNameOrKeywords(exprRaw) {
         .filter(function (p) {
             return p.length > 0;
         });
+}
+
+/** 股票代码筛选：支持英文 or / 中英文逗号 / 分号 / 换行分隔，段间 OR */
+function finaArturnSplitTsCodeOrKeywords(exprRaw) {
+    var s = String(exprRaw || '').trim();
+    if (!s) return [];
+    return s
+        .split(/\s*\bor\b\s*|[,\n;；，]+/i)
+        .map(function (p) {
+            return p.trim();
+        })
+        .filter(function (p) {
+            return p.length > 0;
+        });
+}
+
+function extractTsCodesFromLimitStatsRows(rows) {
+    var list = Array.isArray(rows) ? rows : [];
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < list.length; i++) {
+        var row = list[i] || {};
+        var code = String(row.windcodes || row.ts_code || '').trim().toUpperCase();
+        if (!/^\d{6}\.(SZ|SH|BJ)$/.test(code)) continue;
+        if (seen[code]) continue;
+        seen[code] = true;
+        out.push(code);
+    }
+    return out;
 }
 
 function syncFinaMetricStockScopeCheckboxes(panelKey) {
@@ -903,18 +990,45 @@ function renderFinaFixedAssetsMetricsBar(payload, arturnRow) {
     } else if (arturnRow && arturnRow.website != null && String(arturnRow.website).trim() !== '') {
         websiteRaw = String(arturnRow.website).trim();
     }
+    var provinceRaw = '';
+    if (payload && payload.province != null && String(payload.province).trim() !== '') {
+        provinceRaw = String(payload.province).trim();
+    } else if (arturnRow && arturnRow.province != null && String(arturnRow.province).trim() !== '') {
+        provinceRaw = String(arturnRow.province).trim();
+    }
+    var cityRaw = '';
+    if (payload && payload.city != null && String(payload.city).trim() !== '') {
+        cityRaw = String(payload.city).trim();
+    } else if (arturnRow && arturnRow.city != null && String(arturnRow.city).trim() !== '') {
+        cityRaw = String(arturnRow.city).trim();
+    }
     var rowWebsiteBlock = '';
-    if (websiteRaw) {
-        var hrefW = finaNormalizeExternalHttpUrl(websiteRaw);
-        var labelW = websiteRaw.length > 64 ? websiteRaw.slice(0, 61) + '...' : websiteRaw;
+    if (websiteRaw || provinceRaw || cityRaw) {
+        var rowWParts = [];
+        if (websiteRaw) {
+            var hrefW = finaNormalizeExternalHttpUrl(websiteRaw);
+            var labelW = websiteRaw.length > 64 ? websiteRaw.slice(0, 61) + '...' : websiteRaw;
+            rowWParts.push(
+                '<span class="fina-fixed-assets-metric-k">公司主页：</span>' +
+                    '<a class="fina-fixed-assets-website-a" href="' + escapeHtmlAttr(hrefW) + '" ' +
+                    'target="_blank" rel="noopener noreferrer" title="' + escapeHtmlAttr(websiteRaw) + '" ' +
+                    'aria-label="在新窗口打开公司主页">' +
+                    escapeHtmlAttr(labelW) +
+                    '</a>'
+            );
+        }
+        var provinceShow = provinceRaw ? _finaArturnEscCellText(provinceRaw) : '--';
+        var cityShow = cityRaw ? _finaArturnEscCellText(cityRaw) : '--';
+        rowWParts.push(
+            '<span class="fina-fixed-assets-metric-k">省份：</span>' + wrapMetricValue(provinceShow, '')
+        );
+        rowWParts.push(
+            '<span class="fina-fixed-assets-metric-k">城市：</span>' + wrapMetricValue(cityShow, '')
+        );
         rowWebsiteBlock =
             '<div class="fina-fixed-assets-metrics-row fina-fixed-assets-metrics-row--website">' +
-            '<span class="fina-fixed-assets-metric-k">公司主页：</span>' +
-            '<a class="fina-fixed-assets-website-a" href="' + escapeHtmlAttr(hrefW) + '" ' +
-            'target="_blank" rel="noopener noreferrer" title="' + escapeHtmlAttr(websiteRaw) + '" ' +
-            'aria-label="在新窗口打开公司主页">' +
-            escapeHtmlAttr(labelW) +
-            '</a></div>';
+            rowWParts.join(sep) +
+            '</div>';
     }
     el.innerHTML =
         '<div class="fina-fixed-assets-metrics-inner">' +
@@ -1066,13 +1180,61 @@ function scheduleSaveFinaTop3HoldersModalLayout(modalEl) {
     }, 400);
 }
 
-function formatFinaTop3HoldAmountCell(v) {
+/** 持股数量与持股变化共用：股数→亿/万两位小数，口径与库字段一致 */
+function formatFinaTop3ShareCountLike(v) {
     if (v === null || v === undefined || v === '') return '--';
     var n = parseFloat(v);
     if (isNaN(n)) return '--';
     if (Math.abs(n) >= 1e8) return (n / 1e8).toFixed(2) + ' 亿';
     if (Math.abs(n) >= 1e4) return (n / 1e4).toFixed(2) + ' 万';
     return n.toFixed(2);
+}
+
+function formatFinaTop3HoldAmountCell(v) {
+    return formatFinaTop3ShareCountLike(v);
+}
+
+/** 持股变化：单位与持股数量列一致；正值红、负值绿（复用全站 .rise/.fall） */
+function formatFinaTop3HoldChangeCellHtml(v) {
+    if (v === null || v === undefined || v === '') return escapeHtmlText('--');
+    var n = parseFloat(v);
+    if (isNaN(n)) return escapeHtmlText('--');
+    var txt = formatFinaTop3ShareCountLike(v);
+    if (txt === '--') return escapeHtmlText('--');
+    if (n > 0) return '<span class="median-cell-value rise">' + escapeHtmlText(txt) + '</span>';
+    if (n < 0) return '<span class="median-cell-value fall">' + escapeHtmlText(txt) + '</span>';
+    return escapeHtmlText(txt);
+}
+
+/** 流通股东前十「变化」：无变动字段或无效值时显示新进；有数值时与持股数量列同款单位与红涨绿跌 */
+function formatFinaFloatHoldersChangeCellHtml(v) {
+    if (v === null || v === undefined || v === '') {
+        return '<span class="fina-float-holders-change-xinjin">新进</span>';
+    }
+    var n = parseFloat(v);
+    if (isNaN(n)) {
+        return '<span class="fina-float-holders-change-xinjin">新进</span>';
+    }
+    return formatFinaTop3HoldChangeCellHtml(v);
+}
+
+/** 持股市值（亿元）：后端 hold_mkt_val_yi 已为亿元 */
+function formatFinaHoldMktValYiCell(v) {
+    if (v === null || v === undefined || v === '') return '--';
+    var n = parseFloat(v);
+    if (isNaN(n)) return '--';
+    return escapeHtmlText(n.toFixed(2) + ' 亿');
+}
+
+/** 前十持股比例合计差（百分点）：两位小数，正红负绿 */
+function formatFinaRatioDeltaPpHtml(v) {
+    if (v === null || v === undefined || v === '') return escapeHtmlText('--');
+    var n = parseFloat(v);
+    if (isNaN(n)) return escapeHtmlText('--');
+    var txt = n.toFixed(2);
+    if (n > 0) return '<span class="median-cell-value rise">' + escapeHtmlText(txt) + '</span>';
+    if (n < 0) return '<span class="median-cell-value fall">' + escapeHtmlText(txt) + '</span>';
+    return escapeHtmlText(txt);
 }
 
 /** 表格单元格正文转义（非 HTML 属性上下文） */
@@ -1098,20 +1260,19 @@ function renderFinaTop3HoldersDetailTable(detailList) {
         '<th scope="col">性质</th>',
         '<th scope="col">持股数量</th>',
         '<th scope="col">持股比例(%)</th>',
-        '<th scope="col">报告期截止</th>',
+        '<th scope="col">持股变化</th>',
         '</tr></thead><tbody>',
     ];
     rows.forEach(function (d) {
         var nm = d && d.holder_name != null ? String(d.holder_name) : '';
         var tp = d && d.holder_type != null ? String(d.holder_type) : '';
-        var ed = d && d.end_date != null ? String(d.end_date) : '';
         html.push(
             '<tr>' +
                 '<td>' + escapeHtmlText(nm) + '</td>' +
                 '<td>' + escapeHtmlText(tp) + '</td>' +
                 '<td>' + escapeHtmlText(formatFinaTop3HoldAmountCell(d && d.hold_amount)) + '</td>' +
                 '<td>' + escapeHtmlText(formatFinaArturnValue(d && d.hold_ratio, 2)) + '</td>' +
-                '<td>' + escapeHtmlText(ed) + '</td>' +
+                '<td>' + formatFinaTop3HoldChangeCellHtml(d && d.hold_change) + '</td>' +
             '</tr>'
         );
     });
@@ -1145,6 +1306,202 @@ function closeFinaTop3HoldersModal() {
     var wasOpen = overlay.classList.contains('is-open');
     var modal = overlay.querySelector('.fina-top3-holders-modal-shell');
     if (wasOpen && modal) saveFinaTop3HoldersModalLayout(modal);
+    overlay.classList.remove('is-open');
+    if (wasOpen) _modalClosed();
+}
+
+function formatFinaFloatHoldersEndDateDisp(endRaw) {
+    var t = String(endRaw || '').replace(/-/g, '');
+    if (t.length === 8 && /^\d{8}$/.test(t)) {
+        return t.slice(0, 4) + '-' + t.slice(4, 6) + '-' + t.slice(6, 8);
+    }
+    return String(endRaw || '').trim();
+}
+
+function loadFinaFloatHoldersModalLayout() {
+    try {
+        if (typeof localStorage === 'undefined') return null;
+        var raw = localStorage.getItem(FINA_FLOAT_HOLDERS_MODAL_LAYOUT_STORAGE_KEY);
+        if (!raw) return null;
+        var o = JSON.parse(raw);
+        if (typeof o.w !== 'number' || typeof o.h !== 'number') return null;
+        if (o.w < 320 || o.h < 320) return null;
+        return {
+            w: o.w,
+            h: o.h,
+            l: typeof o.l === 'number' ? o.l : null,
+            t: typeof o.t === 'number' ? o.t : null,
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+function saveFinaFloatHoldersModalLayout(modalEl) {
+    try {
+        if (!modalEl || typeof localStorage === 'undefined') return;
+        var rect = modalEl.getBoundingClientRect();
+        var w = Math.round(rect.width);
+        var h = Math.round(rect.height);
+        var l = Math.round(rect.left);
+        var t = Math.round(rect.top);
+        if (w < 320 || h < 320) return;
+        localStorage.setItem(
+            FINA_FLOAT_HOLDERS_MODAL_LAYOUT_STORAGE_KEY,
+            JSON.stringify({ w: w, h: h, l: l, t: t })
+        );
+    } catch (e) {
+        /* ignore */
+    }
+}
+
+function applyFinaFloatHoldersModalSavedLayout() {
+    var overlay = document.getElementById('fina-float-holders-modal-overlay');
+    var modal = overlay && overlay.querySelector('.fina-float-holders-modal-shell');
+    if (!modal) return;
+    var lay = loadFinaFloatHoldersModalLayout();
+    if (!lay) return;
+    var vw = window.innerWidth || document.documentElement.clientWidth;
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    var minW = 320;
+    var minH = 320;
+    var w = Math.min(Math.max(lay.w, minW), Math.max(minW, vw - 4));
+    var h = Math.min(Math.max(lay.h, minH), Math.max(minH, vh - 4));
+    modal.style.width = w + 'px';
+    modal.style.height = h + 'px';
+    modal.style.transform = 'none';
+    var l = lay.l != null ? lay.l : (vw - w) / 2;
+    var t = lay.t != null ? lay.t : (vh - h) / 2;
+    l = Math.max(0, Math.min(l, vw - w));
+    t = Math.max(0, Math.min(t, vh - h));
+    modal.style.left = l + 'px';
+    modal.style.top = t + 'px';
+}
+
+function scheduleSaveFinaFloatHoldersModalLayout(modalEl) {
+    if (!modalEl) return;
+    clearTimeout(finaFloatHoldersModalSaveTimer);
+    finaFloatHoldersModalSaveTimer = setTimeout(function () {
+        if (Date.now() - finaFloatHoldersModalLayoutOpenTs < 700) return;
+        saveFinaFloatHoldersModalLayout(modalEl);
+    }, 400);
+}
+
+function renderFinaFloatHoldersDetailTable(detailList, summaryMeta) {
+    var wrap = document.getElementById('fina-float-holders-modal-table-wrap');
+    if (!wrap) return;
+    summaryMeta = summaryMeta || {};
+    var rows = Array.isArray(detailList) ? detailList : [];
+    if (!rows.length) {
+        wrap.innerHTML = '<div class="fina-float-holders-modal-empty">暂无流通股东数据</div>';
+        return;
+    }
+    var html = [
+        '<table class="median-table fina-float-holders-detail-table">',
+        '<thead><tr>',
+        '<th scope="col">股东名称</th>',
+        '<th scope="col">持股数量</th>',
+        '<th scope="col">持股比例(%)</th>',
+        '<th scope="col">变化</th>',
+        '<th scope="col">持股市值</th>',
+        '<th scope="col">股东性质</th>',
+        '</tr></thead><tbody>',
+    ];
+    var sumRatio = 0;
+    rows.forEach(function (d) {
+        var nm = d && d.holder_name != null ? String(d.holder_name) : '';
+        var tp = d && d.holder_type != null ? String(d.holder_type) : '';
+        var hr = d && d.hold_ratio;
+        var hrN = parseFloat(hr);
+        if (!isNaN(hrN)) sumRatio += hrN;
+        html.push(
+            '<tr>' +
+                '<td>' + escapeHtmlText(nm) + '</td>' +
+                '<td>' + escapeHtmlText(formatFinaTop3HoldAmountCell(d && d.hold_amount)) + '</td>' +
+                '<td>' + escapeHtmlText(formatFinaArturnValue(hr, 2)) + '</td>' +
+                '<td>' + formatFinaFloatHoldersChangeCellHtml(d && d.hold_change) + '</td>' +
+                '<td>' + formatFinaHoldMktValYiCell(d && d.hold_mkt_val_yi) + '</td>' +
+                '<td>' + escapeHtmlText(tp) + '</td>' +
+            '</tr>'
+        );
+    });
+    var sumBack = summaryMeta.summaryRatioSum;
+    var sumDisp =
+        sumBack !== undefined && sumBack !== null && sumBack !== ''
+            ? formatFinaArturnValue(sumBack, 2)
+            : formatFinaArturnValue(sumRatio, 2);
+    html.push(
+        '<tr class="fina-float-holders-summary-row">' +
+            '<td>' + escapeHtmlText('汇总') + '</td>' +
+            '<td></td>' +
+            '<td>' + escapeHtmlText(sumDisp) + '</td>' +
+            '<td>' + formatFinaRatioDeltaPpHtml(summaryMeta.summaryRatioDeltaPp) + '</td>' +
+            '<td></td>' +
+            '<td></td>' +
+            '</tr>'
+    );
+    html.push('</tbody></table>');
+    wrap.innerHTML = html.join('');
+}
+
+function openFinaFloatHoldersModal(tsCode, secName, endYyyymmdd) {
+    var overlay = document.getElementById('fina-float-holders-modal-overlay');
+    if (!overlay) return;
+    finaFloatHoldersModalLayoutOpenTs = Date.now();
+    var sub = document.getElementById('fina-float-holders-modal-sub');
+    var wrap = document.getElementById('fina-float-holders-modal-table-wrap');
+    var tc = String(tsCode || '').trim();
+    var sn = String(secName || '').trim();
+    var ed = String(endYyyymmdd || '').trim();
+    var edDisp = formatFinaFloatHoldersEndDateDisp(ed);
+    if (sub) {
+        sub.textContent =
+            (tc ? tc : '') +
+            (sn ? (tc ? ' · ' : '') + sn : '') +
+            (edDisp ? ' · 报告期 ' + edDisp : '');
+    }
+    if (wrap) {
+        wrap.innerHTML = '<div class="fina-float-holders-modal-empty">加载中...</div>';
+    }
+    overlay.classList.add('is-open');
+    _modalOpened();
+    applyFinaFloatHoldersModalSavedLayout();
+    var url =
+        rtMonitorApiUrl('/api/fina_top10_floatholders') +
+        '?ts_code=' +
+        encodeURIComponent(tc) +
+        '&end_date=' +
+        encodeURIComponent(ed);
+    fetch(url, { cache: 'no-store' })
+        .then(function (res) {
+            return res.json();
+        })
+        .then(function (data) {
+            if (!wrap) return;
+            var err = data && data.error ? String(data.error) : '';
+            var list = data && Array.isArray(data.rows) ? data.rows : [];
+            if (err && !list.length) {
+                wrap.innerHTML = '<div class="fina-float-holders-modal-empty">' + escapeHtmlText(err) + '</div>';
+                return;
+            }
+            renderFinaFloatHoldersDetailTable(list, {
+                summaryRatioSum: data && data.summary_ratio_sum,
+                summaryRatioDeltaPp: data && data.summary_ratio_delta_pp,
+            });
+        })
+        .catch(function () {
+            if (wrap) {
+                wrap.innerHTML = '<div class="fina-float-holders-modal-empty">加载失败</div>';
+            }
+        });
+}
+
+function closeFinaFloatHoldersModal() {
+    var overlay = document.getElementById('fina-float-holders-modal-overlay');
+    if (!overlay) return;
+    var wasOpen = overlay.classList.contains('is-open');
+    var modal = overlay.querySelector('.fina-float-holders-modal-shell');
+    if (wasOpen && modal) saveFinaFloatHoldersModalLayout(modal);
     overlay.classList.remove('is-open');
     if (wasOpen) _modalClosed();
 }
@@ -1603,7 +1960,7 @@ function applyFinaFixedAssetsGrowthConfigFromPanel() {
 
 /**
  * 固定资产弹窗下方经营宽表：列为报告期（旧→新），右起「指标」「业务逻辑」两列 sticky。
- * 首四行（经营现金流净额、资本开支、FCF、现金转化率）在「业务逻辑」列 rowspan=4 合并为「现金创造能力」（行头不再缀「模块A·」）。
+ * thead 首行为公告日（各列 YYYYMMDD，不着色），其下第二行为季度表头+「指标」「业务逻辑」；tbody 首四行为现金创造能力（业务逻辑 rowspan=4）。
  * 模块B 五行（应收/存货/应付天数、现金循环天数、应收占收入比）：业务逻辑 rowspan=5，「营运资本」+换行+「周转天数」。模块C 三行：「资本结构」+换行+「杠杆」。
  * 其下依次为：资本效率(2)→规模.损益(3)→盈利能力(2)→成长性(可配置)→股东与筹码(1)；行序见 specs 与 tail*Logic* 常量（勿只改 specs 不改跨度）。
  * 应收天数·存货天数·应收占收入比：仍参与 max/min/median（极值三色；均为越小越好）；仅当该格未标极值时，再按相对行中位数标浅红/浅绿。
@@ -1760,9 +2117,11 @@ function renderFinaFixedAssetsOperatingDataTable(rows) {
     }
     var moduleALogicRowspan = 4;
     var moduleALogicLabel = '现金创造能力';
+    /** 模块A（现金创造能力）在 tbody 中的起始行索引（公告日在 thead，不占此行计数） */
+    var moduleALogicStartRow = 0;
     /** 与 specs 中模块B（应收/存货/应付天数、现金循环天数、应收占收入比）五行顺序一致 */
     var moduleBLogicRowspan = 5;
-    var moduleBLogicStartRow = moduleALogicRowspan;
+    var moduleBLogicStartRow = moduleALogicStartRow + moduleALogicRowspan;
     /** 与 specs 中模块C（资产负债率/带息负债率/净债务）三行顺序一致 */
     var moduleCLogicRowspan = 3;
     var moduleCLogicStartRow = moduleBLogicStartRow + moduleBLogicRowspan;
@@ -1781,6 +2140,23 @@ function renderFinaFixedAssetsOperatingDataTable(rows) {
     var tailD4LogicStartRow = tailD3LogicStartRow + tailD3LogicRowspan;
     var tailD5LogicRowspan = 1;
     var tailD5LogicStartRow = tailD4LogicStartRow + tailD4LogicRowspan;
+    var annDateCells = rows
+        .map(function (r) {
+            var disp = formatFinaFixedAssetsAnnDateCompact((r || {}).ann_date);
+            var inner = disp === '--' ? '--' : escCellText(disp);
+            return (
+                '<td class="fina-fa-opdata-num fina-fa-opdata-date-cell">' + inner + '</td>'
+            );
+        })
+        .join('');
+    var annHeadRow =
+        '<tr class="fina-fa-opdata-ann-head-row">' +
+        annDateCells +
+        '<th scope="row" class="fina-fa-opdata-rowhead fina-fa-opdata-ann-rowhead">' +
+        escCellText('公告日') +
+        '</th>' +
+        '<td class="fina-fa-opdata-logic-cell fina-fa-opdata-ann-logic-cell"></td>' +
+        '</tr>';
     var bodyRows = specs
         .map(function (sp, rowIdx) {
             var parsed = rows.map(function (r) {
@@ -1873,7 +2249,7 @@ function renderFinaFixedAssetsOperatingDataTable(rows) {
                 })
                 .join('');
             var logicCell = '';
-            if (rowIdx === 0) {
+            if (rowIdx === moduleALogicStartRow) {
                 logicCell =
                     '<td rowspan="' +
                     moduleALogicRowspan +
@@ -1881,7 +2257,7 @@ function renderFinaFixedAssetsOperatingDataTable(rows) {
                     'title="点击查看现金创造能力 25 季图表">' +
                     escCellText(moduleALogicLabel) +
                     '</td>';
-            } else if (rowIdx < moduleALogicRowspan) {
+            } else if (rowIdx < moduleALogicStartRow + moduleALogicRowspan) {
                 logicCell = '';
             } else if (rowIdx === moduleBLogicStartRow) {
                 logicCell =
@@ -1956,10 +2332,14 @@ function renderFinaFixedAssetsOperatingDataTable(rows) {
                 logicCell = '<td class="fina-fa-opdata-logic-cell"></td>';
             }
             var frameRowClass = '';
-            if (rowIdx < moduleALogicRowspan) {
+            if (rowIdx < moduleALogicStartRow + moduleALogicRowspan) {
                 frameRowClass = 'fina-fa-opdata-cash-row';
-                if (rowIdx === 0) frameRowClass += ' fina-fa-opdata-cash-row-start';
-                if (rowIdx === moduleALogicRowspan - 1) frameRowClass += ' fina-fa-opdata-cash-row-end';
+                if (rowIdx === moduleALogicStartRow) {
+                    frameRowClass += ' fina-fa-opdata-cash-row-start';
+                }
+                if (rowIdx === moduleALogicStartRow + moduleALogicRowspan - 1) {
+                    frameRowClass += ' fina-fa-opdata-cash-row-end';
+                }
             } else if (
                 rowIdx >= moduleBLogicStartRow &&
                 rowIdx < moduleBLogicStartRow + moduleBLogicRowspan
@@ -2039,7 +2419,9 @@ function renderFinaFixedAssetsOperatingDataTable(rows) {
     wrap.innerHTML =
         '<div class="fina-fa-opdata-scroll">' +
         '<table class="fina-fa-opdata-table">' +
-        '<thead><tr>' +
+        '<thead>' +
+        annHeadRow +
+        '<tr>' +
         headCols +
         '<th scope="col" class="fina-fa-opdata-corner">指标</th>' +
         '<th scope="col" class="fina-fa-opdata-logic-head">业务逻辑</th></tr></thead>' +
@@ -3860,6 +4242,17 @@ function formatFinaArturnAnnDate(v) {
     return s;
 }
 
+/** 固定资产经营宽表 thead 公告日行：YYYYMMDD，无双杠；空值「--」。不改动其它页的 formatFinaArturnAnnDate 展示。 */
+function formatFinaFixedAssetsAnnDateCompact(v) {
+    var iso = formatFinaArturnAnnDate(v);
+    if (!iso || iso === '--') return '--';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+        return iso.slice(0, 4) + iso.slice(5, 7) + iso.slice(8, 10);
+    }
+    if (/^\d{8}$/.test(iso)) return iso;
+    return String(iso).replace(/-/g, '');
+}
+
 /** 上市日至「今天」的日历年、月数（与弹窗指标「已上市…」同口径） */
 function finaListingTenureZhFromNow(listDateRaw) {
     var s = String(listDateRaw == null ? '' : listDateRaw).trim();
@@ -4002,6 +4395,17 @@ function renderFinaMetricSchemeOptions(panelKey) {
     var schemes = loadFinaMetricSchemes(panelKey);
     var names = Object.keys(schemes).sort();
     var html = ['<option value="">选择已保存方案</option>'];
+    html.push('<option value="' + FINA_SYSTEM_SCHEME_ZT_T1 + '">系统方案：涨停T-1（最新报告期，重置后应用）</option>');
+    html.push('<option value="' + FINA_SYSTEM_SCHEME_H850 + '">系统方案：850日新高（最新报告期，重置后应用）</option>');
+    html.push('<option value="' + FINA_SYSTEM_SCHEME_HH + '">系统方案：历史新高（最新报告期，重置后应用）</option>');
+    for (var iw = 0; iw < FINA_INDEX_WEIGHT_SYSTEM_SCHEMES.length; iw++) {
+        var iwItem = FINA_INDEX_WEIGHT_SYSTEM_SCHEMES[iw];
+        var iwVal = finaIndexWeightSystemSchemeOptionValue(iwItem.code);
+        html.push(
+            '<option value="' + escapeHtmlAttr(iwVal) + '">系统方案：' + escapeHtmlAttr(iwItem.name)
+                + '（index_weight 最新交易日成分，重置后应用）</option>'
+        );
+    }
     names.forEach(function (name) {
         html.push('<option value="' + escapeHtmlAttr(name) + '">' + escapeHtmlAttr(name) + '</option>');
     });
@@ -4011,6 +4415,113 @@ function renderFinaMetricSchemeOptions(panelKey) {
 
 function renderFinaArturnSchemeOptions() {
     renderFinaMetricSchemeOptions('arturn');
+}
+
+function isFinaSystemSchemeName(name) {
+    var n = String(name || '').trim();
+    return n === FINA_SYSTEM_SCHEME_ZT_T1 || n === FINA_SYSTEM_SCHEME_H850 || n === FINA_SYSTEM_SCHEME_HH || isFinaIndexWeightSystemSchemeName(n);
+}
+
+function fetchLimitStatsRowsByKind(kind, label) {
+    var k = String(kind || '').trim();
+    var lb = String(label || k || '明细');
+    var url = rtMonitorApiUrl('/api/limit_stats_detail?kind=' + encodeURIComponent(k) + '&limit=500&_=' + Date.now());
+    return fetch(url, { cache: 'no-store' }).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+    }).then(function (data) {
+        if (!data || data.ok === false || !Array.isArray(data.rows)) {
+            throw new Error((data && data.error) ? String(data.error) : (lb + '返回异常'));
+        }
+        return data.rows;
+    });
+}
+
+function getSystemSchemeQueryByName(name) {
+    var n = String(name || '').trim();
+    if (n === FINA_SYSTEM_SCHEME_ZT_T1) {
+        return { kind: 'zt_t1', label: '涨停T-1 明细', sourceLabel: '系统方案：涨停T-1' };
+    }
+    if (n === FINA_SYSTEM_SCHEME_H850) {
+        return { kind: 'cnt_h850', label: '850日新高明细', sourceLabel: '系统方案：850日新高' };
+    }
+    if (n === FINA_SYSTEM_SCHEME_HH) {
+        return { kind: 'cnt_h_high', label: '历史新高明细', sourceLabel: '系统方案：历史新高' };
+    }
+    var iwParsed = parseFinaIndexWeightSystemSchemeName(n);
+    if (iwParsed) {
+        var nm = finaIndexWeightDisplayNameByCode(iwParsed);
+        return {
+            kind: 'index_weight_latest',
+            indexCode: iwParsed,
+            label: nm + ' 成分（index_weight 最新交易日）',
+            sourceLabel: '系统方案：' + nm,
+        };
+    }
+    return null;
+}
+
+function fetchFinaIndexWeightSystemCodes(q) {
+    var lb = String(q && q.label ? q.label : 'index_weight');
+    var idx = q && q.indexCode ? String(q.indexCode).trim() : '';
+    if (!idx) {
+        return Promise.reject(new Error('缺少指数代码'));
+    }
+    var url = rtMonitorApiUrl(
+        '/api/fina_system_scheme_codes?scheme=index_weight_latest&index_code=' + encodeURIComponent(idx) + '&_=' + Date.now()
+    );
+    return fetch(url, { cache: 'no-store' }).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+    }).then(function (data) {
+        if (!data || data.ok === false || !Array.isArray(data.ts_codes)) {
+            throw new Error((data && data.error) ? String(data.error) : (lb + '返回异常'));
+        }
+        return data.ts_codes;
+    });
+}
+
+function resetFinaMetricFiltersAndScope(panelKey) {
+    var st = _finaMetricState();
+    setFinaMetricFilters(panelKey, {});
+    st.sortKey = '';
+    st.sortDir = 'asc';
+    st.excludeBj = false;
+    st.excludeSt = false;
+    closeFinaMetricFilterPopover(panelKey);
+    syncFinaMetricStockScopeCheckboxes(panelKey);
+}
+
+function applyTsCodePoolWithReset(panelKey, tsCodes, sourceLabel) {
+    var codes = Array.isArray(tsCodes) ? tsCodes : [];
+    var st = _finaMetricState();
+    resetFinaMetricFiltersAndScope(panelKey);
+    var f = getFinaMetricFilters(panelKey);
+    f.tsCode = codes.join(' or ');
+    setFinaMetricFilters(panelKey, f);
+    var targetEndDate = Array.isArray(st.endDates) && st.endDates.length ? String(st.endDates[0] || '') : '';
+    var done = function () {
+        renderFinaMetricTable(panelKey);
+        saveFinaMetricViewState(panelKey);
+    };
+    var buildApplyRet = function () {
+        var summ = st._lastTableFilterSummary || { hit: 0, universe: 0 };
+        return {
+            ok: true,
+            count: codes.length,
+            sourceLabel: sourceLabel,
+            tableHit: summ.hit,
+            tableUniverse: summ.universe
+        };
+    };
+    if (targetEndDate && targetEndDate !== st.selectedEndDate) {
+        return fetchFinaMetricTable(panelKey, targetEndDate).then(function () {
+            done();
+            return buildApplyRet();
+        });
+    }
+    done();
+    return Promise.resolve(buildApplyRet());
 }
 
 function getFinaMetricFilters(panelKey) {
@@ -4197,6 +4708,8 @@ function buildFinaMetricFilterShapeFrom(src) {
         f7: String(s.f7 || ''),
         f8: String(s.f8 || ''),
         hnchg: String(s.hnchg || ''),
+        hn_qoq: String(s.hn_qoq ?? ''),
+        hn_low: String(s.hn_low ?? ''),
         hn0: String(s.hn0 || ''),
         hn1: String(s.hn1 || ''),
         hn2: String(s.hn2 || ''),
@@ -4636,6 +5149,8 @@ function finaArturnGetSortCell(row, key) {
     if (key === 'f7') return row.f7;
     if (key === 'f8') return row.f8;
     if (key === 'hnchg') return computeHolderNumChg(row);
+    if (key === 'hn_qoq') return row.hn_qoq;
+    if (key === 'hn_low') return row.hn_low;
     if (key === 'hn0') return row.hn0;
     if (key === 'hn1') return row.hn1;
     if (key === 'hn2') return row.hn2;
@@ -4743,6 +5258,8 @@ function finaArturnCompareRows(a, b, key, dir) {
             key === 'f0' || key === 'f1' || key === 'f2' || key === 'f3' ||
             key === 'f4' || key === 'f5' || key === 'f6' || key === 'f7' || key === 'f8' ||
             key === 'hnchg' ||
+            key === 'hn_qoq' ||
+            key === 'hn_low' ||
             key === 'hn0' || key === 'hn1' || key === 'hn2' || key === 'hn3' ||
             key === 'hn4' || key === 'hn5' || key === 'hn6' || key === 'hn7' || key === 'hn8' ||
             key === 'u0' || key === 'u1' || key === 'u2' || key === 'u3' || key === 'u4' ||
@@ -4828,6 +5345,8 @@ function finaArturnIsSortableColumnKey(key) {
         key === 'f0' || key === 'f1' || key === 'f2' || key === 'f3' ||
         key === 'f4' || key === 'f5' || key === 'f6' || key === 'f7' || key === 'f8' ||
         key === 'hnchg' ||
+        key === 'hn_qoq' ||
+        key === 'hn_low' ||
         key === 'hn0' || key === 'hn1' || key === 'hn2' || key === 'hn3' ||
         key === 'hn4' || key === 'hn5' || key === 'hn6' || key === 'hn7' || key === 'hn8' ||
         key === 'u0' || key === 'u1' || key === 'u2' || key === 'u3' || key === 'u4' ||
@@ -5163,7 +5682,7 @@ function renderFinaMetricTable(panelKey) {
         '<th colspan="12" class="fina-arturn-th-group" scope="colgroup">存货（亿）</th>' +
         '<th colspan="12" class="fina-arturn-th-group" scope="colgroup">合同负债（亿）</th>' +
         '<th colspan="10" class="fina-arturn-th-group" scope="colgroup">固定资产（亿）</th>' +
-        '<th colspan="10" class="fina-arturn-th-group" scope="colgroup">股东人数（户）</th>' +
+        '<th colspan="12" class="fina-arturn-th-group" scope="colgroup">股东人数（户）</th>' +
         '</tr>' +
         '<tr class="fina-arturn-thead-cols">' +
         buildTh('上市日', 'listDate') +
@@ -5363,6 +5882,8 @@ function renderFinaMetricTable(panelKey) {
         buildTh(q7, 'f7') +
         buildTh(q8, 'f8') +
         buildTh('Chg%', 'hnchg') +
+        buildTh('环比', 'hn_qoq') +
+        buildTh('新低', 'hn_low') +
         buildTh(q0, 'hn0') +
         buildTh(q1, 'hn1') +
         buildTh(q2, 'hn2') +
@@ -5393,7 +5914,7 @@ function renderFinaMetricTable(panelKey) {
     hideFinaBootHint();
 
     var filters = getFinaMetricFilters(panelKey);
-    var codeKw = filters.tsCode.toLowerCase();
+    var codeOrKws = finaArturnSplitTsCodeOrKeywords(filters.tsCode);
     var nameKw = filters.secName.toLowerCase();
     var swOrKws = finaArturnSplitSwNameOrKeywords(filters.swName);
     var ma0 = String(filters.a0 || '').trim().toLowerCase();
@@ -5541,6 +6062,8 @@ function renderFinaMetricTable(panelKey) {
     var mhn7 = buildNumericFilterMatcher(filters.hn7);
     var mhn8 = buildNumericFilterMatcher(filters.hn8);
     var mhnchg = buildNumericFilterMatcher(filters.hnchg);
+    var mhnQoq = buildNumericFilterMatcher(filters.hn_qoq);
+    var mhnLow = buildNumericFilterMatcher(filters.hn_low);
     var mfchg = buildNumericFilterMatcher(filters.fchg);
     var mu0 = buildNumericFilterMatcher(filters.u0);
     var mu1 = buildNumericFilterMatcher(filters.u1);
@@ -5617,7 +6140,13 @@ function renderFinaMetricTable(panelKey) {
         var city = String(row.city || '');
         if (st.excludeBj && /\.BJ$/i.test(tsCode.trim())) return false;
         if (st.excludeSt && finaArturnIsStStockName(secName)) return false;
-        if (codeKw && tsCode.toLowerCase().indexOf(codeKw) < 0) return false;
+        if (codeOrKws.length) {
+            var codeHay = tsCode.toLowerCase();
+            var codeHit = codeOrKws.some(function (k) {
+                return codeHay.indexOf(String(k).toLowerCase()) >= 0;
+            });
+            if (!codeHit) return false;
+        }
         if (nameKw && secName.toLowerCase().indexOf(nameKw) < 0) return false;
         if (swOrKws.length) {
             var swHay = swName.toLowerCase();
@@ -5768,6 +6297,8 @@ function renderFinaMetricTable(panelKey) {
         if (mhn7 && !mhn7(row.hn7)) return false;
         if (mhn8 && !mhn8(row.hn8)) return false;
         if (mhnchg && !mhnchg(computeHolderNumChg(row))) return false;
+        if (mhnQoq && !mhnQoq(row.hn_qoq)) return false;
+        if (mhnLow && !mhnLow(row.hn_low)) return false;
         if (mu0 && !mu0(row.u0)) return false;
         if (mu1 && !mu1(row.u1)) return false;
         if (mu2 && !mu2(row.u2)) return false;
@@ -5857,7 +6388,7 @@ function renderFinaMetricTable(panelKey) {
         st._renderToken = (st._renderToken || 0) + 1;
         var _ftb = document.getElementById('fina-arturn-frozen-tbody');
         if (_ftb) _ftb.innerHTML = '<tr><td colspan="6" class="median-table-cat">无匹配数据</td></tr>';
-        tbody.innerHTML = '<tr><td colspan="206" class="median-table-cat">无匹配数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="208" class="median-table-cat">无匹配数据</td></tr>';
         /* 占位已写入 tbody，trMap 已失效；下次非空时必须走全量重建 */
         st._domBuiltRowsVersion = -1;
         st._frozenTrMap = null;
@@ -5873,6 +6404,25 @@ function renderFinaMetricTable(panelKey) {
             var swRaw = row.sw_name != null ? String(row.sw_name) : '';
             var swTitle = swRaw ? ' title="' + escapeHtmlAttr(swRaw) + '"' : '';
             var trOpen = '<tr class="median-table-row' + trClass + '" data-row-index="' + origIdx + '">';
+            var cpsFloat = Array.isArray(st.contractPeriods) ? st.contractPeriods : [];
+            var rawFloatEnd = cpsFloat.length ? cpsFloat[0] : '';
+            var floatHnEnd = '';
+            if (rawFloatEnd != null && rawFloatEnd !== '') {
+                floatHnEnd = String(rawFloatEnd).trim().replace(/-/g, '').slice(0, 8);
+            }
+            var tcFh = String(row.ts_code || '').trim();
+            var hn0CellInner =
+                floatHnEnd && tcFh
+                    ? '<span class="fina-float-holders-clickable" role="button" tabindex="0" data-fh-ts="' +
+                      escapeHtmlAttr(tcFh) +
+                      '" data-fh-end="' +
+                      escapeHtmlAttr(floatHnEnd) +
+                      '" data-fh-sec="' +
+                      escapeHtmlAttr(row.sec_name || '') +
+                      '" title="点击查看该报告期流通股东前十">' +
+                      formatFinaArturnValue(row.hn0, 0) +
+                      '</span>'
+                    : formatFinaArturnValue(row.hn0, 0);
             /* 冻结面板：前 6 列（股票代码/名称/申万/总市值/自由市值/公告日） */
             var fHtml = trOpen +
                 '<td class="median-table-cat">' + escapeHtmlAttr(row.ts_code || '--') + '</td>' +
@@ -6145,7 +6695,9 @@ function renderFinaMetricTable(panelKey) {
                 '<td class="median-table-num">' + formatFinaArturnValue(row.f7) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.f8) + '</td>' +
                 '<td class="median-table-num' + finaArturnNegClass(computeHolderNumChg(row)) + '">' + formatFinaArturnValue(computeHolderNumChg(row), 2) + '</td>' +
-                '<td class="median-table-num">' + formatFinaArturnValue(row.hn0, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.hn_qoq, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.hn_low, 0) + '</td>' +
+                '<td class="median-table-num">' + hn0CellInner + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.hn1, 0) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.hn2, 0) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.hn3, 0) + '</td>' +
@@ -6293,6 +6845,9 @@ function renderFinaMetricTable(panelKey) {
             applyFinaMetricFilterSort();
         }
     }
+
+    /* 供 applyTsCodePoolWithReset 等回调区分「成分代码数」与「当前报告期宽表命中行数」 */
+    st._lastTableFilterSummary = { hit: filtered.length, universe: rows.length };
 
     var msgEl = document.getElementById(cfg.ids.msg);
     if (msgEl) {
@@ -6674,6 +7229,10 @@ function computeFinaMetricFilterKeyTitle(panelKey, filterKey) {
         title = '固定资产（亿）·' + finaArturnQuarterLabel(rawF) + numHint;
     } else if (!title && /^hnchg$/.test(filterKey)) {
         title = '股东人数（户）·Chg%（hn0÷hn1−1，百分点）' + numHint;
+    } else if (!title && filterKey === 'hn_qoq') {
+        title = '环比连降（hn0<hn1 记1；若 hn1<hn2 再+1，最多 8）' + numHint;
+    } else if (!title && filterKey === 'hn_low') {
+        title = '新低（1=最新季 hn0 在九季展示列已有值中为最小，0=否；不要求 9 季全有值）' + numHint;
     } else if (!title && /^hn[0-8]$/.test(filterKey)) {
         var idxHn = parseInt(filterKey.slice(2), 10);
         var cpsHn = Array.isArray(_finaMetricState().contractPeriods) ? _finaMetricState().contractPeriods : [];
@@ -6809,6 +7368,23 @@ function refreshFinaMetricSchemeSummary(panelKey) {
     if (!name) {
         wrap.hidden = true;
         body.innerHTML = '';
+        return;
+    }
+    if (isFinaSystemSchemeName(name)) {
+        var q = getSystemSchemeQueryByName(name);
+        var sourceText = q ? q.label : '系统来源明细';
+        wrap.hidden = false;
+        body.innerHTML =
+            '<div class="fina-arturn-scheme-preview-line">' +
+                '<span class="fina-arturn-scheme-preview-field">系统来源</span>' +
+                '<span class="fina-arturn-scheme-preview-sep">：</span>' +
+                '<code class="fina-arturn-scheme-preview-val">' + escapeHtmlAttr(sourceText) + '（实时）</code>' +
+            '</div>' +
+            '<div class="fina-arturn-scheme-preview-line fina-arturn-scheme-preview-meta">' +
+                '<span class="fina-arturn-scheme-preview-field">调用行为</span>' +
+                '<span class="fina-arturn-scheme-preview-sep">：</span>' +
+                '<code class="fina-arturn-scheme-preview-val">重置列筛选/排序/股票范围，应用 tsCode OR，报告期切到最新</code>' +
+            '</div>';
         return;
     }
     var schemes = loadFinaMetricSchemes(panelKey);
@@ -6959,6 +7535,43 @@ function openFinaFilterPopover(filterKey, btnEl, anchorEvt) {
     openFinaMetricFilterPopover('arturn', filterKey, btnEl, anchorEvt);
 }
 
+function loadPendingFinaImportFromUrl() {
+    try {
+        if (typeof window === 'undefined' || !window.location) return null;
+        var usp = new URLSearchParams(window.location.search || '');
+        var source = String(usp.get('import_source') || '').trim();
+        if (!(source === 'zt_t1' || source === 'cnt_high_limit' || source === 'cnt_h850' || source === 'cnt_h_high')) return null;
+        var key = String(usp.get('import_key') || RT_MONITOR_FINA_IMPORT_SESSION_KEY).trim() || RT_MONITOR_FINA_IMPORT_SESSION_KEY;
+        if (typeof sessionStorage === 'undefined') return null;
+        var raw = sessionStorage.getItem(key);
+        if (!raw) return null;
+        var obj = JSON.parse(raw);
+        if (!obj || !(obj.source === 'zt_t1' || obj.source === 'cnt_high_limit' || obj.source === 'cnt_h850' || obj.source === 'cnt_h_high')) return null;
+        return obj;
+    } catch (e) {
+        logError('读取财报页导入参数失败', e);
+        return null;
+    }
+}
+
+function consumePendingFinaImportFromUrl() {
+    var payload = loadPendingFinaImportFromUrl();
+    if (!payload) return null;
+    try {
+        if (typeof sessionStorage !== 'undefined') {
+            var key = RT_MONITOR_FINA_IMPORT_SESSION_KEY;
+            sessionStorage.removeItem(key);
+        }
+        if (typeof window !== 'undefined' && window.history && window.history.replaceState) {
+            var cleanPath = rtMonitorApiUrl('/rt-monitor/fina');
+            window.history.replaceState(null, '', cleanPath);
+        }
+    } catch (e) {
+        logError('清理财报页导入参数失败', e);
+    }
+    return payload;
+}
+
 function initFinaMetricPanel(panelKey) {
     var cfg = FINA_METRIC_PANEL[panelKey];
     if (!cfg) return;
@@ -7057,6 +7670,16 @@ function initFinaMetricPanel(panelKey) {
         splitWrap.addEventListener('click', function (ev) {
             var t = ev.target;
             if (!t || !t.closest) return;
+            var hitFh = t.closest('.fina-float-holders-clickable');
+            if (hitFh) {
+                var tcF = String(hitFh.getAttribute('data-fh-ts') || '').trim();
+                var edF = String(hitFh.getAttribute('data-fh-end') || '').trim();
+                var secF = String(hitFh.getAttribute('data-fh-sec') || '').trim();
+                if (tcF && edF) {
+                    openFinaFloatHoldersModal(tcF, secF, edF);
+                }
+                return;
+            }
             var hitTop3 = t.closest('.fina-top3-holders-clickable');
             if (hitTop3) {
                 var rawJ = hitTop3.getAttribute('data-top3-detail-json') || '[]';
@@ -7163,6 +7786,52 @@ function initFinaMetricPanel(panelKey) {
                 setFinaMetricSchemeModalMsg(panelKey, '请先选择要调用的方案。');
                 return;
             }
+            if (isFinaSystemSchemeName(name)) {
+                var q = getSystemSchemeQueryByName(name);
+                if (!q) {
+                    setFinaMetricSchemeModalMsg(panelKey, '系统方案配置异常，请刷新后重试。');
+                    return;
+                }
+                setFinaMetricSchemeModalMsg(panelKey, '正在拉取' + q.label + '并应用到财报筛选…');
+                var systemApplyPromise = null;
+                if (q.kind === 'index_weight_latest') {
+                    systemApplyPromise = fetchFinaIndexWeightSystemCodes(q)
+                        .then(function (codes) {
+                            if (!codes.length) {
+                                throw new Error(q.label + '为空或无有效股票代码');
+                            }
+                            return applyTsCodePoolWithReset(panelKey, codes, q.sourceLabel);
+                        });
+                } else {
+                    systemApplyPromise = fetchLimitStatsRowsByKind(q.kind, q.label)
+                        .then(function (rows) {
+                            var codes = extractTsCodesFromLimitStatsRows(rows);
+                            if (!codes.length) {
+                                throw new Error(q.label + '为空或无有效股票代码');
+                            }
+                            return applyTsCodePoolWithReset(panelKey, codes, q.sourceLabel);
+                        });
+                }
+                systemApplyPromise
+                    .then(function (ret) {
+                        var hitStr = typeof ret.tableHit === 'number' ? String(ret.tableHit) : '--';
+                        var uniStr = typeof ret.tableUniverse === 'number' ? String(ret.tableUniverse) : '--';
+                        setFinaMetricSchemeModalMsg(
+                            panelKey,
+                            '已调用' + q.sourceLabel +
+                                '：已写入 ' + String(ret.count || 0) + ' 个成分代码；当前报告期表中命中 ' +
+                                hitStr + ' / ' + uniStr +
+                                ' 条（成分若无该行则不显示）'
+                        );
+                    })
+                    .catch(function (err) {
+                        setFinaMetricSchemeModalMsg(
+                            panelKey,
+                            '调用系统方案失败：' + String(err && err.message ? err.message : err)
+                        );
+                    });
+                return;
+            }
             var schemes = loadFinaMetricSchemes(panelKey);
             var scheme = schemes[name];
             if (!scheme) {
@@ -7223,6 +7892,10 @@ function initFinaMetricPanel(panelKey) {
             var name = sel ? String(sel.value || '').trim() : '';
             if (!name) {
                 setFinaMetricSchemeModalMsg(panelKey, '请先选择要删除的方案。');
+                return;
+            }
+            if (isFinaSystemSchemeName(name)) {
+                setFinaMetricSchemeModalMsg(panelKey, '系统方案不可删除。');
                 return;
             }
             var schemes = loadFinaMetricSchemes(panelKey);
@@ -7315,6 +7988,11 @@ function initFinaMetricPanel(panelKey) {
                 var ceOvNow = document.getElementById('fina-cap-eff-modal-overlay');
                 if (ceOvNow && ceOvNow.classList.contains('is-open')) {
                     closeFinaCapEffModal();
+                    return;
+                }
+                var fhOvNow = document.getElementById('fina-float-holders-modal-overlay');
+                if (fhOvNow && fhOvNow.classList.contains('is-open')) {
+                    closeFinaFloatHoldersModal();
                     return;
                 }
                 var top3OvNow = document.getElementById('fina-top3-holders-modal-overlay');
@@ -7745,12 +8423,119 @@ function initFinaMetricPanel(panelKey) {
                 roTop3Shell.observe(top3Modal);
             }
         }
+        /* 流通股东前十：关闭、拖拽、resize + localStorage（遮罩透明，不关遮罩） */
+        var fhClose = document.getElementById('fina-float-holders-modal-close');
+        if (fhClose && !fhClose.dataset.boundFhClose) {
+            fhClose.dataset.boundFhClose = '1';
+            fhClose.addEventListener('click', closeFinaFloatHoldersModal);
+        }
+        var fhOverlay = document.getElementById('fina-float-holders-modal-overlay');
+        var fhModal = fhOverlay && fhOverlay.querySelector('.fina-float-holders-modal-shell');
+        var fhHeader = fhOverlay && fhOverlay.querySelector('.fina-float-holders-modal-header');
+        if (fhModal && fhHeader && fhOverlay && fhOverlay.dataset.finaFloatHoldersLayoutBound !== '1') {
+            fhOverlay.dataset.finaFloatHoldersLayoutBound = '1';
+            fhModal.style.position = 'fixed';
+            fhModal.style.left = '50%';
+            fhModal.style.top = '50%';
+            fhModal.style.transform = 'translate(-50%, -50%)';
+            var fhDragging = false;
+            var fhStartX = 0;
+            var fhStartY = 0;
+            var fhStartLeft = 0;
+            var fhStartTop = 0;
+            var fhDragW = 0;
+            var fhDragH = 0;
+            fhHeader.style.cursor = 'move';
+            fhHeader.addEventListener('mousedown', function (e) {
+                if (e.button !== 0) return;
+                var tgf = e.target;
+                if (tgf && tgf.closest && tgf.closest('input, button, label, select, textarea, a')) return;
+                fhDragging = true;
+                fhStartX = e.clientX;
+                fhStartY = e.clientY;
+                var rectFh = fhModal.getBoundingClientRect();
+                fhStartLeft = rectFh.left;
+                fhStartTop = rectFh.top;
+                fhDragW = rectFh.width;
+                fhDragH = rectFh.height;
+                fhModal.style.transform = '';
+                e.preventDefault();
+            });
+            document.addEventListener('mousemove', function (e) {
+                if (!fhDragging) return;
+                var dx = e.clientX - fhStartX;
+                var dy = e.clientY - fhStartY;
+                var newLf = fhStartLeft + dx;
+                var newTf = fhStartTop + dy;
+                var vwF = window.innerWidth || document.documentElement.clientWidth;
+                var vhF = window.innerHeight || document.documentElement.clientHeight;
+                var maxLf = vwF - fhDragW;
+                var maxTf = vhF - fhDragH;
+                if (newLf < 0) newLf = 0;
+                if (newTf < 0) newTf = 0;
+                if (newLf > maxLf) newLf = maxLf;
+                if (newTf > maxTf) newTf = maxTf;
+                fhModal.style.left = newLf + 'px';
+                fhModal.style.top = newTf + 'px';
+            });
+            document.addEventListener('mouseup', function () {
+                if (fhDragging) saveFinaFloatHoldersModalLayout(fhModal);
+                fhDragging = false;
+            });
+            if (typeof ResizeObserver !== 'undefined') {
+                var roFhShell = new ResizeObserver(function () {
+                    scheduleSaveFinaFloatHoldersModalLayout(fhModal);
+                });
+                roFhShell.observe(fhModal);
+            }
+        }
     })();
-    fetchFinaMetricTable(panelKey, _finaMetricState().selectedEndDate || '');
+    fetchFinaMetricTable(panelKey, _finaMetricState().selectedEndDate || '').then(function () {
+        if (panelKey !== 'arturn') return;
+        var payload = finaPendingImportPayload;
+        if (!payload || !(payload.source === 'zt_t1' || payload.source === 'cnt_high_limit' || payload.source === 'cnt_h850' || payload.source === 'cnt_h_high')) return;
+        finaPendingImportPayload = null;
+        var codes = Array.isArray(payload.tsCodes) ? payload.tsCodes : [];
+        var sourceLabel = payload.source === 'cnt_high_limit'
+            ? '首页涨停明细导入'
+            : payload.source === 'cnt_h850'
+            ? '首页850日新高导入'
+            : payload.source === 'cnt_h_high'
+                ? '首页历史新高导入'
+                : '首页涨停T-1 导入';
+        var sourceName = payload.source === 'cnt_high_limit'
+            ? '涨停明细'
+            : payload.source === 'cnt_h850'
+            ? '850日新高'
+            : payload.source === 'cnt_h_high'
+                ? '历史新高'
+                : '涨停T-1';
+        if (!codes.length) {
+            setFinaMetricSchemeModalMsg(panelKey, '检测到' + sourceName + '导入请求，但未解析到有效股票代码。');
+            return;
+        }
+        applyTsCodePoolWithReset(panelKey, codes, sourceLabel)
+            .then(function (ret) {
+                var hitStr = typeof ret.tableHit === 'number' ? String(ret.tableHit) : '--';
+                var uniStr = typeof ret.tableUniverse === 'number' ? String(ret.tableUniverse) : '--';
+                setFinaMetricSchemeModalMsg(
+                    panelKey,
+                    '已应用' + sourceLabel + '：已写入 ' + String(ret.count || 0) +
+                        ' 个代码；当前报告期表中命中 ' + hitStr + ' / ' + uniStr + ' 条'
+                );
+            })
+            .catch(function (err) {
+                setFinaMetricSchemeModalMsg(
+                    panelKey,
+                    '应用' + sourceLabel + '失败：' + String(err && err.message ? err.message : err)
+                );
+            });
+    });
 }
 
 function initFinaArturnPanel() {
     if (!document.getElementById('fina-arturn-section')) return;
+    finaPendingImportPayload = consumePendingFinaImportFromUrl();
     initFinaMetricPanel('arturn');
     initFinaArturnHorizScrollHelpers();
 }
@@ -7913,4 +8698,18 @@ window.addEventListener('load', function () {
 /* 代码更新时间：2026-05-03 09:15 前三持股/企业性质列、top10_holders 批量附加、明细弹窗 localStorage；RT_MONITOR_STATIC_VER 20260503-16 */
 /* 代码更新时间：2026-05-03 09:30 前三持股明细弹窗：副标题与表头/单元格居中（压过 median-table td 右对齐）；RT_MONITOR_STATIC_VER 20260503-17 */
 /* 代码更新时间：2026-05-03 11:05 自由流通比列（前三持股右侧，紧凑 loc-col，后端 free_mv/total_mv×100）；RT_MONITOR_STATIC_VER 20260503-18 */
-/* 代码更新时间：2026-05-03 13:11 固定资产右侧股东人数 hnchg+hn0–hn8（stk_holdernumber）；空表 colspan 206；RT_MONITOR_STATIC_VER 20260503-19 */
+/* 代码更新时间：2026-05-03 13:58 股东人数组 Chg% 右侧增环比(hn_qoq)/新低(hn_low)；空表 colspan 208；RT_MONITOR_STATIC_VER 20260503-22 */
+/* 代码更新时间：2026-05-03 14:48 股东人数最新季(hn0)点开流通股东前十弹窗 /api/fina_top10_floatholders；透明遮罩+resize 记忆；RT_MONITOR_STATIC_VER 20260503-23 */
+/* 代码更新时间：2026-05-03 14:55 前三持股弹窗 #fina-top3-holders-modal-overlay 透明遮罩（CSS，与流通股东/固定资产一致）；RT_MONITOR_STATIC_VER 20260503-24 */
+/* 代码更新时间：2026-05-03 14:59 前三持股明细表末列改持股变化（hold_change），与副标题报告期去重；RT_MONITOR_STATIC_VER 20260503-25 */
+/* 代码更新时间：2026-05-03 15:06 持股变化列与持股数量同亿/万两位小数，正红负绿（.rise/.fall）；RT_MONITOR_STATIC_VER 20260503-26 */
+/* 代码更新时间：2026-05-03 15:10 流通股东前十：变化列同前三格式+汇总行（前十持股比例累加）；RT_MONITOR_STATIC_VER 20260503-27 */
+/* 代码更新时间：2026-05-03 15:18 流通股东前十：持股市值(rt_k)+汇总行比例差(次新期)；RT_MONITOR_STATIC_VER 20260503-28 */
+/* 代码更新时间：2026-05-03 15:25 流通股东前十「变化」无值时显示新进；RT_MONITOR_STATIC_VER 20260503-29 */
+/* 代码更新时间：2026-05-04 15:40 新进黄色高亮（.fina-float-holders-change-xinjin）；RT_MONITOR_STATIC_VER 20260503-30 */
+/* 代码更新时间：2026-05-05 13:48 renderFinaFixedAssetsMetricsBar：公司主页右侧省份/城市（payload 优先，回落 arturnRow）；RT_MONITOR_STATIC_VER 20260505-3 */
+/* 代码更新时间：2026-05-07 06:17 财报表系统方案：11 个宽基各一条 index_weight 成分方案；RT_MONITOR_STATIC_VER 20260506-10 */
+/* 代码更新时间：2026-05-07 12:39 固定资产经营宽表首行「公告日」ann_date+moduleALogicStartRow；RT_MONITOR_STATIC_VER 20260507-4 */
+/* 代码更新时间：2026-05-07 12:50 指标/业务逻辑 sticky 叠盖修复见 rt_monitor.css（RT_MONITOR_STATIC_VER 20260507-5） */
+/* 代码更新时间：2026-05-07 13:30 公告日 thead 首行+formatFinaFixedAssetsAnnDateCompact；RT_MONITOR_STATIC_VER 20260507-6 */
+/* 代码更新时间：2026-06-17 20:46 首页导入财报失败文案随 sourceLabel 动态展示；RT_MONITOR_STATIC_VER 20260617-2 */
