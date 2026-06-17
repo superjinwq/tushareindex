@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<!-- rt-monitor-template: {{ rt_monitor_static_ver }} 若查看源代码看不到此行或版本号不对，说明浏览器连的不是本仓库启动的 Flask -->
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>window.__RT_MONITOR_API_PREFIX__ = {{ rt_monitor_api_prefix | tojson }};</script>
+    <title>行情监控</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ rt_monitor_static_ver }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rt_monitor.css') }}?v={{ rt_monitor_static_ver }}">
+    <!-- 布局强制规则：随 HTML no-cache 下发，不依赖外链 CSS 缓存版本 -->
+    <style id="rt-layout-force">
+        /* 页面与视口四边留白（与 rt_monitor.css body.rt-monitor 一致） */
+        body.rt-monitor {
+            padding: 3px !important;
+        }
+        /* 首行：三表+下排（成交额|涨跌家数）Grid + 右侧工具列，顶边与「涨跌幅(%)」等表头对齐 */
+        /* nowrap：避免窄屏/缩放时右侧「配置+日频+BIAS」整块换行插到四表与 BIAS 行之间 */
+        #rt-monitor-first-row {
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            align-items: flex-start !important;
+            justify-content: flex-start !important;
+            gap: var(--rt-monitor-quad-gap, 3px) !important;
+            width: max-content !important;
+            max-width: none !important;
+            box-sizing: border-box !important;
+            margin: 0 3px var(--rt-monitor-section-v-gap, 3px) 3px !important;
+        }
+        #rt-monitor-toolbar-col {
+            flex: 0 0 auto !important;
+            flex-shrink: 0 !important;
+            align-self: flex-start !important;
+        }
+        #rt-monitor-first-row #median-quad-row {
+            margin: 0 !important;
+            flex: 0 0 auto !important;
+        }
+        /* 主区横向滚动 */
+        .rt-monitor .container {
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch;
+        }
+        /* ── 首块：纵 flex 两行；上行三张表横排；下行成交额|涨跌家数；卡片 margin 全 0，缝仅 gap（禁与全局 .median-table-wrap margin:3px 叠成双缝）── */
+        #median-quad-row {
+            display: flex !important;
+            flex-direction: column !important;
+            flex-wrap: nowrap !important;
+            align-items: flex-start !important;
+            justify-content: flex-start !important;
+            gap: var(--rt-monitor-quad-gap, 3px) !important;
+            width: max-content !important;
+            min-width: min-content !important;
+            max-width: none !important;
+            overflow-x: visible !important;
+            box-sizing: border-box !important;
+        }
+        #median-quad-row .median-table-wrap {
+            margin: 0 !important;
+        }
+        #median-quad-top-row {
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            align-items: flex-start !important;
+            justify-content: flex-start !important;
+            gap: var(--rt-monitor-quad-gap, 3px) !important;
+            margin: 0 !important;
+            box-sizing: border-box !important;
+        }
+        #median-quad-bottom-row {
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            align-items: flex-start !important;
+            justify-content: flex-start !important;
+            gap: var(--rt-monitor-quad-gap, 3px) !important;
+            margin: 0 !important;
+            box-sizing: border-box !important;
+        }
+        .amount-table-wrap .median-table td.amount-peak-cell,
+        .amount-table-wrap .median-table th.amount-shrink-pct-head,
+        .amount-table-wrap .median-table td.amount-shrink-pct-cell { text-align: center !important; }
+        /* ── 统一区块间距：所有行/区块间距 = 3px（与首行四表 quad-gap 一致）── */
+        /* 策略：每个区块 margin-bottom:3px + 下一个区块 margin-top:0，总间距固定 3px */
+        #median-quad-row      { margin: 0 3px 3px 3px !important; } /* 独立使用时；在 #rt-monitor-first-row 内由上行覆盖为 0 */
+
+        /* 涨跌家数已并入 #median-quad-row 第二行，与成交额并排；外边距随整块 grid 的 margin */
+        #median-quad-row #limit-stats-section.limit-stats-wrap {
+            display: block !important;
+            margin: 0 !important;
+            padding: 6px 2px !important;
+            box-sizing: border-box !important;
+        }
+        /* ── 第三行：BIAS + MA（列间距与 quad/图行同为 3px 小缝）── */
+        /* 桌面：BIAS|MA 同行，不足宽时整行横向滚动，避免 MA 单独掉到下一行 */
+        #etf-bias-ma-row {
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            align-items: flex-start !important;
+            gap: var(--rt-monitor-inline-table-gap, 3px) !important;
+            margin: 0 3px var(--rt-monitor-section-v-gap, 3px) 3px !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+            overflow-x: auto !important;
+            overflow-y: visible !important;
+            -webkit-overflow-scrolling: touch;
+        }
+        /* ── 国证A指四图 + 融资双图：横缝 chart-pair-gap(3px)、竖缝 section-v-gap(3px)── */
+        .idx-charts-pair-row {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            align-items: flex-start !important;
+            gap: var(--rt-monitor-chart-pair-gap, 3px) !important;
+            margin: 0 3px var(--rt-monitor-section-v-gap, 3px) 3px !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+        }
+        .idx-charts-pair-row > .median-table-wrap {
+            margin: 0 !important;
+            flex: 1 1 0 !important;
+            min-width: 0 !important;
+            max-width: none !important;
+            padding: 6px 6px !important;
+        }
+        @media (max-width: 900px) {
+            #etf-bias-ma-row {
+                flex-direction: column !important;
+                flex-wrap: nowrap !important;
+                overflow-x: visible !important;
+                align-items: flex-start !important;
+                gap: 12px !important;
+            }
+            .idx-charts-pair-row {
+                flex-direction: column !important;
+                gap: var(--rt-monitor-section-v-gap, 3px) !important;
+            }
+            .idx-charts-pair-row > .median-table-wrap {
+                max-width: 100% !important;
+                width: 100% !important;
+            }
+            #top-moves-row {
+                flex-direction: column !important;
+                flex-wrap: nowrap !important;
+                overflow-x: visible !important;
+                gap: var(--rt-monitor-section-v-gap, 3px) !important;
+            }
+            #top-moves-row > .top-moves-wrap.median-table-wrap {
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                margin: 0 !important;
+                flex: 0 0 auto !important;
+            }
+        }
+        /* Top30 三表：flex+gap；子卡按内容宽（勿 flex:1 等分）；行内 overflow-x:auto 防第三表被挤出视口 */
+        #top-moves-row {
+            display: flex !important;
+            flex-wrap: nowrap !important;
+            align-items: flex-start !important;
+            justify-content: flex-start !important;
+            gap: var(--rt-monitor-chart-pair-gap, 3px) !important;
+            margin: 0 var(--rt-monitor-quad-gap, 3px) var(--rt-monitor-section-v-gap, 3px) var(--rt-monitor-quad-gap, 3px) !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+            overflow-x: auto !important;
+            overflow-y: visible !important;
+        }
+        #top-moves-row > .top-moves-wrap.median-table-wrap {
+            margin: 0 !important;
+            flex: 0 0 auto !important;
+            min-width: min-content !important;
+            max-width: none !important;
+        }
+        /* 融资双图：与普通 .idx-charts-pair-row 同一套 margin/gap，不再单独加大 10px */
+        #margin-daily-pair-row .margin-daily-wrap { margin: 0 !important; }
+        /* BIAS 条在右侧工具列内，条本身仅 flex 子项 */
+        #rt-monitor-toolbar-col #rt-monitor-bias-strip {
+            display: flex !important;
+            justify-content: flex-end !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+            margin: 0 !important;
+        }
+        /* 配置面板：与外链 CSS 一致，防缓存旧版 fixed 顶栏 */
+        .rt-monitor-config-wrap {
+            position: relative !important;
+            z-index: 101 !important;
+        }
+        .rt-monitor-toolbar-col .config-panel {
+            position: absolute !important;
+            top: 100% !important;
+            right: 0 !important;
+            left: auto !important;
+            margin-top: 8px !important;
+            min-width: min(420px, 96vw) !important;
+            max-width: min(720px, 98vw) !important;
+        }
+    </style>
+</head>
+<body class="rt-monitor rt-monitor-main">
+    <a href="#rt-monitor-main" class="rt-monitor-skip-link">跳到主内容</a>
+    <!-- 点击「刷新日频」后的轻量提示（成功/失败 + 本地完成时间） -->
+    <div id="daily-refresh-toast" class="daily-refresh-toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+
+    <main id="rt-monitor-main" class="container">
+        <!-- 首行：三表+下排并排与右侧「配置+刷新日频+BIAS」顶边对齐 -->
+        <div class="rt-monitor-first-row" id="rt-monitor-first-row">
+        <!-- 首块：上排 flex 横排三张表（缝=quad-gap）；下排成交额|涨跌家数；卡片 margin 清零仅靠 gap（myuiux） -->
+        <div class="median-quad-row" id="median-quad-row" data-quad-cols="3"><div class="median-quad-top-row" id="median-quad-top-row"><section class="median-table-wrap idx-pct-table-wrap idx-pct-table-first" id="idx-pct-table-section">
+            <div class="median-table-title">涨跌幅(%)</div>
+            <table class="median-table" id="idx-pct-table" aria-label="各指数涨跌幅(%)：Pct/Intra/Gap/Amp 与区间 T-1..T-120">
+                <thead>
+                    <tr>
+                        <th>分类</th>
+                        <th>Pct</th>
+                        <th>Intra</th>
+                        <th>Gap</th>
+                        <th>Amp</th>
+                        <th>T-1</th>
+                        <th>T-5</th>
+                        <th>T-20</th>
+                        <th>T-60</th>
+                        <th>T-120</th>
+                    </tr>
+                </thead>
+                <tbody id="idx-pct-table-body">
+                    <!-- 12 行由 JS 填充 -->
+                </tbody>
+            </table>
+        </section><section class="median-table-wrap" id="median-table-section">
+            <div class="median-table-title">涨跌幅中位数(%)</div>
+            <table class="median-table" id="median-table" aria-label="涨跌幅中位数按分类">
+                <thead>
+                    <tr>
+                        <th>分类</th>
+                        <th>T</th>
+                        <th>T-1</th>
+                        <th>T-5</th>
+                        <th>T-20</th>
+                        <th>T-60</th>
+                        <th>T-120</th>
+                    </tr>
+                </thead>
+                <tbody id="median-table-body">
+                    <!-- 12 行由 JS 填充 -->
+                </tbody>
+            </table>
+        </section><section class="median-table-wrap uppct-table-wrap" id="uppct-table-section">
+            <div class="median-table-title">上涨比例（%）</div>
+            <table class="median-table" id="uppct-table" aria-label="上涨比例按分类（%）">
+                <thead>
+                    <tr>
+                        <th>分类</th>
+                        <th>T</th>
+                        <th>T-1</th>
+                        <th>T-5</th>
+                        <th>T-20</th>
+                        <th>T-60</th>
+                        <th>T-120</th>
+                    </tr>
+                </thead>
+                <tbody id="uppct-table-body">
+                    <!-- 12 行由 JS 填充 -->
+                </tbody>
+            </table>
+        </section></div><div class="median-quad-bottom-row" id="median-quad-bottom-row"><section class="median-table-wrap amount-table-wrap" id="amount-table-section">
+            <div class="median-table-title idx-minute-title-row">
+                <span>成交额（亿）</span>
+                <span id="amount-top5-pct-header" class="amount-top5-header-metric" title="stockstat 入样 amount&gt;0：按成交额降序前 ceil(5%) 家合计占全市场比例">Top5%_pct：--</span>
+                <span id="amount-top5-pct-per-header" class="amount-top5-header-metric" title="当前 Top5%_pct 在 marketinfo.amount_top5_pct 近五年历史中的经验分位（0–100）">Per：--</span>
+            </div>
+            <table class="median-table" id="amount-table" aria-label="成交额按分类（亿元）">
+                <thead>
+                    <tr>
+                        <th>分类</th>
+                        <th>T</th>
+                        <th>T-1</th>
+                        <th>T-5</th>
+                        <th>T-20</th>
+                        <th>T-60</th>
+                        <th>T-120</th>
+                        <th>MAX T-60</th>
+                        <th>峰值日</th>
+                        <th class="amount-shrink-pct-head" title="昨成交额(T-1) ÷ 近60交易日峰值(MAX T-60) × 100">缩量%</th>
+                        <th>MIN T-60</th>
+                        <th>谷值日</th>
+                    </tr>
+                </thead>
+                <tbody id="amount-table-body">
+                    <!-- 12 行由 JS 填充 -->
+                </tbody>
+            </table>
+        </section><section class="median-table-wrap limit-stats-wrap" id="limit-stats-section" aria-label="涨跌家数（不含ST）">
+            <div class="median-table-title idx-minute-title-row">
+                <span>涨跌家数（不含ST）</span>
+                <span id="limit-stats-header-up" class="limit-stats-header-metric" title="A股（不含ST）活跃家数：vol&gt;0 且 amount&gt;0，涨跌幅&gt;0">涨：--</span>
+                <span id="limit-stats-header-flat" class="limit-stats-header-metric" title="A股（不含ST）活跃家数：涨跌幅=0">平：--</span>
+                <span id="limit-stats-header-down" class="limit-stats-header-metric" title="A股（不含ST）活跃家数：涨跌幅&lt;0">跌：--</span>
+            </div>
+            <table class="median-table limit-stats-table" id="limit-stats-table">
+                <tbody>
+                    <tr class="limit-stats-label-row">
+                        <th scope="col">&gt;5%</th><th scope="col">&gt;7%</th><th scope="col">&gt;10%</th>
+                        <th scope="col">一字涨</th><th scope="col">涨停</th><th scope="col">炸板</th><th scope="col">连板涨停</th>
+                        <th scope="col">涨停T-1</th><th scope="col">涨停T-5</th><th scope="col">昨涨Pct</th><th scope="col">超跌</th>
+                    </tr>
+                    <tr class="limit-stats-value-row" id="limit-stats-row-up">
+                        <td class="limit-stats-num rise js-limit-stat" data-k="pct_gt5">--</td>
+                        <td class="limit-stats-num rise js-limit-stat" data-k="pct_gt7">--</td>
+                        <td class="limit-stats-num rise js-limit-stat" data-k="pct_gt10">--</td>
+                        <td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_high_limitone" title="点击查看一字涨明细">--</td>
+                        <td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_high_limit" title="点击查看涨停明细">--</td>
+                        <td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_high_limit_lifting" title="点击查看炸板明细">--</td>
+                        <td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_lb_zt" title="点击查看连板涨停明细">--</td>
+                        <td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="zt_t1" title="点击查看涨停T-1明细">--</td>
+                        <td id="js-limit-stat-zt-t5" class="limit-stats-num rise js-limit-stat" data-k="zt_t5">--</td>
+                        <td class="limit-stats-num js-limit-stat" data-k="prev_zt_pct" title="昨涨停池（同花顺池）个股今日涨跌幅，按 rt_k.amount 成交额加权平均；正值红色无+号，负值绿色带负号">--</td>
+                        <td id="js-limit-stat-up-num-ma5-rt" class="limit-stats-num js-limit-stat bias-cell-clickable" data-k="up_num_ma5_rt" title="点击查看约5年窗口：五日上涨占比与 399317.SZ 收盘价（可拖动与调节窗口大小）">--</td>
+                    </tr>
+                    <tr class="limit-stats-label-row">
+                        <th scope="col">&lt;-5%</th><th scope="col">&lt;-7%</th><th scope="col">&lt;-10%</th>
+                        <th scope="col">一字跌</th><th scope="col">跌停</th><th scope="col">开板</th><th scope="col">连板跌停</th>
+                        <th scope="col">跌停T-1</th><th scope="col">跌停T-5</th><th scope="col">昨跌Pct</th><th scope="col">超跌Per</th>
+                    </tr>
+                    <tr class="limit-stats-value-row" id="limit-stats-row-down">
+                        <td class="limit-stats-num fall js-limit-stat" data-k="pct_lt_neg5">--</td>
+                        <td class="limit-stats-num fall js-limit-stat" data-k="pct_lt_neg7">--</td>
+                        <td class="limit-stats-num fall js-limit-stat" data-k="pct_lt_neg10">--</td>
+                        <td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_low_limitone" title="点击查看一字跌明细">--</td>
+                        <td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_low_limit" title="点击查看跌停明细">--</td>
+                        <td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_low_limit_lifting" title="点击查看开板明细">--</td>
+                        <td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_lb_dt" title="点击查看连板跌停明细">--</td>
+                        <td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="dt_t1" title="点击查看跌停T-1明细">--</td>
+                        <td id="js-limit-stat-dt-t5" class="limit-stats-num fall js-limit-stat" data-k="dt_t5">--</td>
+                        <td class="limit-stats-num js-limit-stat" data-k="prev_dt_pct" title="昨跌停池（同花顺池）个股今日涨跌幅，按 rt_k.amount 成交额加权平均；正值红色无+号，负值绿色带负号">--</td>
+                        <td id="js-limit-stat-up-num-ma5-rt-per" class="limit-stats-num js-limit-stat" data-k="up_num_ma5_rt_per" title="实时超跌在近500条 marketinfo.up_num_ma5 历史中的百分位（0~100，不含当日）">--</td>
+                    </tr>
+                    <tr class="limit-stats-label-row">
+                        <th scope="col">5D高/低</th><th scope="col">10D高/低</th><th scope="col">20D高/低</th><th scope="col">60D高/低</th><th scope="col">120D高/低</th><th scope="col">200D高/低</th><th scope="col">250D高/低</th><th scope="col">850D高/低</th><th scope="col">His高/低</th>
+                    </tr>
+                    <tr class="limit-stats-value-row" id="limit-stats-row-high">
+                        <td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_h5" title="点击查看5日新高明细">--</td><td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_h10" title="点击查看10日新高明细">--</td><td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_h20" title="点击查看20日新高明细">--</td><td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_h60" title="点击查看60日新高明细">--</td><td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_h120" title="点击查看120日新高明细">--</td><td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_h200" title="点击查看200日新高明细">--</td><td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_h250" title="点击查看250日新高明细">--</td><td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_h850" title="点击查看850日新高明细">--</td><td class="limit-stats-num rise js-limit-stat limit-stats-clickable" data-k="cnt_h_high" title="点击查看历史新高明细">--</td>
+                    </tr>
+                    <tr class="limit-stats-value-row" id="limit-stats-row-low">
+                        <td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_l5" title="点击查看5日新低明细">--</td><td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_l10" title="点击查看10日新低明细">--</td><td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_l20" title="点击查看20日新低明细">--</td><td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_l60" title="点击查看60日新低明细">--</td><td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_l120" title="点击查看120日新低明细">--</td><td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_l200" title="点击查看200日新低明细">--</td><td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_l250" title="点击查看250日新低明细">--</td><td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_l850" title="点击查看850日新低明细">--</td><td class="limit-stats-num fall js-limit-stat limit-stats-clickable" data-k="cnt_l_low" title="点击查看历史新低明细">--</td>
+                    </tr>
+                    <tr class="limit-stats-label-row">
+                        <th scope="col">5HL_C</th><th scope="col">10HL_C</th><th scope="col">20HL_C</th><th scope="col">60HL_C</th><th scope="col">120HL_C</th><th scope="col">200HL_C</th><th scope="col">250HL_C</th><th scope="col">850HL_C</th><th scope="col">H_HL_C</th>
+                    </tr>
+                    <tr class="limit-stats-value-row" id="limit-stats-row-hlc">
+                        <td class="limit-stats-num js-limit-stat" data-k="hlc_cccc_5">--</td><td class="limit-stats-num js-limit-stat" data-k="hlc_cccc_10">--</td><td class="limit-stats-num js-limit-stat" data-k="hlc_cccc_20">--</td><td class="limit-stats-num js-limit-stat" data-k="hlc_cccc_60">--</td><td class="limit-stats-num js-limit-stat" data-k="hlc_cccc_120">--</td><td class="limit-stats-num js-limit-stat" data-k="hlc_cccc_200">--</td><td class="limit-stats-num js-limit-stat" data-k="hlc_cccc_250">--</td><td class="limit-stats-num js-limit-stat" data-k="hlc_cccc_850">--</td><td class="limit-stats-num js-limit-stat" data-k="hlc_cccc_h">--</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section></div></div>
+
+        <aside class="rt-monitor-toolbar-col" id="rt-monitor-toolbar-col" aria-label="配置与 BIAS 提示">
+            <div class="rt-monitor-config-wrap">
+                <div class="config-top-bar" id="config-top-bar" aria-label="配置与刷新日频">
+                    <button type="button" id="config-trigger" class="config-trigger" title="刷新配置" aria-label="打开刷新配置面板">配置</button>
+                    <button type="button" id="btn-refresh-daily" class="btn-refresh-daily" title="仅更新净买入/融资余额与融资占比/国证A指的日频序列（不参与下方自动刷新间隔）" aria-label="刷新日频数据">刷新日频</button>
+                </div>
+                <p class="rt-monitor-fina-link-wrap">
+                    <a href="{{ url_for('rt_monitor_fina') }}" class="rt-monitor-fina-link" target="_blank" rel="noopener noreferrer">财报</a>
+                    <span class="rt-monitor-toolbar-link-sep" aria-hidden="true">|</span>
+                    <a href="{{ url_for('margin.rt_monitor_margin') }}" class="rt-monitor-margin-link" target="_blank" rel="noopener noreferrer">两融</a>
+                </p>
+                <p class="rt-monitor-sw-link-wrap">
+                    <a href="{{ url_for('sw.rt_monitor_sw') }}" class="rt-monitor-sw-link" target="_blank" rel="noopener noreferrer">申万行业分析</a>
+                </p>
+                <p class="rt-monitor-sw-link-wrap">
+                    <a href="{{ url_for('index.rt_monitor_index') }}" class="rt-monitor-sw-link" target="_blank" rel="noopener noreferrer">宽基指数分析</a>
+                </p>
+                <p class="rt-monitor-niusan-link-wrap">
+                    <a href="{{ url_for('niusan.rt_monitor_niusan') }}" class="rt-monitor-niusan-link" target="_blank" rel="noopener noreferrer">牛散持股</a>
+                </p>
+                <p class="rt-monitor-niusan-link-wrap">
+                    <a href="{{ url_for('opt_t_board.rt_monitor_opt_t_board') }}" class="rt-monitor-niusan-link" target="_blank" rel="noopener noreferrer">期权T型报价</a>
+                </p>
+                <p class="rt-monitor-niusan-link-wrap">
+                    <a href="{{ url_for('market_status.rt_monitor_market_status') }}" class="rt-monitor-niusan-link" target="_blank" rel="noopener noreferrer">市场状态</a>
+                </p>
+                <div id="config-panel" class="config-panel" aria-hidden="true">
+                    <div class="config-panel-inner">
+                        <div class="config-panel-title">刷新配置</div>
+                        <div class="config-row"><span id="last-update">最后刷新: --</span></div>
+                        <label class="config-row checkbox-wrap">
+                            <input type="checkbox" id="auto-refresh" checked name="rt_monitor_auto_refresh" autocomplete="off">
+                            <span>自动刷新（盘中数据）</span>
+                        </label>
+                        <label class="config-row interval-wrap">
+                            <span>间隔</span>
+                            <input type="number" id="refresh-interval" name="rt_monitor_refresh_interval_sec" min="0" step="1" placeholder="秒" value="3" class="config-interval-input" inputmode="numeric" autocomplete="off" enterkeyhint="done">
+                            <span class="config-unit">秒</span>
+                        </label>
+                        <button type="button" id="btn-refresh" class="btn-refresh" aria-label="立即刷新盘中数据">立即刷新</button>
+                        <div class="config-ma-sr-block" id="config-ma-sr-block">
+                            <div class="config-panel-title config-ma-sr-title">MA 表：支撑 / 阻力价位（ETF，三位小数）</div>
+                            <p class="config-ma-sr-hint">保存后写入服务器（工程目录 ma_sr_levels.json）并写入当前浏览器；局域网用 IP 访问与 localhost 共用同一套价位。表格中显示相对现价幅度%，涨破阻力为「突破」、跌破支撑为「破位」。</p>
+                            <div class="config-ma-sr-table-wrap" id="config-ma-sr-table-wrap"></div>
+                            <button type="button" id="btn-ma-sr-save" class="btn-ma-sr-save" aria-label="保存支撑阻力价位到本机">保存支撑阻力</button>
+                        </div>
+                        <button type="button" id="config-close" class="config-close" aria-label="关闭配置面板">关闭</button>
+                    </div>
+                </div>
+            </div>
+            <div class="rt-monitor-bias-strip" id="rt-monitor-bias-strip">
+                <div class="bias-sigma-box" id="bias-sigma-msg-section" aria-live="polite">
+                    <div class="bias-sigma-msg" id="bias-sigma-msg">消息：加载 BIAS 后显示。</div>
+                    <button type="button" id="bias-sigma-toggle-detail" class="bias-sigma-toggle" aria-expanded="false">查看详情</button>
+                    <div id="bias-sigma-detail-list" class="bias-sigma-popover" role="region" aria-label="偏离明细"></div>
+                </div>
+            </div>
+        </aside>
+        </div><!-- /#rt-monitor-first-row -->
+
+        <div class="etf-bias-ma-row" id="etf-bias-ma-row">
+        <section class="median-table-wrap bias-table-wrap" id="bias-table-section">
+            <table class="median-table bias-table" id="bias-table" aria-label="ETF BIAS 百分位 15MIN/60MIN/日线">
+                <thead>
+                    <tr>
+                        <th class="bias-th-per">BIAS</th>
+                        <th colspan="3" class="bias-th-freq">15MIN</th>
+                        <th colspan="3" class="bias-th-freq">60MIN</th>
+                        <th colspan="1" class="bias-th-freq">日线</th>
+                    </tr>
+                    <tr>
+                        <th class="bias-th-per">Per</th>
+                        <th class="bias-th-col">10MA</th>
+                        <th class="bias-th-col">20MA</th>
+                        <th class="bias-th-col">20EMA</th>
+                        <th class="bias-th-col">10MA</th>
+                        <th class="bias-th-col">20MA</th>
+                        <th class="bias-th-col">20EMA</th>
+                        <th class="bias-th-col">10MA</th>
+                    </tr>
+                </thead>
+                <tbody id="bias-table-body">
+                    <!-- ETF 行由 JS 填充 -->
+                </tbody>
+            </table>
+        </section>
+        <section class="median-table-wrap ma-signal-table-wrap" id="ma-signal-table-section" aria-label="MA 共振信号与聚集度Per">
+            <table class="median-table ma-signal-table" id="ma-signal-table">
+                <thead>
+                    <tr>
+                        <th class="bias-th-per ma-signal-th-corner" rowspan="2">Ma/Ema<br>方向</th>
+                        <th colspan="6" class="bias-th-freq">基本行情</th>
+                        <th colspan="5" class="bias-th-freq">区间涨跌幅</th>
+                        <th colspan="2" class="bias-th-freq">60MIN</th>
+                        <th colspan="2" class="bias-th-freq">日线</th>
+                        <th colspan="3" class="bias-th-freq">聚集度Per</th>
+                        <th colspan="4" class="bias-th-freq">支撑与阻力</th>
+                    </tr>
+                    <tr>
+                        <th class="bias-th-col ma-signal-amt-col">AMT</th>
+                        <th class="bias-th-col">Last</th>
+                        <th class="bias-th-col">Pct</th>
+                        <th class="bias-th-col">Intra</th>
+                        <th class="bias-th-col">Gap</th>
+                        <th class="bias-th-col">Amp</th>
+                        <th class="bias-th-col">T-1</th>
+                        <th class="bias-th-col">T-5</th>
+                        <th class="bias-th-col">T-20</th>
+                        <th class="bias-th-col">T-60</th>
+                        <th class="bias-th-col">T-120</th>
+                        <th class="bias-th-col">20</th>
+                        <th class="bias-th-col">60</th>
+                        <th class="bias-th-col">20</th>
+                        <th class="bias-th-col">60</th>
+                        <th class="bias-th-col">15MIN</th>
+                        <th class="bias-th-col">60MIN</th>
+                        <th class="bias-th-col">日线</th>
+                        <th class="bias-th-col">支撑一</th>
+                        <th class="bias-th-col">阻力一</th>
+                        <th class="bias-th-col">支撑二</th>
+                        <th class="bias-th-col">阻力二</th>
+                    </tr>
+                </thead>
+                <tbody id="ma-signal-table-body"></tbody>
+            </table>
+        </section>
+        </div>
+
+        <div class="idx-charts-pair-row rt-trend-row" id="idx-minute-pair-row" aria-label="国证A指：分钟成交额差值（当日 vs 前五日均值）">
+        <section class="median-table-wrap idx-minute-diff-wrap" id="idx-minute-diff-section">
+            <div class="median-table-title idx-minute-title-row">
+                <span>分钟差值</span>
+                <span id="idx-minute-predict" class="idx-minute-predict" aria-live="polite">今日预测 -- 亿</span>
+            </div>
+            <div id="idx-minute-diff-chart" class="rt-monitor-idx-chart"></div>
+        </section>
+        <section class="median-table-wrap idx-minute-diff-wrap idx-prev5-wrap" id="idx-prev5-minute-diff-section">
+            <div class="median-table-title idx-minute-title-row">
+                <span>分钟差值vs 前五均值</span>
+                <span id="idx-prev5-predict" class="idx-minute-predict" aria-live="polite">--</span>
+            </div>
+            <div id="idx-prev5-dates" class="idx-prev5-dates" aria-live="polite"></div>
+            <div id="idx-prev5-minute-diff-chart" class="rt-monitor-idx-chart"></div>
+        </section>
+        </div>
+
+        <div class="idx-charts-pair-row rt-trend-row" id="idx-cumsum-pair-row" aria-label="国证A指：成交额差额累计（当日较昨日 vs 较前五日均值）">
+        <section class="median-table-wrap idx-cumsum-wrap" id="idx-cumsum-section">
+            <div class="median-table-title idx-cumsum-title-row">
+                <span>当日/昨日成交额差额累计值</span>
+                <span id="idx-cumsum-latest" class="idx-cumsum-latest" aria-live="polite">--</span>
+            </div>
+            <div id="idx-cumsum-chart" class="rt-monitor-idx-chart"></div>
+        </section>
+        <section class="median-table-wrap idx-cumsum-wrap idx-prev5-wrap" id="idx-prev5-cumsum-section">
+            <div class="median-table-title idx-cumsum-title-row">
+                <span>当日/前五日均值 成交额差额累计值</span>
+                <span id="idx-prev5-cumsum-latest" class="idx-cumsum-latest" aria-live="polite">--</span>
+            </div>
+            <div id="idx-prev5-cumsum-chart" class="rt-monitor-idx-chart"></div>
+        </section>
+        </div>
+
+        <!-- 页面底部：冲高回落 / 大幅回升 / 当日成交额 Top30（flex+gap 并排；div 与 section 间勿留空白，免匿名 flex 子项撑缝） -->
+        <div class="top-moves-row" id="top-moves-row" aria-label="冲高回落、大幅回升与当日成交额 Top30"><section class="median-table-wrap top-moves-wrap" id="decline-top-section">
+            <div class="median-table-title">冲高回落 Top30（回落幅度最大）</div>
+            <table class="median-table top-moves-table" id="decline-top-table" aria-label="冲高回落Top30：代码/名称/成交额/回落幅度/申万行业">
+                <thead>
+                    <tr>
+                        <th>代码</th>
+                        <th>名称</th>
+                        <th class="top-moves-metric-col">成交额(亿)</th>
+                        <th class="top-moves-metric-col">回落(%)</th>
+                        <th>申万行业</th>
+                    </tr>
+                </thead>
+                <tbody id="decline-top-body"></tbody>
+            </table>
+        </section><section class="median-table-wrap top-moves-wrap" id="recovery-top-section">
+            <div class="median-table-title">大幅回升 Top30（回升幅度最大）</div>
+            <table class="median-table top-moves-table" id="recovery-top-table" aria-label="大幅回升Top30：代码/名称/成交额/回升幅度/申万行业">
+                <thead>
+                    <tr>
+                        <th>代码</th>
+                        <th>名称</th>
+                        <th class="top-moves-metric-col">成交额(亿)</th>
+                        <th class="top-moves-metric-col">回升(%)</th>
+                        <th>申万行业</th>
+                    </tr>
+                </thead>
+                <tbody id="recovery-top-body"></tbody>
+            </table>
+        </section><section class="median-table-wrap top-moves-wrap" id="amount-top-section">
+            <div class="median-table-title idx-minute-title-row">
+                <span>当日成交额 Top30（成交额最大）</span>
+                <span id="amount-top-weighted-pct" class="idx-minute-predict" aria-live="polite">加权涨跌 --</span>
+            </div>
+            <table class="median-table top-moves-table" id="amount-top-table" aria-label="当日成交额Top30：代码/名称/成交额/昨成交额/涨跌幅/自由换手/申万行业">
+                <thead>
+                    <tr>
+                        <th>代码</th>
+                        <th>名称</th>
+                        <th class="top-moves-metric-col">成交额(亿)</th>
+                        <th class="top-moves-metric-col">昨成交(亿)</th>
+                        <th class="top-moves-metric-col">涨跌幅(%)</th>
+                        <th class="top-moves-metric-col">自由换手(%)</th>
+                        <th>申万行业</th>
+                    </tr>
+                </thead>
+                <tbody id="amount-top-body"></tbody>
+            </table>
+        </section></div>
+
+        <section class="message-section" id="message-section" style="display: none;">
+            <div class="message message-error" id="message-text"></div>
+        </section>
+    </main>
+
+    <!-- BIAS / 聚集度Per 弹窗：与融资占比弹窗同款可 resize、localStorage、chartjs-plugin-zoom；按周期 limit 拉取更长序列 -->
+    <div id="bias-series-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="bias-series-modal-title">
+        <div class="bias-series-modal etf-bias-mcd-modal-shell">
+            <div class="bias-series-modal-header">
+                <h2 id="bias-series-modal-title" class="bias-series-modal-title">BIAS 序列</h2>
+                <button type="button" id="bias-series-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body">
+                <div id="bias-series-chart-wrap" class="bias-series-chart-wrap etf-bias-mcd-modal-chart-wrap">
+                    <div id="bias-series-loading" class="bias-series-loading" style="display: none;">加载中…</div>
+                    <div id="bias-series-msg" class="bias-series-msg" style="display: none;"></div>
+                    <canvas id="bias-series-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 成交额 Top5%_pct + 国证A指：点击成交额表头 Top5%_pct 打开；约5年、可拖动/resize、几何 localStorage -->
+    <div id="amount-top5-pct-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="amount-top5-pct-modal-title">
+        <div class="bias-series-modal amount-top5-pct-modal-shell">
+            <div class="bias-series-modal-header">
+                <h2 id="amount-top5-pct-modal-title" class="bias-series-modal-title">成交额Top5%占比与399317.SZ收盘价（2005-01-01 起）</h2>
+                <button type="button" id="amount-top5-pct-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body">
+                <div id="amount-top5-pct-modal-chart-wrap" class="bias-series-chart-wrap amount-top5-pct-modal-chart-wrap">
+                    <div id="amount-top5-pct-modal-loading" class="bias-series-loading" style="display: none;">加载中…</div>
+                    <div id="amount-top5-pct-modal-msg" class="bias-series-msg" style="display: none;"></div>
+                    <canvas id="amount-top5-pct-modal-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 超跌（五日上涨占比）+ 国证A指：点击涨跌家数「超跌」格打开；约5年、可拖动/resize、几何 localStorage -->
+    <div id="up-num-ma5-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="up-num-ma5-modal-title">
+        <div class="bias-series-modal up-num-ma5-modal-shell">
+            <div class="bias-series-modal-header">
+                <h2 id="up-num-ma5-modal-title" class="bias-series-modal-title">超跌与399317.SZ收盘价（最近约5年交易日）</h2>
+                <button type="button" id="up-num-ma5-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body">
+                <div id="up-num-ma5-modal-chart-wrap" class="bias-series-chart-wrap up-num-ma5-modal-chart-wrap">
+                    <div id="up-num-ma5-modal-loading" class="bias-series-loading" style="display: none;">加载中…</div>
+                    <div id="up-num-ma5-modal-msg" class="bias-series-msg" style="display: none;"></div>
+                    <canvas id="up-num-ma5-modal-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="lbzt-detail-modal-overlay" class="lbzt-detail-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="lbzt-detail-modal-title">
+        <div class="lbzt-detail-modal lbzt-detail-modal-shell">
+            <div class="lbzt-detail-modal-header">
+                <h2 id="lbzt-detail-modal-title" class="lbzt-detail-modal-title">连板涨停明细</h2>
+                <div class="lbzt-detail-modal-header-actions">
+                    <button type="button" id="lbzt-detail-open-fina-btn" class="lbzt-detail-modal-action-btn" title="将当前明细个股带入财报页（重置筛选并使用最新报告期）">在财报页查看</button>
+                    <button type="button" id="lbzt-detail-modal-close" class="lbzt-detail-modal-close">关闭</button>
+                </div>
+            </div>
+            <div class="lbzt-detail-modal-body">
+                <div id="lbzt-detail-loading" class="lbzt-detail-loading" style="display: none;">加载中…</div>
+                <div id="lbzt-detail-msg" class="lbzt-detail-msg" style="display: none;"></div>
+                <div class="lbzt-detail-table-wrap">
+                    <table class="median-table lbzt-detail-table" id="lbzt-detail-table" aria-label="连板涨停明细：代码/名称/成交额(亿)/涨跌幅/申万行业/涨停原因/涨停标签">
+                        <thead>
+                            <tr>
+                                <th>代码</th>
+                                <th>名称</th>
+                                <th>成交额(亿)</th>
+                                <th>涨跌幅(%)</th>
+                                <th>申万行业</th>
+                                <th>涨停原因</th>
+                                <th>涨停标签</th>
+                            </tr>
+                        </thead>
+                        <tbody id="lbzt-detail-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="ma-sr-tooltip" class="ma-sr-tooltip-popover" role="tooltip" aria-hidden="true" hidden></div>
+
+    {# 单文件 chart-stack + defer：本地一次命中，避免三库串行；失败时见控制台，rt_monitor.js 会隐藏走势图 #}
+    <script defer src="{{ url_for('static', filename='vendor/chart-stack.umd.js') }}?v={{ rt_monitor_static_ver }}"></script>
+    <script defer src="{{ url_for('static', filename='js/rt_monitor.js') }}?v={{ rt_monitor_static_ver }}"></script>
+</body>
+</html>

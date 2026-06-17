@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>window.__RT_MONITOR_API_PREFIX__ = {{ rt_monitor_api_prefix | tojson }};</script>
+    <title>牛散持股方案配置</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ rt_monitor_static_ver }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rt_monitor.css') }}?v={{ rt_monitor_static_ver }}">
+    <style>
+        body.rt-monitor-niusan-cfg-page {
+            background: linear-gradient(165deg, #dce2ea 0%, #e8ecf1 45%, #e4e7ec 100%);
+            min-height: 100vh;
+            margin: 0;
+            padding: 16px;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        .niusan-cfg-wrap {
+            max-width: 880px;
+            margin: 0 auto;
+            background: #fff;
+            border-radius: 12px;
+            border: 1px solid rgba(21, 101, 192, 0.18);
+            box-shadow: 0 4px 28px rgba(13, 71, 161, 0.12);
+            padding: 20px 22px 24px;
+        }
+        .niusan-cfg-wrap h1 {
+            margin: 0 0 8px;
+            font-size: 20px;
+            color: #0d47a1;
+        }
+        .niusan-cfg-hint {
+            font-size: 13px;
+            color: #546e7a;
+            line-height: 1.55;
+            margin-bottom: 18px;
+        }
+        .niusan-cfg-hint code {
+            font-size: 12px;
+            background: #eceff1;
+            padding: 1px 6px;
+            border-radius: 4px;
+        }
+        .niusan-cfg-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .niusan-cfg-toolbar a {
+            color: #1565c0;
+            font-size: 14px;
+        }
+        .niusan-cfg-btn {
+            height: 34px;
+            padding: 0 14px;
+            border-radius: 6px;
+            border: 1px solid #1565c0;
+            background: #1565c0;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .niusan-cfg-btn.secondary {
+            background: #fff;
+            color: #1565c0;
+        }
+        .niusan-cfg-btn:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+        .niusan-cfg-msg {
+            font-size: 13px;
+            margin-top: 10px;
+            min-height: 1.2em;
+        }
+        .niusan-cfg-msg.err { color: #b00020; }
+        .niusan-cfg-msg.ok { color: #2e7d32; }
+        .niusan-scheme-card {
+            border: 1px solid #cfd8dc;
+            border-radius: 8px;
+            padding: 14px 14px 12px;
+            margin-bottom: 14px;
+            background: #fafcfe;
+        }
+        .niusan-scheme-card.active {
+            border-color: #42a5f5;
+            box-shadow: 0 0 0 1px rgba(66, 165, 245, 0.35);
+        }
+        .niusan-scheme-head {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .niusan-scheme-head label {
+            font-size: 13px;
+            color: #37474f;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .niusan-scheme-head input[type="text"] {
+            height: 32px;
+            padding: 0 10px;
+            border: 1px solid #b0bec5;
+            border-radius: 6px;
+            width: 200px;
+            font-size: 14px;
+        }
+        .niusan-scheme-head input[type="radio"] {
+            width: 16px;
+            height: 16px;
+        }
+        .niusan-holder-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .niusan-holder-row input {
+            flex: 1;
+            min-width: 0;
+            height: 32px;
+            padding: 0 10px;
+            border: 1px solid #b0bec5;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .niusan-holder-row button {
+            flex-shrink: 0;
+            height: 32px;
+            min-width: 36px;
+            border: 1px solid #cfd8dc;
+            border-radius: 6px;
+            background: #fff;
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+            color: #546e7a;
+        }
+        .niusan-holder-row button:hover {
+            background: #eceff1;
+        }
+        .niusan-scheme-actions {
+            margin-top: 6px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .niusan-scheme-actions button {
+            height: 30px;
+            padding: 0 10px;
+            font-size: 13px;
+            border-radius: 6px;
+            border: 1px solid #90a4ae;
+            background: #fff;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body class="rt-monitor rt-monitor-niusan-cfg-page">
+    <div class="niusan-cfg-wrap">
+        <h1>牛散持股方案配置</h1>
+        <p class="niusan-cfg-hint">
+            <strong>方案名</strong>仅用于持股页标题展示，<strong>不参与</strong>数据库检索。<strong>关联人</strong>全部参与
+            <code>top10_floatholders.holder_name</code> 模糊匹配，人与人之间为 <strong>OR</strong>。
+            配置文件保存在工程目录 <code>niusan_holder_config.json</code>（亦可手工编辑后重启或保存覆盖）。
+        </p>
+        <div class="niusan-cfg-toolbar">
+            <button type="button" class="niusan-cfg-btn secondary" id="niusan-cfg-add-scheme">新增方案</button>
+            <button type="button" class="niusan-cfg-btn" id="niusan-cfg-save">保存</button>
+            <a href="{{ url_for('niusan.rt_monitor_niusan') }}" id="niusan-cfg-back">返回持股表</a>
+        </div>
+        <div id="niusan-cfg-msg" class="niusan-cfg-msg" aria-live="polite"></div>
+        <div id="niusan-cfg-schemes"></div>
+    </div>
+    <script>
+(function () {
+    var pre = typeof window !== 'undefined' && window.__RT_MONITOR_API_PREFIX__
+        ? String(window.__RT_MONITOR_API_PREFIX__).replace(/\/+$/, '')
+        : '';
+    function apiUrl(path) {
+        var p = path.charAt(0) === '/' ? path : '/' + path;
+        return pre ? pre + p : p;
+    }
+    var msgEl = document.getElementById('niusan-cfg-msg');
+    var schemesEl = document.getElementById('niusan-cfg-schemes');
+    var state = { activeId: '', schemes: [] };
+
+    function setMsg(text, cls) {
+        msgEl.textContent = text || '';
+        msgEl.className = 'niusan-cfg-msg' + (cls ? ' ' + cls : '');
+    }
+
+    function uid() {
+        var a = [];
+        for (var i = 0; i < 16; i++) {
+            a.push(Math.floor(Math.random() * 16).toString(16));
+        }
+        return a.join('');
+    }
+
+    function render() {
+        var html = '';
+        for (var i = 0; i < state.schemes.length; i++) {
+            var sc = state.schemes[i];
+            var active = sc.id === state.activeId;
+            html += '<div class="niusan-scheme-card' + (active ? ' active' : '') + '" data-scheme-id="' + escAttr(sc.id) + '">';
+            html += '<div class="niusan-scheme-head">';
+            html += '<label><input type="radio" name="niusan-active" value="' + escAttr(sc.id) + '"' + (active ? ' checked' : '') + ' /> 启用此方案</label>';
+            html += '<label>方案名 <input type="text" class="niusan-scheme-name" value="' + escAttr(sc.schemeName || '') + '" placeholder="展示标题，不参与检索" /></label>';
+            html += '</div>';
+            html += '<div class="niusan-holder-list">';
+            var holders = sc.holders || [];
+            for (var j = 0; j < holders.length; j++) {
+                html += holderRowHtml(holders[j]);
+            }
+            if (holders.length === 0) {
+                html += holderRowHtml('');
+            }
+            html += '</div>';
+            html += '<div class="niusan-scheme-actions">';
+            html += '<button type="button" class="niusan-add-holder">+ 关联人</button>';
+            html += '<button type="button" class="niusan-del-scheme">删除本方案</button>';
+            html += '</div>';
+            html += '</div>';
+        }
+        schemesEl.innerHTML = html;
+        bindCards();
+    }
+
+    function holderRowHtml(val) {
+        return '<div class="niusan-holder-row">' +
+            '<input type="text" class="niusan-holder-input" value="' + escAttr(val || '') + '" placeholder="股东姓名，参与 holder_name 匹配" />' +
+            '<button type="button" class="niusan-remove-holder" title="删除此行">\u2212</button>' +
+            '</div>';
+    }
+
+    function escAttr(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;');
+    }
+
+    function collectFromDom() {
+        var cards = schemesEl.querySelectorAll('.niusan-scheme-card');
+        var schemes = [];
+        var activeRadio = schemesEl.querySelector('input[name="niusan-active"]:checked');
+        var activeId = activeRadio ? activeRadio.value : state.activeId;
+        for (var ci = 0; ci < cards.length; ci++) {
+            var card = cards[ci];
+            var sid = card.getAttribute('data-scheme-id') || '';
+            var nameInp = card.querySelector('.niusan-scheme-name');
+            var schemeName = nameInp ? nameInp.value.trim() : '';
+            var holders = [];
+            var hInps = card.querySelectorAll('.niusan-holder-input');
+            for (var hi = 0; hi < hInps.length; hi++) {
+                var t = hInps[hi].value.trim();
+                if (t) holders.push(t);
+            }
+            schemes.push({ id: sid, schemeName: schemeName, holders: holders });
+        }
+        return { activeId: activeId, schemes: schemes };
+    }
+
+    function bindCards() {
+        schemesEl.querySelectorAll('.niusan-add-holder').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var list = btn.closest('.niusan-scheme-card').querySelector('.niusan-holder-list');
+                var wrap = document.createElement('div');
+                wrap.innerHTML = holderRowHtml('');
+                list.appendChild(wrap.firstChild);
+            });
+        });
+        schemesEl.querySelectorAll('.niusan-remove-holder').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var row = btn.closest('.niusan-holder-row');
+                var list = btn.closest('.niusan-holder-list');
+                if (list.querySelectorAll('.niusan-holder-row').length <= 1) {
+                    var inp = row.querySelector('.niusan-holder-input');
+                    if (inp) inp.value = '';
+                    return;
+                }
+                row.remove();
+            });
+        });
+        schemesEl.querySelectorAll('.niusan-del-scheme').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var card = btn.closest('.niusan-scheme-card');
+                var id = card.getAttribute('data-scheme-id');
+                if (!window.confirm('确定删除该方案？')) return;
+                state.schemes = state.schemes.filter(function (s) { return s.id !== id; });
+                if (state.schemes.length === 0) {
+                    state.schemes.push({ id: uid(), schemeName: '', holders: [] });
+                }
+                if (state.activeId === id) {
+                    state.activeId = state.schemes[0].id;
+                }
+                render();
+            });
+        });
+        schemesEl.querySelectorAll('input[name="niusan-active"]').forEach(function (r) {
+            r.addEventListener('change', function () {
+                state.activeId = r.value;
+                schemesEl.querySelectorAll('.niusan-scheme-card').forEach(function (c) {
+                    var on = c.getAttribute('data-scheme-id') === state.activeId;
+                    c.classList.toggle('active', on);
+                });
+            });
+        });
+    }
+
+    document.getElementById('niusan-cfg-add-scheme').addEventListener('click', function () {
+        var cur = collectFromDom();
+        state.schemes = cur.schemes;
+        state.activeId = uid();
+        state.schemes.push({ id: state.activeId, schemeName: '', holders: [] });
+        render();
+    });
+
+    document.getElementById('niusan-cfg-save').addEventListener('click', function () {
+        var btn = document.getElementById('niusan-cfg-save');
+        var payload = collectFromDom();
+        state.activeId = payload.activeId;
+        state.schemes = payload.schemes;
+        btn.disabled = true;
+        setMsg('保存中…', '');
+        fetch(apiUrl('/api/niusan_holder_config'), {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ activeId: payload.activeId, schemes: payload.schemes }),
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                btn.disabled = false;
+                if (!data || !data.ok) {
+                    setMsg(data && data.error ? String(data.error) : '保存失败', 'err');
+                    return;
+                }
+                if (data.config) {
+                    state.activeId = data.config.activeId || state.activeId;
+                    state.schemes = data.config.schemes || state.schemes;
+                }
+                setMsg('已保存。返回持股表即可看到新标题与检索口径（无需重启）。', 'ok');
+            })
+            .catch(function (e) {
+                btn.disabled = false;
+                setMsg(e && e.message ? e.message : String(e), 'err');
+            });
+    });
+
+    fetch(apiUrl('/api/niusan_holder_config'), { credentials: 'same-origin' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (!data || !data.schemes) {
+                setMsg('加载失败', 'err');
+                return;
+            }
+            state.activeId = data.activeId || '';
+            state.schemes = data.schemes;
+            if (!state.schemes.length) {
+                state.schemes.push({ id: uid(), schemeName: '', holders: [] });
+            }
+            render();
+        })
+        .catch(function (e) {
+            setMsg('加载失败：' + (e && e.message ? e.message : String(e)), 'err');
+        });
+})();
+    </script>
+</body>
+</html>

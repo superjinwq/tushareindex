@@ -63,7 +63,7 @@
 - `TUSHARE_TOKEN` - Tushare API Token（必填）
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` - MySQL 连接（可选，脚本中有默认值 localhost/root/123456）
 - `RT_MONITOR_PORT` - Web 服务端口（默认 5000）
-- `RT_MONITOR_AUTO_KILL_PREVIOUS` - 是否自动清理旧进程（默认 0）
+- `RT_MONITOR_AUTO_KILL_PREVIOUS` - 是否自动清理旧进程（代码内默认 0；`run_rt_monitor.bat` 未预置环境变量时设为 1）
 - `RT_MONITOR_API_PREFIX` - 反代前缀路径
 - `ZHIPU_API_KEY` - 智谱 GLM API Key（`cninfo_ann_glm_digest.py` 使用）
 - `jinwq.env` 文件保存本地开发默认值（**勿提交真实密码**）
@@ -91,9 +91,17 @@
 - **类型**：关键路径逐步类型提示；脚本偏工程化可读。
 - **日志**：与 py 同名日志、轮转、Windows 安全 Handler（常驻脚本见 `python-daemon-exit-and-log.mdc`）。
 - **API**：`_wait_tushare_api_slot` / 全局限流，避免多线程抢跑打满接口。
+## 历史回补与并行（用户偏好）
+- 按 **交易日**（或等价分片键）独立、可幂等的历史计算/回补，在**不限爆外部 API**且**无跨日强依赖**时，**默认采用多线程**（`ThreadPoolExecutor`），并暴露 `--*-workers` 或环境变量（如 `MARKETINFO_BACKFILL_WORKERS`）。
+- 参考实现：`marketinfo_from_stk_factor_pro.py` 的 `--backfill-cols` + `--backfill-workers`（单进程内并行，每线程独立 `pymysql` 连接；建议 3~5，脚本内 cap 16）。
+- **仍须遵守**：Tushare 拉取全局限流（如 `max_workers=5`、`time.sleep(0.2)`）；同脚本 `GET_LOCK` 单实例（勿多进程抢锁）；纯 MySQL 大表重扫时 workers 过大易打满磁盘/缓冲池。
+## 本地数据回测验证（用户偏好）
+- 基于已落库 MySQL 历史（如 `opt_daily`/`etf_daily`）的**方案 A 条件回测**，默认 **逐日全扫描**：每个 ETF **交易日**建仓采样一次（`SAMPLE_FREQ=D`，见 `opt_vertical_spread_backtest.iterSampleTradeDates`），**不用**周频 `W-MON` 除非显式 `--freq W-MON` 做快速抽样。
+- 参考脚本：`opt_vertical_spread_backtest.py`、`opt_vertical_spread_tp_fine.py`。
 ## SQL
 - 字符集 `utf8mb4`，排序 `utf8mb4_0900_ai_ci`（规则已载明）。
 - 财务 PIT：`fina_indicator` 唯一键含 `ann_date`、`update_flag` 等（与现脚本一致）。
+- **本机库校验**：核对 `stock_tushare` / `stock_wind` 等本地表数据或字段时，Agent 应在会话内直接执行查询（如 `mysql` CLI 或短时 `python -c` + pymysql），把关键结果写进回复；**不要**只把 SQL 丢给用户手工跑。
 ## Git / 规划
 - GSD 产物置于 `.planning/`；若 `commit_docs: true` 则纳入版本控制。
 <!-- gsd-conventions-end -->
@@ -111,10 +119,13 @@
 - 股东三表扩展（计划）：`stk_holdernumber` 按公告区间；`top10_*` 按 `ts_code` 循环 + 报告期区间。
 ## Entry points
 - 财务同步：`python fina_indicator.py`（多线程阶段1 + 可选 reconcile）。
+- **成长股本地一条龙（通用，任意 ts_code）**：`python growth_stock_local/run_growth_pipeline.py --code {TS_CODE} --trade-date YYYY-MM-DD`（Layer1 → 舆情合并 → Agent A–E → 报告；入口见 `.cursor/skills/growth-stock-local/SKILL.md`；`600183.SH` 仅为文档示例）。
+- 季报后刷新看板：`python growth_stock_local/refresh_tracking_board.py --code {TS_CODE} --re-export`。
 - 监控 Web：`python rt_monitor_app.py`（端口 `RT_MONITOR_PORT`）。
+- **rt_monitor 改代码后若浏览器/API 仍像旧版**：先排除「同一监听端口多个 `python … rt_monitor_app.py`」——核对响应头 `X-RT-Monitor-Build` 与仓库 `RT_MONITOR_STATIC_VER`、`netstat -ano` 是否多个 PID 同端口 LISTEN，再查业务逻辑。清单：`docs/solutions/workflow-issues/rt-monitor-multi-instance-debug-checklist-20260426.md`。
 ## Key files
 - `fina_indicator.py`：财务五表 + 全局限流、并行 `ThreadPoolExecutor`。
-- `rt_monitor_app.py`：大盘/ETF/涨跌停等 API 与页面（体量极大，职责只读展示）。
+- `rt_monitor_app.py`：薄入口；业务在 `rt_monitor/` 包（`monolith` + 按域 `blueprints`/`services`）；P1 margin/market_status，P2 niusan/opt + sw/index bp，**P3 main_bp（首页 + 19 API）**；fina 仍 monolith（P4）。
 - `.cursor/rules/jinwq.mdc`：项目 Python/MySQL 约定（camelCase、日志、日期口径）。
 <!-- gsd-architecture-end -->
 
@@ -157,6 +168,8 @@
 | setup | Configure which review agents run for your project. Auto-detects stack and writes compound-engineering.local.md. | `.cursor/skills/setup/SKILL.md` |
 | skill-creator | Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Claude's capabilities with specialized knowledge, workflows, or tool integrations. | `.cursor/skills/skill-creator/SKILL.md` |
 | tushare-to-mysql | 根据 Tushare 接口文档自动生成 Python 数据入库脚本，将数据存储到本地 MySQL。支持全量导入和增量导入，自动建表（含字段注释），自动识别 VIP 接口。当用户提供 Tushare 接口链接（如 https://tushare.pro/document/2?doc_id=79）时使用。触发词：tushare入库、数据入库、接口导入、同步数据、下载数据到MySQL。ETF 区间涨跌幅展示口径见规则 O（与 myetfdate 一致）。 | `.cursor/skills/tushare-to-mysql/SKILL.md` |
+| wechat-article-downloader | 微信公众号文章下载（HTML/PDF/MD 等）、单篇与合集、本地 MCP 批量与 CSV 导出流程；与 [qiye45/wechatDownload](https://github.com/qiye45/wechatDownload) 配套。触发词：微信公众号下载、公众号批量、appmsgalbum、wechat MCP。 | `.cursor/skills/wechat-article-downloader/SKILL.md` |
+| growth-stock-local | A 股成长股本地通用一条龙（任意 ts_code）：`run_growth_pipeline.py`、Layer1、parallel 舆情、Agent 报告。触发：成长股分析、分析 XX 成长股、前置指标。详情见 `.cursor/skills/growth-stock-local/SKILL.md` → `growth_stock_local/skills/growth-orchestrator.md` | `.cursor/skills/growth-stock-local/SKILL.md` |
 <!-- gsd-skills-end -->
 
 <!-- gsd-workflow-start source:GSD defaults -->

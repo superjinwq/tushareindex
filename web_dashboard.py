@@ -42,7 +42,8 @@ DB_CONFIG = {
     'read_timeout': 60,
     'write_timeout': 60
 }
-# margin_daily 在 stock_tushare，与 rt_monitor_app._query_margin_daily_recent 口径一致
+# margin_daily 在 stock_tushare；查询口径见 rt_monitor.services.margin（完整 rt-monitor API 以 rt_monitor_app.py 为准）
+from rt_monitor.services.margin import query_margin_daily_recent, query_margin_rzmre_idx_series
 DB_CONFIG_TUSHARE = {
     **DB_CONFIG,
     'database': os.getenv('DB_NAME_TUSHARE', 'stock_tushare'),
@@ -55,7 +56,7 @@ UPDATE_INTERVAL = int(os.getenv('UPDATE_INTERVAL', '30'))  # 默认30秒更新�
 
 # 与 rt_monitor_app 共用 templates/static 绝对路径，避免工作目录不对时读到旧模板或空白变量
 _WEB_DIR = os.path.dirname(os.path.abspath(__file__))
-RT_MONITOR_STATIC_VER = '20260503-21'  # 与 rt_monitor_app.RT_MONITOR_STATIC_VER 保持同步（静态资源 ?v=）
+RT_MONITOR_STATIC_VER = '20260514-19'  # 与 rt_monitor_app.RT_MONITOR_STATIC_VER 保持同步（静态资源 ?v=）
 
 app = Flask(
     __name__,
@@ -392,113 +393,6 @@ def background_update_thread():
         update_data()
 
 
-def _to_float_or_none(v):
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
-
-
-def _query_margin_daily_recent(limit: int = 300):
-    """只读 margin_daily：rzye_sum、netbuy 库内单位为元，接口字段 *_yi 为亿元（与 rt_monitor_app 同源 SQL）。"""
-    try:
-        conn = pymysql.connect(**DB_CONFIG_TUSHARE)
-    except Exception as e:
-        logger.exception("连接 stock_tushare 失败（margin_daily）: %s", e)
-        return {'rows': [], 'error': '数据库连接失败'}
-    try:
-        lim = int(limit)
-        lim = max(1, min(lim, 1300))
-    except (TypeError, ValueError):
-        lim = 300
-    sql = (
-        "SELECT trade_date, "
-        "ROUND(rzye_sum / 100000000, 2) AS rzye_sum_yi, "
-        "ROUND(netbuy / 100000000, 2) AS netbuy_yi, "
-        "ROUND(netbuy_pct, 2) AS netbuy_pct "
-        "FROM margin_daily ORDER BY trade_date DESC LIMIT %s"
-    )
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, (lim,))
-            raw = cur.fetchall()
-        rows = []
-        for r in raw or []:
-            td = r[0]
-            rzye_yi = _to_float_or_none(r[1])
-            nb_yi = _to_float_or_none(r[2])
-            nb_pct = _to_float_or_none(r[3])
-            td_str = td.isoformat() if hasattr(td, 'isoformat') else str(td)
-            rows.append({
-                'trade_date': td_str,
-                'rzye_sum_yi': rzye_yi,
-                'netbuy_yi': nb_yi,
-                'netbuy_pct': nb_pct,
-            })
-        return {
-            'rows': rows,
-            'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        }
-    except Exception as e:
-        logger.exception("查询 margin_daily 失败: %s", e)
-        return {'rows': [], 'error': str(e)}
-    finally:
-        conn.close()
-
-
-def _query_margin_rzmre_idx_series(limit: int = 300):
-    """margin_daily.rzmre_pct 与 index_daily(399317.SZ).close 按 trade_date 对齐（与 rt_monitor_app 同源 SQL）。"""
-    idx_ts = '399317.SZ'
-    try:
-        conn = pymysql.connect(**DB_CONFIG_TUSHARE)
-    except Exception as e:
-        logger.exception("连接 stock_tushare 失败（margin_rzmre_idx_series）: %s", e)
-        return {'rows': [], 'error': '数据库连接失败'}
-    try:
-        lim = int(limit)
-        lim = max(1, min(lim, 1300))
-    except (TypeError, ValueError):
-        lim = 300
-    sql = (
-        "SELECT m.trade_date, m.rzmre_pct, m.rzmre_pct_per, i.close AS idx_close "
-        "FROM ("
-        "  SELECT trade_date, rzmre_pct, rzmre_pct_per FROM margin_daily "
-        "  ORDER BY trade_date DESC LIMIT %s"
-        ") m "
-        "INNER JOIN index_daily i ON i.ts_code = %s AND i.trade_date = m.trade_date "
-        "ORDER BY m.trade_date ASC"
-    )
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, (lim, idx_ts))
-            raw = cur.fetchall()
-        rows = []
-        for r in raw or []:
-            td = r[0]
-            pct = _to_float_or_none(r[1])
-            per = _to_float_or_none(r[2])
-            cl = _to_float_or_none(r[3])
-            td_str = td.isoformat() if hasattr(td, 'isoformat') else str(td)
-            rows.append({
-                'trade_date': td_str,
-                'rzmre_pct': pct,
-                'rzmre_pct_per': per,
-                'idx_close': cl,
-            })
-        return {
-            'rows': rows,
-            'ts_code': idx_ts,
-            'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        }
-    except Exception as e:
-        logger.exception("查询 margin_rzmre_idx_series 失败: %s", e)
-        return {'rows': [], 'error': str(e)}
-    finally:
-        conn.close()
-
-
 # Flask路由
 @app.route('/')
 def index():
@@ -551,7 +445,7 @@ def get_margin_daily_recent():
             limit = int(request.args.get('limit', default='300'))
         except (TypeError, ValueError):
             limit = 300
-        payload = _query_margin_daily_recent(limit=limit)
+        payload = query_margin_daily_recent(limit=limit)
         status = 200 if not payload.get('error') else 500
         return jsonify(payload), status
     except Exception as e:
@@ -567,7 +461,7 @@ def get_margin_rzmre_idx_series():
             limit = int(request.args.get('limit', default='300'))
         except (TypeError, ValueError):
             limit = 300
-        payload = _query_margin_rzmre_idx_series(limit=limit)
+        payload = query_margin_rzmre_idx_series(limit=limit)
         status = 200 if not payload.get('error') else 500
         return jsonify(payload), status
     except Exception as e:
@@ -688,3 +582,29 @@ if __name__ == '__main__':
 # 代码更新时间：2026-04-27 17:37 同步 RT_MONITOR_STATIC_VER=20260427-25（净利率/ROE 新高+环比两列）
 # 代码更新时间：2026-04-27 17:52 同步 RT_MONITOR_STATIC_VER=20260427-25（财报表头错位修正）
 # 代码更新时间：2026-04-27 17:56 同步 RT_MONITOR_STATIC_VER=20260427-25（财报表分组边界索引修正）
+# 代码更新时间：2026-05-03 13:58 同步 RT_MONITOR_STATIC_VER=20260503-22（财报表股东人数环比/新低列）
+# 代码更新时间：2026-05-03 14:48 同步 RT_MONITOR_STATIC_VER=20260503-23（流通股东前十弹窗 API）
+# 代码更新时间：2026-05-03 14:55 同步 RT_MONITOR_STATIC_VER=20260503-24（前三持股弹窗透明遮罩 CSS）
+# 代码更新时间：2026-05-03 14:59 同步 RT_MONITOR_STATIC_VER=20260503-25（前三持股明细末列持股变化）
+# 代码更新时间：2026-05-03 15:06 同步 RT_MONITOR_STATIC_VER=20260503-26（持股变化列格式与着色）
+# 代码更新时间：2026-05-03 15:10 同步 RT_MONITOR_STATIC_VER=20260503-27（流通股东前十变化列+汇总行）
+# 代码更新时间：2026-05-03 15:18 同步 RT_MONITOR_STATIC_VER=20260503-28（持股市值+汇总比例差）
+# 代码更新时间：2026-05-03 15:25 同步 RT_MONITOR_STATIC_VER=20260503-29（流通股东变化无值→新进）
+# 代码更新时间：2026-05-04 15:40 同步 RT_MONITOR_STATIC_VER=20260503-30（新进黄色高亮）
+# 代码更新时间：2026-05-05 07:30 同步 RT_MONITOR_STATIC_VER=20260503-31（财报股东明细弹窗 CSS）
+# 代码更新时间：2026-05-05 11:39 同步 RT_MONITOR_STATIC_VER=20260505-1（申万筛选方案 UI）
+# 代码更新时间：2026-05-05 11:57 同步 RT_MONITOR_STATIC_VER=20260505-2（申万筛选方案弹窗拖拽）
+# 代码更新时间：2026-05-05 13:48 同步 RT_MONITOR_STATIC_VER=20260505-3（固定资产弹窗省份/城市）
+# 代码更新时间：2026-05-05 14:07 同步 RT_MONITOR_STATIC_VER=20260505-4（涨跌家数明细快路径）
+# 代码更新时间：2026-05-05 20:37 同步 RT_MONITOR_STATIC_VER=20260505-5（固定资产弹窗合同负债选行优先级）
+# 代码更新时间：2026-05-05 22:47 同步 RT_MONITOR_STATIC_VER=20260505-6（涨停T-1 导入财报页筛选）
+# 代码更新时间：2026-05-05 23:13 同步 RT_MONITOR_STATIC_VER=20260505-7（850日新高/历史新高接入财报双入口）
+# 代码更新时间：2026-05-05 23:27 同步 RT_MONITOR_STATIC_VER=20260505-8（涨停明细接入财报页新标签导入）
+# 代码更新时间：2026-05-14 23:54 同步 RT_MONITOR_STATIC_VER=20260514-13（申万 Amt 弹窗与静态资源）
+# 代码更新时间：2026-05-15 00:12 同步 RT_MONITOR_STATIC_VER=20260514-14（申万页 style 标签修复）
+# 代码更新时间：2026-05-15 00:28 同步 RT_MONITOR_STATIC_VER=20260514-15（申万 Amt 弹窗透明背景）
+# 代码更新时间：2026-05-15 06:48 同步 RT_MONITOR_STATIC_VER=20260514-16（申万新高分布 6 列 stockstat）
+# 代码更新时间：2026-05-15 07:46 同步 RT_MONITOR_STATIC_VER=20260514-17（申万「新高、新低分布」分组文案+列底色）
+# 代码更新时间：2026-05-15 09:26 同步 RT_MONITOR_STATIC_VER=20260514-18（申万 Amt 弹窗白底壳对齐聚集度 Per）
+# 代码更新时间：2026-05-15 12:39 同步 RT_MONITOR_STATIC_VER=20260514-19（Amt 分位序列接口拼接 rt 末点）
+# 代码更新时间：2026-06-17 15:17 margin API 改 import rt_monitor.services.margin
