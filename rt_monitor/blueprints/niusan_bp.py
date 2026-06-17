@@ -90,7 +90,7 @@ def apiNiusanSchemeHoldings():
     schemeId = str(request.args.get('scheme_id') or '').strip()
     if not schemeId:
         return jsonify({'ok': False, 'error': 'missing scheme_id'}), 400
-    payload = queryNiusanHoldingsPageRows(forSchemeId=schemeId)
+    payload = queryNiusanHoldingsPageRows(for_scheme_id=schemeId)
     err = payload.get('error')
     if err == 'scheme_not_found':
         return jsonify({'ok': False, 'error': err}), 404
@@ -113,4 +113,4 @@ def apiNiusanSchemeHoldings():
         }
     )
 
-# 代码更新时间：2026-06-17 15:17
+# 代码更新时间：2026-06-17 16:14

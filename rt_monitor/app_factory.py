@@ -30,6 +30,7 @@ def create_app():
     if _blueprintsRegistered:
         return app, socketio
 
+    from rt_monitor.blueprints.fina_bp import finaBp
     from rt_monitor.blueprints.index_bp import indexBp
     from rt_monitor.blueprints.main_bp import mainBp
     from rt_monitor.blueprints.margin_bp import marginBp
@@ -38,7 +39,7 @@ def create_app():
     from rt_monitor.blueprints.opt_t_board_bp import optTBoardBp
     from rt_monitor.blueprints.sw_bp import swBp
 
-    for bp in (mainBp, marginBp, marketStatusBp, swBp, indexBp, optTBoardBp, niusanBp):
+    for bp in (mainBp, marginBp, marketStatusBp, swBp, indexBp, optTBoardBp, niusanBp, finaBp):
         app.register_blueprint(bp)
     _blueprintsRegistered = True
     return app, socketio
@@ -51,8 +52,8 @@ def runStartupHooks() -> None:
         return
     _warmupStarted = True
 
+    from rt_monitor.services.fina_arturn import warmupFinaArturnCacheAsync
     from rt_monitor.monolith import (
-        _warmup_fina_arturn_cache_async,
         _warmup_ma_signal_table_cache_async,
         _warmup_sw_industry_cache_async,
         load_initial_cache,
@@ -64,7 +65,7 @@ def runStartupHooks() -> None:
     except ImportError:
         logger.warning('opt_spread_board_select 不可用，opt-t-board 回测标注将退化')
     _warmup_ma_signal_table_cache_async()
-    _warmup_fina_arturn_cache_async()
+    warmupFinaArturnCacheAsync()
     _warmup_sw_industry_cache_async()
 
 
@@ -108,4 +109,4 @@ def run_server() -> None:
         allow_unsafe_werkzeug=True,
     )
 
-# 代码更新时间：2026-06-17 15:48
+# 代码更新时间：2026-06-17 16:58

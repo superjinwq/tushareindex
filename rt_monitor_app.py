@@ -21,15 +21,15 @@ from rt_monitor.core.config import (
 
 app, socketio = create_app()
 
-# 外部脚本兼容（roic_*、export_*）；后续改从 rt_monitor.services 导入
-from rt_monitor.monolith import (
+# 外部脚本兼容（roic_*、export_*）；优先从 fina 查询模块导入
+from rt_monitor.services.fina_arturn_queries import (
     _fina_end_date_str_from_yq,
     _fina_prev_yq,
     _fina_quarter_single_revenue,
-    _normalize_end_date_yyyymmdd,
 )
+from rt_monitor.monolith import _normalize_end_date_yyyymmdd
 
 if __name__ == '__main__':
     run_server()
 
-# 代码更新时间：2026-06-17 15:17
+# 代码更新时间：2026-06-17 17:35

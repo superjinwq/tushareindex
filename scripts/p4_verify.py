@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""P4 验收：fina 页面 + 三条 API（test_client）。"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+PATHS = [
+    '/rt-monitor/fina',
+    '/api/fina_arturn_days_table?end_date=20250331',
+    '/api/fina_stock_basic_act?ts_code=600519.SH',
+]
+
+
+def runVerify() -> bool:
+    from rt_monitor.app_factory import create_app
+
+    app, _ = create_app()
+    ok = True
+    with app.app_context():
+        rules = [str(r.rule) for r in app.url_map.iter_rules()]
+        client = app.test_client()
+        print('=== P4 fina ===')
+        for raw in PATHS:
+            path = raw.split('?', 1)[0]
+            cnt = rules.count(path)
+            if cnt != 1:
+                print(f'  [FAIL] 路由 {path} count={cnt}')
+                ok = False
+        for raw in PATHS:
+            rv = client.get(raw)
+            code = rv.status_code
+            tag = 'OK' if code == 200 else 'FAIL'
+            print(f'  [{tag}] GET {raw} -> {code}')
+            if code != 200:
+                ok = False
+            elif raw == '/rt-monitor/fina':
+                if rv.headers.get('X-RT-Monitor-Build'):
+                    print('  [INFO] X-RT-Monitor-Build=', rv.headers.get('X-RT-Monitor-Build'))
+                else:
+                    print('  [WARN] HTML 缺少 X-RT-Monitor-Build')
+            elif raw.startswith('/api/fina_arturn_days_table'):
+                data = rv.get_json(silent=True) or {}
+                if 'rows' not in data and 'error' not in data:
+                    print('  [FAIL] arturn 响应缺少 rows/error')
+                    ok = False
+                else:
+                    print('  [INFO] arturn rows=', len(data.get('rows') or []))
+        ep = 'fina.rt_monitor_fina'
+        hasEp = ep in app.view_functions
+        print(f'  [{"OK" if hasEp else "FAIL"}] endpoint {ep}')
+        if not hasEp:
+            ok = False
+    print('=== P4', 'PASS' if ok else 'FAIL', '===')
+    return ok
+
+
+if __name__ == '__main__':
+    sys.exit(0 if runVerify() else 1)
