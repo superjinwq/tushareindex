@@ -13,6 +13,8 @@ PATHS = [
     '/rt-monitor/fina',
     '/api/fina_arturn_days_table?end_date=20250331',
     '/api/fina_stock_basic_act?ts_code=600519.SH',
+    '/api/fina_top10_floatholders?ts_code=600519.SH&end_date=20250331',
+    '/api/fina_system_scheme_codes?scheme=index_weight_latest&index_code=000300.SH',
 ]
 
 
@@ -55,6 +57,45 @@ def runVerify() -> bool:
         print(f'  [{"OK" if hasEp else "FAIL"}] endpoint {ep}')
         if not hasEp:
             ok = False
+    # standalone 兼容：须能从 compat 取 handler
+    try:
+        import rt_monitor.compat as mon
+
+        for name in (
+            'api_sw_industry_stats',
+            'api_sw_index_amt_pctile_series',
+            'api_sw_industry_limit_detail',
+            'RT_MONITOR_STATIC_VER',
+            '_request_path_matches_no_store_json_api',
+        ):
+            if not hasattr(mon, name):
+                print(f'  [FAIL] compat 缺少 {name}')
+                ok = False
+            else:
+                print(f'  [OK] compat.{name}')
+    except Exception as e:
+        print(f'  [FAIL] import rt_monitor.compat: {e}')
+        ok = False
+    # standalone 应用 smoke
+    try:
+        from rt_monitor_sw_standalone import createSwStandaloneApp
+
+        swApp = createSwStandaloneApp()
+        with swApp.app_context():
+            swClient = swApp.test_client()
+            for raw in (
+                '/api/sw_industry_stats?level=l1',
+                '/api/sw_index_amt_pctile_series?ts_code=801010.SI&years=3',
+            ):
+                rv = swClient.get(raw)
+                code = rv.status_code
+                tag = 'OK' if code == 200 else 'FAIL'
+                print(f'  [{tag}] standalone GET {raw} -> {code}')
+                if code != 200:
+                    ok = False
+    except Exception as e:
+        print(f'  [FAIL] standalone smoke: {e}')
+        ok = False
     print('=== P4', 'PASS' if ok else 'FAIL', '===')
     return ok
 

@@ -420,6 +420,9 @@ _SW_LIMIT_DETAIL_COLUMN_META: dict[str, dict[str, str]] = {
 _sw_industry_limit_detail_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
 SW_INDUSTRY_LIMIT_DETAIL_CACHE_TTL = 60
 SW_INDUSTRY_LIMIT_DETAIL_CACHE_MAX = 512
+_sw_amt_pctile_series_cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
+SW_AMT_PCTILE_SERIES_CACHE_TTL = 300.0
+SW_AMT_PCTILE_SERIES_CACHE_MAX = 64
 # 申万页新高/低明细：主表刷新时预热的命中集合（明细点击秒开，避免重复 HL_C/stockstat 重型查询）
 _sw_limit_flagged_pool_cache: OrderedDict[tuple, tuple[float, dict[str, set[str]], dict[str, tuple[str, str]]]] = OrderedDict()
 SW_LIMIT_FLAGGED_POOL_TTL = 20
@@ -1149,6 +1152,8 @@ _JSON_API_NO_STORE_SUFFIXES: tuple[str, ...] = (
     '/api/fina_arturn_days_table',
     '/api/fina_fixed_assets_revenue_series',
     '/api/fina_stock_basic_act',
+    '/api/fina_top10_floatholders',
+    '/api/fina_system_scheme_codes',
     '/api/up_num_ma5_series',
     '/api/amount_top5_pct_series',
     '/api/etf_bias_series',
@@ -1158,6 +1163,10 @@ _JSON_API_NO_STORE_SUFFIXES: tuple[str, ...] = (
     '/api/niusan_floatholder_detail',
     '/api/niusan_scheme_holdings',
     '/api/sw_industry_stats',
+    '/api/sw_industry_limit_detail',
+    '/api/sw_index_amt_pctile_series',
+    '/api/index_industry_stats',
+    '/api/opt-t-board',
 )
 
 
@@ -3595,6 +3604,14 @@ def _sw_empirical_pct_leq(sorted_hist: list[float], r: float) -> float | None:
     return round(100.0 * float(hi) / float(n), 2)
 
 
+def _sw_empirical_pct_leq_values(vals: list[float], r: float) -> float | None:
+    """经验分位（无需预排序，适合滑动窗口）。"""
+    if not vals:
+        return None
+    hi = sum(1 for x in vals if x <= r + 1e-12)
+    return round(100.0 * float(hi) / float(len(vals)), 2)
+
+
 def _normalize_sw_industry_index_ts_code(group_code: str) -> str | None:
     """index_member 的 l1/l2 行业代码多为无后缀；index_sw_daily / rt_sw_k 使用 *.SI。"""
     s = str(group_code or "").strip().upper()
@@ -3892,6 +3909,200 @@ def _load_index_sw_daily_amount_by_date(
     except Exception as e:
         logger.warning("申万 index_sw_daily amount 读取失败 %s: %s", tc, e)
     return out
+
+
+def _load_index_sw_daily_close_amount_maps(
+    conn, ts_code: str, min_trade_date: date
+) -> tuple[dict[date, float], dict[date, float]]:
+    """index_sw_daily：按交易日索引 close、amount（万元）；仅 close>0 且 amount>0。"""
+    closeBy: dict[date, float] = {}
+    amtBy: dict[date, float] = {}
+    tc = str(ts_code or '').strip().upper()
+    if not tc or conn is None:
+        return closeBy, amtBy
+    idxSw = 'stock_tushare.index_sw_daily'
+    sql = (
+        f'SELECT d.trade_date, d.close, d.amount FROM {idxSw} AS d '
+        'WHERE d.ts_code = %s AND d.trade_date >= %s '
+        'AND d.close IS NOT NULL AND d.close > 0 '
+        'AND d.amount IS NOT NULL AND d.amount > 0 '
+        'ORDER BY d.trade_date ASC'
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (tc, min_trade_date))
+            for r in cur.fetchall() or []:
+                dd = _sw_normalize_trade_date_td(r[0])
+                if dd is None:
+                    continue
+                try:
+                    cf = float(r[1])
+                    af = float(r[2])
+                except (TypeError, ValueError):
+                    continue
+                if cf > 0 and af > 0:
+                    closeBy[dd] = cf
+                    amtBy[dd] = af
+    except Exception as e:
+        logger.warning('申万 index_sw_daily close+amount 读取失败 %s: %s', tc, e)
+    return closeBy, amtBy
+
+
+def _compute_sw_index_close_amt_pctile_series(
+    conn, row_ts: str, years: int
+) -> dict[str, Any]:
+    """近 years 年：逐交易日 close + 成交额比%分位（与 Amt%(当日) 一致）。"""
+    rowU = str(row_ts or '').strip().upper()
+    benchU = str(SW_STATS_SUMMARY_ALL_A_SW_TS or '801003.SI').strip().upper()
+    y = max(1, min(5, int(years)))
+    empty: dict[str, Any] = {
+        'success': True,
+        'ts_code': rowU,
+        'bench_ts': benchU,
+        'years': y,
+        'trade_date': [],
+        'close': [],
+        'amt_pctile': [],
+        'error': None,
+    }
+    if not rowU or not benchU or rowU == benchU or conn is None:
+        empty['success'] = False
+        empty['error'] = '无效或与基准相同的 ts_code'
+        return empty
+    minD = date.today() - timedelta(days=int(y * 366) + 45)
+    loPad = int(SW_AMT_RATIO_PCTILE_LOOKBACK_YEARS * 366 + 45)
+    rowClose, rowAmt = _load_index_sw_daily_close_amount_maps(conn, rowU, minD)
+    _, benchAmt = _load_index_sw_daily_close_amount_maps(conn, benchU, minD)
+    dates = sorted(set(rowAmt.keys()) & set(benchAmt.keys()))
+    if len(dates) < 2:
+        empty['success'] = False
+        empty['error'] = '有效交易日不足'
+        return empty
+    tradeOut: list[str] = []
+    closeOut: list[float | None] = []
+    pctOut: list[float | None] = []
+    import bisect
+
+    dailyRatio: list[float | None] = []
+    for d in dates:
+        rA = rowAmt.get(d)
+        bA = benchAmt.get(d)
+        rD: float | None = None
+        if rA is not None and bA is not None:
+            try:
+                rf = float(rA)
+                bf = float(bA)
+            except (TypeError, ValueError):
+                rf = bf = 0.0
+            if bf > 0 and rf > 0:
+                rD = 100.0 * rf / bf
+        dailyRatio.append(rD)
+
+    for i, d in enumerate(dates):
+        tradeOut.append(d.isoformat())
+        closeOut.append(round(float(rowClose.get(d) or 0.0), 4) if rowClose.get(d) else None)
+        if i == 0:
+            pctOut.append(None)
+            continue
+        rD = dailyRatio[i]
+        if rD is None:
+            pctOut.append(None)
+            continue
+        dHi = dates[i - 1]
+        lo0 = dHi - timedelta(days=loPad)
+        start = bisect.bisect_left(dates, lo0)
+        histRaw = [dailyRatio[j] for j in range(start, i) if dailyRatio[j] is not None]
+        pctOut.append(_sw_empirical_pct_leq_values(histRaw, rD))
+    try:
+        if tradeOut:
+            rtMap = _fetch_rt_sw_k_quotes([rowU, benchU], conn)
+            rq = rtMap.get(rowU) or {}
+            bq = rtMap.get(benchU) or {}
+            edRt, priorRt = _sw_index_sw_daily_ed_and_prior_dates(conn, rowU, rq)
+            if priorRt and rq.get('etf_last') is not None and rq.get('etf_rt_date') is not None:
+                dHistHi0 = priorRt[0]
+                lo0r = dHistHi0 - timedelta(days=loPad)
+                histRt: list[float] = []
+                for d, rv in rowAmt.items():
+                    if d < lo0r or d > dHistHi0:
+                        continue
+                    bv = benchAmt.get(d)
+                    if bv is None or rv is None:
+                        continue
+                    try:
+                        bfv = float(bv)
+                        rfv = float(rv)
+                    except (TypeError, ValueError):
+                        continue
+                    if bfv <= 0 or rfv <= 0:
+                        continue
+                    histRt.append(100.0 * rfv / bfv)
+                histRt.sort()
+                rT0: float | None = None
+                try:
+                    ry = rq.get('amount_yuan')
+                    by = bq.get('amount_yuan')
+                    if ry is not None and by is not None:
+                        fy = float(ry)
+                        fb = float(by)
+                        if fy > 0 and fb > 0:
+                            rT0 = 100.0 * (fy / 10000.0) / (fb / 10000.0)
+                except (TypeError, ValueError):
+                    rT0 = None
+                if rT0 is None and edRt is not None:
+                    bAmt = benchAmt.get(edRt)
+                    rAmt = rowAmt.get(edRt)
+                    if bAmt is not None and rAmt is not None:
+                        try:
+                            bf = float(bAmt)
+                            rf = float(rAmt)
+                            if bf > 0 and rf > 0:
+                                rT0 = 100.0 * rf / bf
+                        except (TypeError, ValueError):
+                            pass
+                pctRt = (
+                    _sw_empirical_pct_leq(histRt, rT0)
+                    if (histRt and rT0 is not None)
+                    else None
+                )
+                rtDRaw = rq.get('etf_rt_date')
+                if isinstance(rtDRaw, datetime):
+                    rtD = rtDRaw.date()
+                elif isinstance(rtDRaw, date):
+                    rtD = rtDRaw
+                else:
+                    rtD = None
+                if rtD is not None:
+                    try:
+                        clRt = float(rq['etf_last'])
+                    except (TypeError, ValueError, KeyError):
+                        clRt = None
+                    if clRt is not None and clRt > 0:
+                        try:
+                            lastD = date.fromisoformat(str(tradeOut[-1])[:10])
+                        except ValueError:
+                            lastD = None
+                        clCell = round(float(clRt), 4)
+                        if lastD is None or rtD > lastD:
+                            tradeOut.append(rtD.isoformat())
+                            closeOut.append(clCell)
+                            pctOut.append(pctRt)
+                        elif rtD == lastD:
+                            closeOut[-1] = clCell
+                            if pctRt is not None:
+                                pctOut[-1] = pctRt
+    except Exception as eRt:
+        logger.debug('sw_index_amt_pctile_series 拼接 rt 末点失败: %s', eRt)
+    return {
+        'success': True,
+        'ts_code': rowU,
+        'bench_ts': benchU,
+        'years': y,
+        'trade_date': tradeOut,
+        'close': closeOut,
+        'amt_pctile': pctOut,
+        'error': None,
+    }
 
 
 def _read_sw_amount_ratio_percentiles(
@@ -5108,6 +5319,54 @@ def api_sw_industry_limit_detail():
         )
         return jsonify(payload)
     return jsonify(payload), 400
+
+
+def api_sw_index_amt_pctile_series():
+    """申万行业指数：近 N 年收盘 + 日度成交额比%分位序列（Amt% 弹窗双轴图）。"""
+    rawTs = str(request.args.get('ts_code') or '').strip()
+    tsCode = _normalize_sw_industry_index_ts_code(rawTs) or rawTs.strip().upper()
+    try:
+        years = int(float(request.args.get('years') or 3))
+    except (TypeError, ValueError):
+        years = 3
+    cacheKey = f'{tsCode}|{years}'
+    nowTs = time.time()
+    hit = _small_ttl_cache_get(_sw_amt_pctile_series_cache, cacheKey, nowTs)
+    if hit is not None:
+        return jsonify(hit)
+    conn = None
+    try:
+        conn = pymysql.connect(**DB_CONFIG_TUSHARE)
+        payload = _compute_sw_index_close_amt_pctile_series(conn, tsCode, years)
+        if payload.get('success'):
+            _small_ttl_cache_put(
+                _sw_amt_pctile_series_cache,
+                cacheKey,
+                payload,
+                SW_AMT_PCTILE_SERIES_CACHE_TTL,
+                SW_AMT_PCTILE_SERIES_CACHE_MAX,
+            )
+        return jsonify(payload)
+    except Exception as e:
+        logger.error('sw_index_amt_pctile_series 失败: %s', e)
+        return jsonify(
+            {
+                'success': False,
+                'error': str(e),
+                'ts_code': tsCode,
+                'bench_ts': str(SW_STATS_SUMMARY_ALL_A_SW_TS or '801003.SI'),
+                'years': years,
+                'trade_date': [],
+                'close': [],
+                'amt_pctile': [],
+            }
+        ), 500
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def api_sw_industry_stats():
@@ -9773,3 +10032,5 @@ def get_etf_ma_signal_series():
 # 代码更新时间：2026-06-16 23:12 申万新高/低明细：历史日与主表计数同源读归档；HL_C 明细单 kind 查询；弹窗加载态优化
 # 代码更新时间：2026-06-17 06:56 申万新高/低明细秒开：主表刷新预热 flagged 集合+stock_basic 元数据，明细仅内存过滤
 # 代码更新时间：2026-06-17 09:20 固定资产弹窗恢复 rows[].ann_date（fina_indicator 主选行）；RT_MONITOR_STATIC_VER 20260617-1
+# 代码更新时间：2026-06-17 19:53 P4.4 补全 sw_index_amt_pctile_series/fina_top10/system_scheme API；Amt% 序列 300s TTL 缓存
+# 代码更新时间：2026-06-17 19:58 Amt% 分位序列：预计算日比率 + bisect 窗口，避免 O(n²) 全表扫描

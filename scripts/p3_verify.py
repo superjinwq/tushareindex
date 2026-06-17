@@ -42,11 +42,14 @@ STEPS: dict[str, list[str]] = {
         '/rt-monitor/opt-t-board',
         '/rt-monitor/niusan',
         '/api/sw_industry_stats?level=l1',
+        '/api/sw_index_amt_pctile_series?ts_code=801010.SI&years=3',
         '/api/index_industry_stats',
     ],
     'P4-smoke': [
         '/rt-monitor/fina',
         '/api/fina_arturn_days_table?end_date=20250331',
+        '/api/fina_top10_floatholders?ts_code=600519.SH&end_date=20250331',
+        '/api/fina_system_scheme_codes?scheme=index_weight_latest&index_code=000300.SH',
     ],
 }
 

@@ -26,4 +26,11 @@ def apiSwIndustryStats():
 
     return api_sw_industry_stats()
 
-# 代码更新时间：2026-06-17 15:17
+
+@swBp.route('/api/sw_index_amt_pctile_series', methods=['GET'], strict_slashes=False)
+def apiSwIndexAmtPctileSeries():
+    from rt_monitor.monolith import api_sw_index_amt_pctile_series
+
+    return api_sw_index_amt_pctile_series()
+
+# 代码更新时间：2026-06-17 19:35

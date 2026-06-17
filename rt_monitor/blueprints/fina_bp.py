@@ -7,6 +7,8 @@ from rt_monitor.services.fina_arturn import (
     queryFinaArturnDaysTable,
     queryFinaFixedAssetsRevenueSeries,
     queryFinaStockBasicAct,
+    queryFinaSystemSchemeCodes,
+    queryFinaTop10Floatholders,
     renderFinaPageNoCache,
 )
 
@@ -39,4 +41,22 @@ def getFinaStockBasicAct():
     payload, status = queryFinaStockBasicAct(request.args.get('ts_code'))
     return jsonify(payload), status
 
-# 代码更新时间：2026-06-17 16:35
+
+@finaBp.route('/api/fina_top10_floatholders', methods=['GET'], strict_slashes=False)
+def getFinaTop10Floatholders():
+    payload, status = queryFinaTop10Floatholders(
+        request.args.get('ts_code'),
+        request.args.get('end_date'),
+    )
+    return jsonify(payload), status
+
+
+@finaBp.route('/api/fina_system_scheme_codes', methods=['GET'], strict_slashes=False)
+def getFinaSystemSchemeCodes():
+    payload, status = queryFinaSystemSchemeCodes(
+        request.args.get('scheme'),
+        request.args.get('index_code'),
+    )
+    return jsonify(payload), status
+
+# 代码更新时间：2026-06-17 19:35

@@ -48,9 +48,25 @@
 - [x] 方案与实测：`docs/plans/2026-06-17-fina-top10-holders-perf.md`
 - [x] 单次 IN 全量查询替代 chunk=450 串行（top3 阶段 ~15s → ~3s）
 
+## P4.4 缺失 API 与 standalone 兼容（2026-06-17）
+
+审查发现前端仍调用但主线未注册的三条 API，已从 `dist/rt_monitor_sw_bundle` 回迁：
+
+| URL | 处理 |
+|-----|------|
+| `/api/sw_index_amt_pctile_series` | `sw_bp` → `monolith.api_sw_index_amt_pctile_series`（300s TTL + O(n) 窗口） |
+| `/api/fina_top10_floatholders` | `fina_bp` → `fina_arturn.queryFinaTop10Floatholders` |
+| `/api/fina_system_scheme_codes` | `fina_bp` → `fina_arturn.queryFinaSystemSchemeCodes` |
+
+- [x] `rt_monitor/compat.py`：standalone 复用 handler + `_request_path_matches_no_store_json_api`
+- [x] `rt_monitor_sw_standalone.py`：`import rt_monitor.compat as mon`
+- [x] `web_dashboard.py`：`RT_MONITOR_STATIC_VER` 与 `core.config` 对齐
+- [x] `p3_verify` P2/P4-smoke、`p4_verify`（含 standalone smoke）扩展
+- [x] 验收：`p3_verify all` + `p4_verify` — **PASS**
+
 ## 残留（设计目标态，非本里程碑）
 
 - `monolith.py` 仍承载 limit_stats / ETF / 申万·指数行业统计等（main_bp `_mono()` 委托）
 - `core/cache.py`、`services/sw_industry.py` 等未建 — 按需再拆
 
-*计划版本：2026-06-17 19:22*
+*计划版本：2026-06-17 19:58*

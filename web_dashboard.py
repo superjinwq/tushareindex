@@ -44,6 +44,7 @@ DB_CONFIG = {
 }
 # margin_daily 在 stock_tushare；查询口径见 rt_monitor.services.margin（完整 rt-monitor API 以 rt_monitor_app.py 为准）
 from rt_monitor.services.margin import query_margin_daily_recent, query_margin_rzmre_idx_series
+from rt_monitor.core.config import RT_MONITOR_STATIC_VER
 DB_CONFIG_TUSHARE = {
     **DB_CONFIG,
     'database': os.getenv('DB_NAME_TUSHARE', 'stock_tushare'),
@@ -56,7 +57,7 @@ UPDATE_INTERVAL = int(os.getenv('UPDATE_INTERVAL', '30'))  # 默认30秒更新�
 
 # 与 rt_monitor_app 共用 templates/static 绝对路径，避免工作目录不对时读到旧模板或空白变量
 _WEB_DIR = os.path.dirname(os.path.abspath(__file__))
-RT_MONITOR_STATIC_VER = '20260514-19'  # 与 rt_monitor_app.RT_MONITOR_STATIC_VER 保持同步（静态资源 ?v=）
+# RT_MONITOR_STATIC_VER 见 rt_monitor.core.config（与 rt_monitor_app 一致）
 
 app = Flask(
     __name__,
