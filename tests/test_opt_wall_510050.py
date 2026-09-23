@@ -227,9 +227,10 @@ def testUiHelpersSortStrikesFormatOiInWanAndKeepBothWallsSeparate() -> None:
       };
       console.log(JSON.stringify({
         strikes: ui.collectStrikesAsc(expiry),
-        formattedCallOi: ui.formatOiWan(95320),
-        formattedPutOi: ui.formatOiWan(37576),
-        summaries: ['call', 'put'].map((sideName) => ui.summarizeSide(expiry[sideName])),
+            formattedCallOi: ui.formatOiWan(95320),
+            formattedPutOi: ui.formatOiWan(37576),
+            balance: ui.summarizeBalance(expiry),
+            summaries: ['call', 'put'].map((sideName) => ui.summarizeSide(expiry[sideName])),
         walls: ui.collectWallSelections(expiry).map((item) => ({
           sideName: item.sideName,
           strike: item.item.strike,
@@ -250,6 +251,14 @@ def testUiHelpersSortStrikesFormatOiInWanAndKeepBothWallsSeparate() -> None:
         'strikes': [2.9, 3, 3.1, 3.2],
         'formattedCallOi': '9.53万',
         'formattedPutOi': '3.76万',
+        'balance': {
+            'callOi': 120000,
+            'putOi': 80000,
+            'totalOi': 200000,
+            'callPutRatio': 1.5,
+            'callShare': 0.6,
+            'putShare': 0.4,
+        },
         'summaries': [
             {
                 'wallStrikes': [3],

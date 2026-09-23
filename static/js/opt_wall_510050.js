@@ -36,5 +36,25 @@
     };
   }
 
-  return { formatOiWan, collectStrikesAsc, collectWallSelections, summarizeSide };
+  function summarizeBalance(expiry) {
+    const callOi = Number(expiry.call.totalOi);
+    const putOi = Number(expiry.put.totalOi);
+    const totalOi = callOi + putOi;
+    return {
+      callOi,
+      putOi,
+      totalOi,
+      callPutRatio: putOi > 0 ? callOi / putOi : null,
+      callShare: totalOi > 0 ? callOi / totalOi : null,
+      putShare: totalOi > 0 ? putOi / totalOi : null,
+    };
+  }
+
+  return {
+    formatOiWan,
+    collectStrikesAsc,
+    collectWallSelections,
+    summarizeSide,
+    summarizeBalance,
+  };
 }));

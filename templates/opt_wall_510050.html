@@ -199,6 +199,21 @@
       font-size: 11px;
       line-height: 1.5;
     }
+    .oi-balance {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      padding: 0 18px 14px;
+    }
+    .oi-balance-card {
+      padding: 9px 11px;
+      background: rgba(255,255,255,.025);
+      border: 1px solid var(--line);
+      font-variant-numeric: tabular-nums;
+    }
+    .oi-balance-card span { display: block; color: var(--muted); font-size: 10px; }
+    .oi-balance-card strong { display: block; margin-top: 4px; font-size: 15px; }
+    .oi-balance-card small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
 
     .chart-head, .wall-row {
       display: grid;
@@ -384,6 +399,7 @@
       .side-stack { grid-template-columns: 1fr; }
       .chart-head, .wall-row { grid-template-columns: minmax(0, 1fr) 76px minmax(0, 1fr); gap: 5px; }
       .wall-summary { grid-template-columns: 1fr; padding-inline: 8px; }
+      .oi-balance { grid-template-columns: 1fr; padding-inline: 8px; }
       .wall-grid { padding-inline: 8px; }
       .bar-lane.call { padding-left: 0; }
       .bar-lane.put { padding-right: 0; }
@@ -433,6 +449,7 @@
           </div>
         </div>
         <div class="wall-summary" id="wall-summary" aria-label="OI Wall 与 Top 3 汇总"></div>
+        <div class="oi-balance" id="oi-balance" aria-label="Call Put OI 结构汇总"></div>
         <div class="chart-head"><span>Call · 看涨</span><span>行权价</span><span>Put · 看跌</span></div>
         <div class="wall-grid" id="wall-grid"><div class="empty">等待数据</div></div>
       </section>
@@ -475,7 +492,7 @@
       const fmtCount = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 });
       const fmtStrike = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
       const fmtPercent = new Intl.NumberFormat('zh-CN', { style: 'percent', minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const { collectStrikesAsc, collectWallSelections, formatOiWan, summarizeSide } = window.OptWallUi;
+      const { collectStrikesAsc, collectWallSelections, formatOiWan, summarizeSide, summarizeBalance } = window.OptWallUi;
 
       function setStatus(message, isError = false) {
         $('status-text').textContent = message;
@@ -540,6 +557,7 @@
         }
         $('expiry-kicker').textContent = `${expiry.expiryLabel} · ${expiry.maturityDate} · ${expiry.dteCalendar}D`;
         renderWallSummary(expiry);
+        renderOiBalance(expiry);
 
         const strikes = collectStrikesAsc(expiry);
         const maximum = Math.max(
@@ -550,6 +568,7 @@
         if (!strikes.length) {
           $('wall-grid').innerHTML = '<div class="empty">该期限没有可进入主墙位的标准合约，请查看调整合约和质量信息。</div>';
           $('wall-summary').replaceChildren();
+          $('oi-balance').replaceChildren();
           $('calculation-body').innerHTML = '<p class="subtitle">没有标准合约可供追溯计算。</p>';
           return;
         }
@@ -612,6 +631,38 @@
           card.append(title, main, meta);
           host.append(card);
         });
+      }
+
+      function renderOiBalance(expiry) {
+        const host = $('oi-balance');
+        const balance = summarizeBalance(expiry);
+        host.replaceChildren();
+        const cards = [
+          ['Call 总 OI', balance.callOi, balance.callShare],
+          ['Put 总 OI', balance.putOi, balance.putShare],
+        ];
+        cards.forEach(([label, value, share]) => {
+          const card = document.createElement('div');
+          card.className = 'oi-balance-card';
+          const title = document.createElement('span');
+          title.textContent = label;
+          const number = document.createElement('strong');
+          number.textContent = formatOiWan(value);
+          const portion = document.createElement('small');
+          portion.textContent = `占总 OI ${share === null ? '不可计算' : fmtPercent.format(share)}`;
+          card.append(title, number, portion);
+          host.append(card);
+        });
+        const ratioCard = document.createElement('div');
+        ratioCard.className = 'oi-balance-card';
+        const ratioTitle = document.createElement('span');
+        ratioTitle.textContent = 'Call / Put 比值';
+        const ratio = document.createElement('strong');
+        ratio.textContent = balance.callPutRatio === null ? '不可计算' : `${balance.callPutRatio.toFixed(2)}×`;
+        const ratioNote = document.createElement('small');
+        ratioNote.textContent = 'Call 总 OI ÷ Put 总 OI';
+        ratioCard.append(ratioTitle, ratio, ratioNote);
+        host.append(ratioCard);
       }
 
       function buildCalculationInstance(expiry, sideName, item) {
