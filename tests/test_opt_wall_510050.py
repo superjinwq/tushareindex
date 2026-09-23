@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from datetime import date
+import json
 import logging
+from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -10,6 +13,7 @@ from opt_wall_510050 import buildOiWallSnapshot, createApp
 
 
 DATA_DATE = date(2026, 9, 22)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def optionRow(
@@ -194,3 +198,51 @@ def testConnectionDoesNotDuplicateConfiguredTimeoutKeywords(monkeypatch: pytest.
     assert wall._connection() is sentinel
     assert captured['read_timeout'] == 7
     assert captured['write_timeout'] == 20
+
+
+def testUiHelpersSortStrikesFormatOiInWanAndKeepBothWallsSeparate() -> None:
+    script = r"""
+      const ui = require('./static/js/opt_wall_510050.js');
+      const expiry = {
+        call: {
+          strikes: [
+            { strike: 3.20, oi: 20000, isWall: false },
+            { strike: 3.00, oi: 95320, isWall: true },
+          ],
+        },
+        put: {
+          strikes: [
+            { strike: 3.10, oi: 37576, isWall: true },
+            { strike: 2.90, oi: 10000, isWall: false },
+          ],
+        },
+      };
+      console.log(JSON.stringify({
+        strikes: ui.collectStrikesAsc(expiry),
+        formattedCallOi: ui.formatOiWan(95320),
+        formattedPutOi: ui.formatOiWan(37576),
+        walls: ui.collectWallSelections(expiry).map((item) => ({
+          sideName: item.sideName,
+          strike: item.item.strike,
+        })),
+      }));
+    """
+    result = subprocess.run(
+        ['node', '-e', script],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+        encoding='utf-8',
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        'strikes': [2.9, 3, 3.1, 3.2],
+        'formattedCallOi': '9.53万',
+        'formattedPutOi': '3.76万',
+        'walls': [
+            {'sideName': 'call', 'strike': 3},
+            {'sideName': 'put', 'strike': 3.1},
+        ],
+    }

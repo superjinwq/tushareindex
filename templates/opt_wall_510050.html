@@ -255,6 +255,18 @@
 
     .explain-card, .quality-card, .boundary-card { padding: 18px; }
 
+    .calculation-panes { display: grid; gap: 18px; margin-top: 14px; }
+    .calculation-pane { padding-top: 14px; border-top: 1px solid var(--line); }
+    .calculation-pane:first-child { padding-top: 0; border-top: 0; }
+    .calculation-pane h3 {
+      margin: 0;
+      font-size: 14px;
+      letter-spacing: .06em;
+    }
+    .calculation-pane.call h3 { color: var(--call); }
+    .calculation-pane.put h3 { color: var(--put); }
+    .calculation-instance + .calculation-instance { margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--line); }
+
     .math-path {
       display: grid;
       grid-template-columns: 28px minmax(0, 1fr);
@@ -394,8 +406,8 @@
         <section class="panel explain-card" aria-labelledby="calculation-title">
           <div class="section-kicker">Trace the number</div>
           <h2 id="calculation-title">计算过程</h2>
-          <div id="calculation-body">
-            <p class="subtitle">点击任意 OI 柱，查看原始合约如何汇总成墙位。</p>
+          <div class="calculation-panes" id="calculation-body">
+            <p class="subtitle">将分别展示 Call Wall 与 Put Wall 的完整计算。</p>
           </div>
         </section>
 
@@ -417,6 +429,7 @@
     </div>
   </main>
 
+  <script src="{{ url_for('static', filename='js/opt_wall_510050.js') }}"></script>
   <script>
     (() => {
       'use strict';
@@ -424,8 +437,9 @@
       const endpoint = document.documentElement.dataset.endpoint;
       const state = { snapshot: null, expiryIndex: 0 };
       const $ = (id) => document.getElementById(id);
-      const fmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 });
+      const fmtCount = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 });
       const fmtStrike = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+      const { collectStrikesAsc, collectWallSelections, formatOiWan } = window.OptWallUi;
 
       function setStatus(message, isError = false) {
         $('status-text').textContent = message;
@@ -447,7 +461,7 @@
           const title = document.createElement('strong');
           title.textContent = `${expiry.expiryLabel} · ${expiry.maturityDate}`;
           const detail = document.createElement('small');
-          detail.textContent = `${expiry.dteCalendar} 自然日 · 总 OI ${fmt.format(expiry.totalOi)}`;
+          detail.textContent = `${expiry.dteCalendar} 自然日 · 总 OI ${formatOiWan(expiry.totalOi)}`;
           button.append(title, detail);
           button.addEventListener('click', () => {
             state.expiryIndex = index;
@@ -471,12 +485,12 @@
         button.className = classes.join(' ');
         const width = maximum > 0 ? Math.max(1.5, Number(item.oi) / maximum * 100) : 1.5;
         button.style.width = `${width}%`;
-        button.title = `${sideName === 'call' ? 'Call' : 'Put'} K=${item.strike} OI=${item.oi}`;
+        button.title = `${sideName === 'call' ? 'Call' : 'Put'} K=${item.strike} OI=${formatOiWan(item.oi)}`;
         button.setAttribute('aria-label', button.title);
 
         const value = document.createElement('span');
         value.className = 'bar-value';
-        value.textContent = fmt.format(item.oi);
+        value.textContent = formatOiWan(item.oi);
         button.addEventListener('click', () => renderCalculation(sideName, item));
         lane.append(button, value);
         return lane;
@@ -490,10 +504,7 @@
         }
         $('expiry-kicker').textContent = `${expiry.expiryLabel} · ${expiry.maturityDate} · ${expiry.dteCalendar}D`;
 
-        const strikes = [...new Set([
-          ...expiry.call.strikes.map((item) => Number(item.strike)),
-          ...expiry.put.strikes.map((item) => Number(item.strike)),
-        ])].sort((a, b) => b - a);
+        const strikes = collectStrikesAsc(expiry);
         const maximum = Math.max(
           0,
           ...expiry.call.strikes.map((item) => Number(item.oi)),
@@ -527,26 +538,21 @@
           host.append(row);
         });
 
-        const firstWall = expiry.call.strikes.find((item) => item.isWall)
-          || expiry.put.strikes.find((item) => item.isWall)
-          || expiry.call.strikes[0]
-          || expiry.put.strikes[0];
-        if (firstWall) renderCalculation(expiry.call.strikes.includes(firstWall) ? 'call' : 'put', firstWall);
+        renderWallCalculations(expiry);
       }
 
-      function renderCalculation(sideName, item) {
-        const expiry = state.snapshot.expiries[state.expiryIndex];
+      function buildCalculationInstance(expiry, sideName, item) {
         const side = sideName === 'call' ? expiry.call : expiry.put;
         const sideLabel = sideName === 'call' ? 'Call' : 'Put';
-        const host = $('calculation-body');
-        host.replaceChildren();
+        const instance = document.createElement('div');
+        instance.className = 'calculation-instance';
 
         const path = document.createElement('div');
         path.className = 'math-path';
         const steps = [
           ['01', '筛选原始合约', `${expiry.maturityDate} · ${sideLabel} · K=${fmtStrike.format(item.strike)} · 标准乘数 10,000`],
-          ['02', '按行权价求和', `${item.contracts.map((contract) => fmt.format(contract.oi)).join(' + ')} = ${fmt.format(item.oi)} 张`],
-          ['03', '与同方向行权价排序', `排名第 ${item.rank}；${item.isWall ? 'OI 等于该方向最大值，因此是 Wall。' : `最大值为 ${fmt.format(side.wallOi)} 张，本行权价不是 Wall。`}`],
+          ['02', '按行权价求和', `${item.contracts.map((contract) => formatOiWan(contract.oi)).join(' + ')} = ${formatOiWan(item.oi)}`],
+          ['03', '与同方向行权价排序', `排名第 ${item.rank}；${item.isWall ? `OI 等于该方向最大值 ${formatOiWan(side.wallOi)}，因此是 ${sideLabel} Wall。` : `最大值为 ${formatOiWan(side.wallOi)}，本行权价不是 Wall。`}`],
         ];
         steps.forEach(([number, title, copy], index) => {
           const numberNode = document.createElement('div');
@@ -564,19 +570,57 @@
             list.className = 'contract-list';
             item.contracts.forEach((contract) => {
               const li = document.createElement('li');
-              li.textContent = `${contract.tsCode} · OI ${fmt.format(contract.oi)} · ×${fmt.format(contract.perUnit)}`;
+              li.textContent = `${contract.tsCode} · OI ${formatOiWan(contract.oi)} · ×${fmtCount.format(contract.perUnit)}`;
               list.append(li);
             });
             copyNode.append(list);
           }
           path.append(numberNode, copyNode);
         });
-        host.append(path);
+        instance.append(path);
 
         const formula = document.createElement('div');
         formula.className = 'formula-note';
-        formula.textContent = `距离现货 = (${fmtStrike.format(item.strike)} / ${fmtStrike.format(state.snapshot.spot)} - 1) × 100% = ${Number(item.distancePct).toFixed(2)}%`;
-        host.append(formula);
+        formula.textContent = `${sideLabel}${item.isWall ? ' Wall' : ''} 距离现货 = (${fmtStrike.format(item.strike)} / ${fmtStrike.format(state.snapshot.spot)} - 1) × 100% = ${Number(item.distancePct).toFixed(2)}%`;
+        instance.append(formula);
+        return instance;
+      }
+
+      function renderSideCalculations(expiry, sideName, items) {
+        const sideLabel = sideName === 'call' ? 'Call' : 'Put';
+        const pane = $(`calculation-${sideName}`);
+        pane.replaceChildren();
+        const title = document.createElement('h3');
+        title.textContent = items.every((item) => item.isWall)
+          ? `${sideLabel} Wall 计算${items.length > 1 ? `（并列 ${items.length} 个）` : ''}`
+          : `${sideLabel} 行权价追踪`;
+        pane.append(title);
+        items.forEach((item) => pane.append(buildCalculationInstance(expiry, sideName, item)));
+      }
+
+      function renderWallCalculations(expiry) {
+        const host = $('calculation-body');
+        host.replaceChildren();
+        ['call', 'put'].forEach((sideName) => {
+          const pane = document.createElement('section');
+          pane.id = `calculation-${sideName}`;
+          pane.className = `calculation-pane ${sideName}`;
+          host.append(pane);
+        });
+        const selections = collectWallSelections(expiry);
+        ['call', 'put'].forEach((sideName) => {
+          const items = selections.filter((selection) => selection.sideName === sideName).map((selection) => selection.item);
+          if (items.length) {
+            renderSideCalculations(expiry, sideName, items);
+          } else {
+            $(`calculation-${sideName}`).innerHTML = `<h3>${sideName === 'call' ? 'Call' : 'Put'} Wall 计算</h3><p class="subtitle">该方向没有可计算的标准合约。</p>`;
+          }
+        });
+      }
+
+      function renderCalculation(sideName, item) {
+        const expiry = state.snapshot.expiries[state.expiryIndex];
+        renderSideCalculations(expiry, sideName, [item]);
       }
 
       function renderQuality() {
@@ -595,7 +639,7 @@
           const name = document.createElement('span');
           name.textContent = label;
           const number = document.createElement('strong');
-          number.textContent = fmt.format(value || 0);
+          number.textContent = fmtCount.format(value || 0);
           box.append(name, number);
           host.append(box);
         });
