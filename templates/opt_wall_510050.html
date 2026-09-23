@@ -167,6 +167,39 @@
     .legend .call { background: var(--call); }
     .legend .put { background: var(--put); }
 
+    .wall-summary {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      padding: 14px 18px 10px;
+    }
+    .wall-summary-card {
+      min-width: 0;
+      padding: 12px 14px;
+      background: var(--panel-2);
+      border-left: 3px solid var(--line);
+    }
+    .wall-summary-card.call { border-left-color: var(--call); }
+    .wall-summary-card.put { border-left-color: var(--put); }
+    .wall-summary-card h3 { margin: 0; font-size: 13px; letter-spacing: .07em; }
+    .wall-summary-main {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin-top: 8px;
+      font-variant-numeric: tabular-nums;
+    }
+    .wall-summary-main strong { font-size: 22px; }
+    .wall-summary-main span { color: var(--muted); font-size: 12px; }
+    .wall-summary-meta {
+      display: grid;
+      gap: 4px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
     .chart-head, .wall-row {
       display: grid;
       grid-template-columns: minmax(0, 1fr) 104px minmax(0, 1fr);
@@ -350,6 +383,7 @@
       .expiry-tabs { grid-template-columns: 1fr 1fr; }
       .side-stack { grid-template-columns: 1fr; }
       .chart-head, .wall-row { grid-template-columns: minmax(0, 1fr) 76px minmax(0, 1fr); gap: 5px; }
+      .wall-summary { grid-template-columns: 1fr; padding-inline: 8px; }
       .wall-grid { padding-inline: 8px; }
       .bar-lane.call { padding-left: 0; }
       .bar-lane.put { padding-right: 0; }
@@ -398,6 +432,7 @@
             <span><i class="put"></i>Put OI</span>
           </div>
         </div>
+        <div class="wall-summary" id="wall-summary" aria-label="OI Wall 与 Top 3 汇总"></div>
         <div class="chart-head"><span>Call · 看涨</span><span>行权价</span><span>Put · 看跌</span></div>
         <div class="wall-grid" id="wall-grid"><div class="empty">等待数据</div></div>
       </section>
@@ -439,7 +474,8 @@
       const $ = (id) => document.getElementById(id);
       const fmtCount = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 });
       const fmtStrike = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
-      const { collectStrikesAsc, collectWallSelections, formatOiWan } = window.OptWallUi;
+      const fmtPercent = new Intl.NumberFormat('zh-CN', { style: 'percent', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const { collectStrikesAsc, collectWallSelections, formatOiWan, summarizeSide } = window.OptWallUi;
 
       function setStatus(message, isError = false) {
         $('status-text').textContent = message;
@@ -503,6 +539,7 @@
           return;
         }
         $('expiry-kicker').textContent = `${expiry.expiryLabel} · ${expiry.maturityDate} · ${expiry.dteCalendar}D`;
+        renderWallSummary(expiry);
 
         const strikes = collectStrikesAsc(expiry);
         const maximum = Math.max(
@@ -512,6 +549,7 @@
         );
         if (!strikes.length) {
           $('wall-grid').innerHTML = '<div class="empty">该期限没有可进入主墙位的标准合约，请查看调整合约和质量信息。</div>';
+          $('wall-summary').replaceChildren();
           $('calculation-body').innerHTML = '<p class="subtitle">没有标准合约可供追溯计算。</p>';
           return;
         }
@@ -539,6 +577,41 @@
         });
 
         renderWallCalculations(expiry);
+      }
+
+      function renderWallSummary(expiry) {
+        const host = $('wall-summary');
+        host.replaceChildren();
+        ['call', 'put'].forEach((sideName) => {
+          const side = expiry[sideName];
+          const summary = summarizeSide(side);
+          const sideLabel = sideName === 'call' ? 'Call' : 'Put';
+          const wallItems = side.strikes.filter((item) => item.isWall);
+          const card = document.createElement('article');
+          card.className = `wall-summary-card ${sideName}`;
+          const title = document.createElement('h3');
+          title.textContent = `${sideLabel} OI Wall`;
+          const main = document.createElement('div');
+          main.className = 'wall-summary-main';
+          const strike = document.createElement('strong');
+          strike.textContent = summary.wallStrikes.map((item) => fmtStrike.format(item)).join(' / ') || '—';
+          const oi = document.createElement('span');
+          oi.textContent = `OI ${formatOiWan(summary.wallOi)}`;
+          main.append(strike, oi);
+          const meta = document.createElement('div');
+          meta.className = 'wall-summary-meta';
+          const distance = document.createElement('span');
+          distance.textContent = `距现货 ${wallItems.map((item) => `${Number(item.distancePct).toFixed(2)}%`).join(' / ') || '—'}`;
+          const top1 = document.createElement('span');
+          const top1Share = summary.top1Share === null ? '不可计算' : fmtPercent.format(summary.top1Share);
+          top1.textContent = `Top 1 集中度：${top1Share}`;
+          const top3 = document.createElement('span');
+          const top3Share = summary.top3Share === null ? '不可计算' : fmtPercent.format(summary.top3Share);
+          top3.textContent = `Top 3：${summary.top3Strikes.map((item) => fmtStrike.format(item)).join('、') || '—'} · 集中度 ${top3Share}`;
+          meta.append(distance, top1, top3);
+          card.append(title, main, meta);
+          host.append(card);
+        });
       }
 
       function buildCalculationInstance(expiry, sideName, item) {

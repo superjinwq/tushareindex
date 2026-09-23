@@ -26,5 +26,15 @@
     ));
   }
 
-  return { formatOiWan, collectStrikesAsc, collectWallSelections };
+  function summarizeSide(side) {
+    return {
+      wallStrikes: side.wallStrikes,
+      wallOi: side.wallOi,
+      top1Share: side.totalOi > 0 ? side.wallOi / side.totalOi : null,
+      top3Strikes: side.strikes.filter((item) => item.isTop3).map((item) => item.strike),
+      top3Share: side.top3Share,
+    };
+  }
+
+  return { formatOiWan, collectStrikesAsc, collectWallSelections, summarizeSide };
 }));

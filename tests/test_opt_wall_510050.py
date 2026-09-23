@@ -205,14 +205,22 @@ def testUiHelpersSortStrikesFormatOiInWanAndKeepBothWallsSeparate() -> None:
       const ui = require('./static/js/opt_wall_510050.js');
       const expiry = {
         call: {
+          wallStrikes: [3.00],
+          wallOi: 95320,
+          totalOi: 120000,
+          top3Share: 0.8123,
           strikes: [
             { strike: 3.20, oi: 20000, isWall: false },
-            { strike: 3.00, oi: 95320, isWall: true },
+            { strike: 3.00, oi: 95320, isWall: true, isTop3: true },
           ],
         },
         put: {
+          wallStrikes: [3.10],
+          wallOi: 37576,
+          totalOi: 80000,
+          top3Share: 0.6543,
           strikes: [
-            { strike: 3.10, oi: 37576, isWall: true },
+            { strike: 3.10, oi: 37576, isWall: true, isTop3: true },
             { strike: 2.90, oi: 10000, isWall: false },
           ],
         },
@@ -221,6 +229,7 @@ def testUiHelpersSortStrikesFormatOiInWanAndKeepBothWallsSeparate() -> None:
         strikes: ui.collectStrikesAsc(expiry),
         formattedCallOi: ui.formatOiWan(95320),
         formattedPutOi: ui.formatOiWan(37576),
+        summaries: ['call', 'put'].map((sideName) => ui.summarizeSide(expiry[sideName])),
         walls: ui.collectWallSelections(expiry).map((item) => ({
           sideName: item.sideName,
           strike: item.item.strike,
@@ -241,6 +250,22 @@ def testUiHelpersSortStrikesFormatOiInWanAndKeepBothWallsSeparate() -> None:
         'strikes': [2.9, 3, 3.1, 3.2],
         'formattedCallOi': '9.53万',
         'formattedPutOi': '3.76万',
+        'summaries': [
+            {
+                'wallStrikes': [3],
+                'wallOi': 95320,
+                'top1Share': 0.7943333333333333,
+                'top3Strikes': [3],
+                'top3Share': 0.8123,
+            },
+            {
+                'wallStrikes': [3.1],
+                'wallOi': 37576,
+                'top1Share': 0.4697,
+                'top3Strikes': [3.1],
+                'top3Share': 0.6543,
+            },
+        ],
         'walls': [
             {'sideName': 'call', 'strike': 3},
             {'sideName': 'put', 'strike': 3.1},
