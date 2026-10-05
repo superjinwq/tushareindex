@@ -22,11 +22,13 @@ def popupSeriesCacheGet(cacheKey: tuple):
     return None
 
 
-def popupSeriesCachePut(cacheKey: tuple, payload: dict):
+def popupSeriesCachePut(cacheKey: tuple, payload: dict, ttlSec: float | None = None):
+    ttl = POPUP_SERIES_CACHE_TTL if ttlSec is None else float(ttlSec)
     with _cacheLock:
         while len(_popupSeriesCache) >= POPUP_SERIES_CACHE_MAX:
             _popupSeriesCache.popitem(last=False)
-        _popupSeriesCache[cacheKey] = (time.time() + POPUP_SERIES_CACHE_TTL, payload)
+        _popupSeriesCache[cacheKey] = (time.time() + ttl, payload)
         _popupSeriesCache.move_to_end(cacheKey)
 
 # 代码更新时间：2026-06-17 22:58
+# 代码更新时间：2026-09-02 10:50 允许按 key 指定 TTL（Top5% 全历史序列）

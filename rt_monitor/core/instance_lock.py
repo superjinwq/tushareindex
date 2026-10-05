@@ -119,11 +119,17 @@ def autoKillPreviousRtMonitorInstances(listenPort: int | None = None) -> None:
             meCreateTime = float(psutil.Process(me).create_time())
         except Exception:
             meCreateTime = 0.0
+        # venv 的 Scripts\python.exe 转发器是本进程的父进程、命令行同样含 rt_monitor_app.py；
+        # 杀它会经作业对象连带杀死本进程
+        try:
+            ancestors = {p.pid for p in psutil.Process(me).parents()}
+        except Exception:
+            ancestors = set()
 
         for proc in psutil.process_iter(['pid', 'cmdline', 'create_time']):
             try:
                 pid = int(proc.info.get('pid') or 0)
-                if pid <= 0 or pid == me:
+                if pid <= 0 or pid == me or pid in ancestors:
                     continue
                 pCreateTime = float(proc.info.get('create_time') or 0.0)
                 if meCreateTime > 0.0 and pCreateTime >= (meCreateTime - 0.01):
@@ -135,6 +141,13 @@ def autoKillPreviousRtMonitorInstances(listenPort: int | None = None) -> None:
                 if f' {me}' in s or s.strip().endswith(str(me)):
                     continue
                 logger.info("自动结束旧 rt_monitor 进程 PID=%s（匹配命令行中的 %s）", pid, marker)
+                # 旧实例的 ProcessPool 子进程不会随父进程退出，须一并结束，否则成为孤儿长期占内存
+                for child in proc.children(recursive=True):
+                    try:
+                        child.kill()
+                        logger.info("自动结束旧 rt_monitor 子进程 PID=%s", child.pid)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
                 proc.kill()
                 killed.append(pid)
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
@@ -312,3 +325,4 @@ def ensureSingleInstanceOrExit(listenPort: int | None = None) -> None:
         % (port,)
     )
     raise SystemExit(1)
+# 代码更新时间：2026-10-04 17:42 auto-kill 排除自身祖先（venv 转发器），连带结束旧实例子进程
