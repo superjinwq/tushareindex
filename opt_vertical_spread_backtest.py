@@ -31,6 +31,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from logging.handlers import TimedRotatingFileHandler
 from typing import Any
@@ -44,25 +45,13 @@ from urllib.parse import quote_plus
 LOG_FILE = "opt_vertical_spread_backtest.log"
 
 
-class WindowsSafeTimedRotatingFileHandler(TimedRotatingFileHandler):
-    """Windows 下 rename 可能失败：重试后仍失败则跳过本轮轮转，继续写原文件。"""
-
-    def doRollover(self) -> None:  # noqa: N802
-        for _ in range(3):
-            try:
-                super().doRollover()
-                return
-            except PermissionError:
-                time.sleep(0.3)
-        if self.stream:
-            try:
-                self.stream.close()
-            except Exception:
-                pass
-        self.stream = self._open()
+from windows_safe_log import WindowsSafeTimedRotatingFileHandler
 
 
 def setupLogger() -> None:
+    # 被 rt_monitor 等宿主进程导入时根日志器已有处理器：不得 force 覆盖，否则宿主日志全被劫持到本文件
+    if logging.getLogger().handlers:
+        return
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     fh = WindowsSafeTimedRotatingFileHandler(
         LOG_FILE, when="D", interval=1, backupCount=3, encoding="utf-8"
@@ -85,15 +74,25 @@ def handleSignal(signum: int, frame: Any) -> None:
     logger.warning("收到信号 %s，准备安全退出…", signum)
 
 
-signal.signal(signal.SIGINT, handleSignal)
-signal.signal(signal.SIGTERM, handleSignal)
+def _installSignalHandlers() -> None:
+    """仅主线程注册信号；被 rt_monitor 等工作线程懒导入时跳过。"""
+    if threading.current_thread() is not threading.main_thread():
+        return
+    try:
+        signal.signal(signal.SIGINT, handleSignal)
+        signal.signal(signal.SIGTERM, handleSignal)
+    except ValueError:
+        pass
+
+
+_installSignalHandlers()
 
 # ===== 配置区 =====
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "localhost"),
     "port": int(os.getenv("DB_PORT", "3306")),
     "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "123456"),
+    "password": os.getenv("DB_PASSWORD", ""),
     "database": os.getenv("DB_NAME", "stock_tushare"),
     "charset": "utf8mb4",
 }
@@ -108,7 +107,7 @@ WIDTHS = (1, 2, 3)        # 价差宽度(档)
 TP_MULTS = (1.3, 1.5, 1.8, 2.0, 2.5)  # 止盈倍数(价差现值/建仓净借记)
 SL_MULT: float | None = 0.5           # 止损倍数; None 关闭
 EXIT_BEFORE_EXPIRE_DAYS = 1           # 到期前 N 个交易日强平
-SAMPLE_FREQ = "W-MON"     # 方案A采样频率
+SAMPLE_FREQ = "D"         # 方案A采样频率：逐日全扫描（每个 ETF 交易日）；勿改 W-MON 除非显式做快速抽样
 EXPIRY_KINDS = ("near", "next", "quarter", "next_quarter")
 QUARTER_MONTHS = frozenset((3, 6, 9, 12))
 
@@ -330,6 +329,26 @@ def tradingExitCutoff(etfDates: np.ndarray, maturity: dt.date, daysBack: int) ->
     return pd.Timestamp(etfDates[idx])
 
 
+def iterSampleTradeDates(etf: pd.DataFrame, freq: str) -> list[pd.Timestamp]:
+    """方案A采样日：D=每个 ETF 交易日逐日全扫描；否则按 freq 对齐到最近交易日（去重）。"""
+    f = str(freq).strip().upper()
+    if f in ("D", "B", "DAILY"):
+        return [pd.Timestamp(x) for x in etf.index]
+    etfDates = np.array(etf.index.values, dtype="datetime64[ns]")
+    out: list[pd.Timestamp] = []
+    last: pd.Timestamp | None = None
+    for raw_t in pd.date_range(etf.index.min(), etf.index.max(), freq=freq):
+        pos = int(np.searchsorted(etfDates, np.datetime64(raw_t), side="right")) - 1
+        if pos < 0:
+            continue
+        t = pd.Timestamp(etfDates[pos])
+        if last is not None and t == last:
+            continue
+        last = t
+        out.append(t)
+    return out
+
+
 # ============================================================
 # 方案 A：条件回测
 # ============================================================
@@ -341,18 +360,13 @@ def runConditionalBacktest(
         return []
     etf = etf.set_index("trade_date")
     etfDates = np.array(etf.index.values, dtype="datetime64[ns]")
-    sampleDays = pd.date_range(etf.index.min(), etf.index.max(), freq=freq)
+    sampleTs = iterSampleTradeDates(etf, freq)
     matAll = sorted(meta["maturity_date"].dropna().unique())
     results: list[dict[str, Any]] = []
     nrec = 0
-    for raw_t in sampleDays:
+    for t in sampleTs:
         if not running:
             break
-        # 对齐到 <= raw_t 的最近交易日
-        pos = int(np.searchsorted(etfDates, np.datetime64(raw_t), side="right")) - 1
-        if pos < 0:
-            continue
-        t = pd.Timestamp(etfDates[pos])
         spot = etf["close"].get(t)
         if spot is None or pd.isna(spot):
             continue
@@ -591,7 +605,7 @@ def main() -> None:
     parser.add_argument("--codes", default="", help="逗号分隔标的, 默认全部四个")
     parser.add_argument("--mode", choices=("A", "B", "both"), default="both")
     parser.add_argument("--price", choices=("close", "settle"), default="close")
-    parser.add_argument("--freq", default=SAMPLE_FREQ, help="方案A采样频率(默认 W-MON)")
+    parser.add_argument("--freq", default=SAMPLE_FREQ, help="方案A采样频率(默认 D=逐日全扫描；快速抽样可用 W-MON)")
     parser.add_argument("--out", default="out", help="输出目录")
     args = parser.parse_args()
 
@@ -625,4 +639,7 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# 代码更新时间：2026-06-14 11:25
+# 代码更新时间：2026-06-14 23:13
+# 代码更新时间：2026-10-04 17:01 被导入时不再 force 覆盖宿主日志
+# 代码更新时间：2026-10-04 18:38 Windows 安全轮转类改为从 windows_safe_log 共享导入（实现逐字等价）
+# 代码更新时间：2026-10-05 09:52 密钥改读环境变量，去掉默认口令

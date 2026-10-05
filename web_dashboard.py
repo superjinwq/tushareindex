@@ -34,7 +34,7 @@ DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
     'port': int(os.getenv('DB_PORT', '3306')),
     'user': os.getenv('DB_USER', 'root'),
-    'password': os.getenv('DB_PASSWORD', '123456'),
+    'password': os.getenv('DB_PASSWORD', ""),
     'database': os.getenv('DB_NAME', 'stock_wind'),
     'charset': 'utf8mb4',
     'autocommit': False,
@@ -58,6 +58,30 @@ UPDATE_INTERVAL = int(os.getenv('UPDATE_INTERVAL', '30'))  # 默认30秒更新�
 # 与 rt_monitor_app 共用 templates/static 绝对路径，避免工作目录不对时读到旧模板或空白变量
 _WEB_DIR = os.path.dirname(os.path.abspath(__file__))
 # RT_MONITOR_STATIC_VER 见 rt_monitor.core.config（与 rt_monitor_app 一致）
+
+# ============ 股票基础信息映射（替代已停更的 stockcodes 表）============
+# stock_wind.stockcodes 是 Wind 手工导出的快照，数据截止 2026-02-12 后停更，导致
+# 191 只个股 ST 戴帽/摘帽未反映，且此后新上市的 75 只 A 股完全缺失（融资余额约 261 亿）。
+# 这里用 Tushare 侧实时数据组装等价映射，列名与 stockcodes 保持一致，
+# 因此下游所有 s.windcodes / s.sec_name / s.industry_sw_2021_2 引用都无需改动。
+# 申万行业取 index_member_all_sw 中每股 in_date 最新一行；CONCAT_WS 在三级全空时
+# 返回空串而非 NULL，故用 NULLIF 还原，以保持下游 IS NULL 判定语义不变。
+STOCK_INFO_MAP = """(
+  SELECT b.ts_code AS windcodes,
+         b.name AS sec_name,
+         NULLIF(CONCAT_WS('--', sw.l1_name, sw.l2_name, sw.l3_name), '') AS industry_sw_2021,
+         sw.l2_name AS industry_sw_2021_2
+  FROM stock_tushare.stock_basic b
+  LEFT JOIN (
+      SELECT ts_code, l1_name, l2_name, l3_name FROM (
+          SELECT ts_code, l1_name, l2_name, l3_name,
+                 ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY in_date DESC, id DESC) AS rn
+          FROM stock_tushare.index_member_all_sw
+          WHERE is_new = 'Y' OR is_new IS NULL
+      ) _sw WHERE _sw.rn = 1
+  ) sw ON sw.ts_code = b.ts_code
+  WHERE b.list_status = 'L'
+)"""
 
 app = Flask(
     __name__,
@@ -146,7 +170,7 @@ class DataFetcher:
         """获取行业分布数据"""
         def _get_distribution():
             with get_db_connection() as conn:
-                query = """
+                query = f"""
                 SELECT 
                     CASE 
                         WHEN s.industry_sw_2021_2 IS NOT NULL THEN s.industry_sw_2021_2
@@ -165,7 +189,7 @@ class DataFetcher:
                     SUM(md.rzjmre_t20) as total_rzjmre_t20,
                     SUM(md.rzjmre_t60) as total_rzjmre_t60
                 FROM margin_detail md
-                LEFT JOIN stockcodes s ON md.ts_code = s.windcodes
+                LEFT JOIN {STOCK_INFO_MAP} s ON md.ts_code = s.windcodes
                 LEFT JOIN fund_basic fb ON md.ts_code = fb.ts_code
                 WHERE md.trade_date = %s
                   AND md.rzye IS NOT NULL
@@ -205,28 +229,28 @@ class DataFetcher:
                 df_total = pd.read_sql(query_total, conn, params=[trade_date])
                 total_records = int(df_total.iloc[0]['total_count']) if not df_total.empty else 0
 
-                query_matched = """
+                query_matched = f"""
                 SELECT COUNT(*) as matched_count
                 FROM margin_detail md
-                INNER JOIN stockcodes s ON md.ts_code = s.windcodes
+                INNER JOIN {STOCK_INFO_MAP} s ON md.ts_code = s.windcodes
                 WHERE md.trade_date = %s
                 """
                 df_matched = pd.read_sql(query_matched, conn, params=[trade_date])
                 matched_records = int(df_matched.iloc[0]['matched_count']) if not df_matched.empty else 0
 
-                query_unmatched = """
+                query_unmatched = f"""
                 SELECT COUNT(*) as unmatched_count
                 FROM margin_detail md
-                LEFT JOIN stockcodes s ON md.ts_code = s.windcodes
+                LEFT JOIN {STOCK_INFO_MAP} s ON md.ts_code = s.windcodes
                 WHERE md.trade_date = %s AND s.windcodes IS NULL
                 """
                 df_unmatched = pd.read_sql(query_unmatched, conn, params=[trade_date])
                 unmatched_records = int(df_unmatched.iloc[0]['unmatched_count']) if not df_unmatched.empty else 0
 
-                query_etf = """
+                query_etf = f"""
                 SELECT COUNT(*) as etf_count
                 FROM margin_detail md
-                LEFT JOIN stockcodes s ON md.ts_code = s.windcodes
+                LEFT JOIN {STOCK_INFO_MAP} s ON md.ts_code = s.windcodes
                 LEFT JOIN fund_basic fb ON md.ts_code = fb.ts_code
                 WHERE md.trade_date = %s
                   AND md.rzye IS NOT NULL
@@ -255,19 +279,19 @@ class DataFetcher:
         """获取未分类股票代码"""
         def _get_unclassified():
             with get_db_connection() as conn:
-                query = """
+                query = f"""
                 SELECT 
                     md.ts_code,
                     COALESCE(s.sec_name, fb.fund_name, 'N/A') as sec_name,
                     md.rzye,
                     CASE 
-                        WHEN s.windcodes IS NULL AND fb.ts_code IS NULL THEN '未匹配到stockcodes和fund_basic表'
+                        WHEN s.windcodes IS NULL AND fb.ts_code IS NULL THEN '未匹配到在市股票清单和fund_basic表'
                         WHEN s.windcodes IS NULL AND fb.ts_code IS NOT NULL AND UPPER(fb.fund_name) NOT LIKE '%%ETF%%' THEN '匹配到fund_basic但fund_name不包含ETF'
                         WHEN s.windcodes IS NOT NULL AND s.industry_sw_2021_2 IS NULL AND (fb.ts_code IS NULL OR UPPER(fb.fund_name) NOT LIKE '%%ETF%%') THEN '行业字段为空且非ETF'
                         ELSE '其他'
                     END as unclassified_reason
                 FROM margin_detail md
-                LEFT JOIN stockcodes s ON md.ts_code = s.windcodes
+                LEFT JOIN {STOCK_INFO_MAP} s ON md.ts_code = s.windcodes
                 LEFT JOIN fund_basic fb ON md.ts_code = fb.ts_code
                 WHERE md.trade_date = %s
                   AND md.rzye IS NOT NULL
@@ -608,4 +632,5 @@ if __name__ == '__main__':
 # 代码更新时间：2026-05-15 07:46 同步 RT_MONITOR_STATIC_VER=20260514-17（申万「新高、新低分布」分组文案+列底色）
 # 代码更新时间：2026-05-15 09:26 同步 RT_MONITOR_STATIC_VER=20260514-18（申万 Amt 弹窗白底壳对齐聚集度 Per）
 # 代码更新时间：2026-05-15 12:39 同步 RT_MONITOR_STATIC_VER=20260514-19（Amt 分位序列接口拼接 rt 末点）
-# 代码更新时间：2026-06-17 15:17 margin API 改 import rt_monitor.services.margin
+# 代码更新时间：2026-08-04 18:46 名称/申万行业由停更的 stockcodes 改取 stock_basic + index_member_all_sw
+# 代码更新时间：2026-10-05 09:52 密钥改读环境变量，去掉默认口令

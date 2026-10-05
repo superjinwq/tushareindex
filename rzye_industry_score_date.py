@@ -14,7 +14,7 @@ DB_CONFIG = {
     "host": os.getenv("DB_HOST", "localhost"),
     "port": int(os.getenv("DB_PORT", "3306")),
     "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "123456"),
+    "password": os.getenv("DB_PASSWORD", ""),
     "charset": "utf8mb4",
 }
 DB_WIND = {**DB_CONFIG, "database": "stock_wind"}
@@ -27,9 +27,33 @@ BASE_SCORE = {6: 10, 5: 7, 4: 4, 3: 2, 2: 2, 1: 1}
 SHORT_DIMS = [0, 1, 2]  # 1/3/5日 近期共识
 
 
+# ============ 股票基础信息映射（替代已停更的 stockcodes 表）============
+# stock_wind.stockcodes 是 Wind 手工导出的快照，数据截止 2026-02-12 后停更，导致
+# 191 只个股 ST 戴帽/摘帽未反映，且此后新上市的 75 只 A 股完全缺失（融资余额约 261 亿）。
+# 这里用 Tushare 侧实时数据组装等价映射，列名与 stockcodes 一致，下游引用无需改动。
+# 申万行业取 index_member_all_sw 中每股 in_date 最新一行；CONCAT_WS 在三级全空时
+# 返回空串而非 NULL，故用 NULLIF 还原，以保持下游 IS NOT NULL 判定语义不变。
+STOCK_INFO_MAP = """(
+  SELECT b.ts_code AS windcodes,
+         b.name AS sec_name,
+         NULLIF(CONCAT_WS('--', sw.l1_name, sw.l2_name, sw.l3_name), '') AS industry_sw_2021,
+         sw.l2_name AS industry_sw_2021_2
+  FROM stock_tushare.stock_basic b
+  LEFT JOIN (
+      SELECT ts_code, l1_name, l2_name, l3_name FROM (
+          SELECT ts_code, l1_name, l2_name, l3_name,
+                 ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY in_date DESC, id DESC) AS rn
+          FROM stock_tushare.index_member_all_sw
+          WHERE is_new = 'Y' OR is_new IS NULL
+      ) _sw WHERE _sw.rn = 1
+  ) sw ON sw.ts_code = b.ts_code
+  WHERE b.list_status = 'L'
+)"""
+
+
 def get_industry_distribution(conn, trade_date: str) -> pd.DataFrame:
     """trade_date: YYYYMMDD 或 YYYY-MM-DD"""
-    sql = """
+    sql = f"""
     SELECT
         CASE
             WHEN s.industry_sw_2021_2 IS NOT NULL THEN s.industry_sw_2021_2
@@ -44,7 +68,7 @@ def get_industry_distribution(conn, trade_date: str) -> pd.DataFrame:
         SUM(md.rzjmre_t20) AS total_rzjmre_t20,
         SUM(md.rzjmre_t60) AS total_rzjmre_t60
     FROM margin_detail md
-    LEFT JOIN stockcodes s ON md.ts_code = s.windcodes
+    LEFT JOIN {STOCK_INFO_MAP} s ON md.ts_code = s.windcodes
     LEFT JOIN fund_basic fb ON md.ts_code = fb.ts_code
     WHERE md.trade_date = %s AND md.rzye IS NOT NULL AND md.rzye > 0
     GROUP BY 1
@@ -141,3 +165,5 @@ def run_score(trade_date: str, silent: bool = False) -> pd.Series | None:
 if __name__ == "__main__":
     date_arg = sys.argv[1] if len(sys.argv) > 1 else "2026-02-10"
     run_score(date_arg)
+# 代码更新时间：2026-08-04 18:46 名称/申万行业由停更的 stockcodes 改取 stock_basic + index_member_all_sw
+# 代码更新时间：2026-10-05 09:52 密钥改读环境变量，去掉默认口令
