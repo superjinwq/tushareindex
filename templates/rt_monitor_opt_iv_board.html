@@ -1,0 +1,154 @@
+{# 期权 T 型页右侧固定 IV 看板（不随标的 chip 切换） #}
+<aside class="opt-iv-panel" aria-label="隐含波动率看板">
+    <div class="opt-iv-panel-inner">
+        <header class="opt-iv-head">
+            <h2 class="opt-iv-title">隐含波动率</h2>
+            {% if opt_iv_asof %}
+            <span class="opt-iv-asof" title="面板代表IV：平价隐含远期；中轴 HV 按剩余自然日对齐交易日窗口；斜=认沽最新−认购最新；溢=中轴IV−HV。无风险利率与 T 型逐档 IV 共用中债10Y（yc_cb，日缓存）">{% if opt_iv_asof.startswith('实时') %}{{ opt_iv_asof }}{% else %}最新数据日 {{ opt_iv_asof }}{% endif %} · Per A 全样本/C 锚点起/1y 近252日 · 中轴 HV 对齐期限 · 斜=沽−购 · 溢=中轴IV−HV{% if opt_iv_rate_label %} · {{ opt_iv_rate_label }}{% endif %}</span>
+            {% else %}
+            <span class="opt-iv-asof">Per A 全样本/C 锚点起/1y 近252日 · 中轴 HV 对齐期限 · 斜=沽−购 · 溢=中轴IV−HV{% if opt_iv_rate_label %} · {{ opt_iv_rate_label }}{% endif %}</span>
+            {% endif %}
+        </header>
+        {% if opt_iv_error %}
+        <p class="opt-iv-err" role="alert">{{ opt_iv_error }}</p>
+        {% endif %}
+        {% if not opt_iv_blocks and not opt_iv_error %}
+        <p class="opt-iv-empty">暂无 IV 面板数据。请运行 <code>opt_iv_panel_to_mysql.py</code>。</p>
+        {% endif %}
+        {% for block in opt_iv_blocks %}
+        <section class="opt-iv-block{% if not block.has_data %} opt-iv-block--empty{% endif %}" data-underlying="{{ block.underlying }}">
+            <div class="opt-iv-scroll">
+                <table class="opt-iv-table" aria-label="{{ block.name }} 隐含波动率">
+                    {# 逐列固定宽度：各标的块列宽一致（八块：五 ETF + 三中金所） #}
+                    <colgroup>
+                        <col class="opt-iv-cg-date">
+                        <col class="opt-iv-cg-val">
+                        <col class="opt-iv-cg-sig">
+                        <col class="opt-iv-cg-sig">
+                        <col class="opt-iv-cg-val">
+                        <col class="opt-iv-cg-sig">
+                        <col class="opt-iv-cg-sig3">
+                        <col class="opt-iv-cg-max">
+                        <col class="opt-iv-cg-date">
+                        <col class="opt-iv-cg-per">
+                        <col class="opt-iv-cg-per">
+                        <col class="opt-iv-cg-per1y">
+                        <col class="opt-iv-cg-wing">
+                        <col class="opt-iv-cg-hv">
+                        <col class="opt-iv-cg-delta">
+                        <col class="opt-iv-cg-center">
+                        <col class="opt-iv-cg-hvper">
+                        <col class="opt-iv-cg-skew">
+                        <col class="opt-iv-cg-wing">
+                        <col class="opt-iv-cg-per1y">
+                        <col class="opt-iv-cg-per">
+                        <col class="opt-iv-cg-per">
+                        <col class="opt-iv-cg-date">
+                        <col class="opt-iv-cg-max">
+                        <col class="opt-iv-cg-sig3">
+                        <col class="opt-iv-cg-sig">
+                        <col class="opt-iv-cg-val">
+                        <col class="opt-iv-cg-sig">
+                        <col class="opt-iv-cg-sig">
+                        <col class="opt-iv-cg-val">
+                        <col class="opt-iv-cg-date">
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th class="opt-iv-th-call" scope="col">Min日</th>
+                            <th class="opt-iv-th-call" scope="col">Min</th>
+                            <th class="opt-iv-th-call opt-iv-th-sigma" scope="col" title="样本经验分位 Φ(−3)≈0.135%，非 mean−3σ">−3σ</th>
+                            <th class="opt-iv-th-call opt-iv-th-sigma" scope="col" title="样本经验分位 Φ(−2)≈2.275%，非 mean−2σ">−2σ</th>
+                            <th class="opt-iv-th-call" scope="col">Med</th>
+                            <th class="opt-iv-th-call opt-iv-th-sigma" scope="col" title="样本经验分位 Φ(+2)≈97.725%，非 mean+2σ">+2σ</th>
+                            <th class="opt-iv-th-call opt-iv-th-sigma" scope="col" title="样本经验分位 Φ(+3)≈99.865%，非 mean+3σ">+3σ</th>
+                            <th class="opt-iv-th-call" scope="col">Max</th>
+                            <th class="opt-iv-th-call" scope="col">Max日</th>
+                            <th class="opt-iv-th-call opt-iv-th-per" scope="col" title="全样本分位：当前 IV 在该期限该方向全部历史中的中间秩百分位（越高=相对有史以来越贵）">Per A</th>
+                            <th class="opt-iv-th-call opt-iv-th-per" scope="col" title="自定义锚点分位：自配置锚点日起（波动率中枢跃升后的新常态）的中间秩百分位。未配锚点的标的显示 —，锚点与样本量见单元格 title">Per C</th>
+                            <th class="opt-iv-th-call opt-iv-th-per" scope="col" title="近 252 交易日分位：当前 IV 相对最近一年的位置。窗口样本不足 60 日显示 —">Per 1y</th>
+                            <th class="opt-iv-th-call opt-iv-th-wing" scope="col" title="认购最新隐含波动率">最新</th>
+                            <th class="opt-iv-th-hv" scope="col" title="对齐剩余期限的回看已实现波动（收盘对数收益×√252）">HV</th>
+                            <th class="opt-iv-th-delta" scope="col" title="中轴IV − HV（百分点）。正=报价高于刚实现">溢</th>
+                            <th class="opt-iv-th-center" scope="col">{{ block.name }}</th>
+                            <th class="opt-iv-th-hvper" scope="col" title="该窗口回看 HV 的全样本分位">HV Per</th>
+                            <th class="opt-iv-th-skew" scope="col" title="认沽最新 − 认购最新（百分点）。正=认沽更贵；≥+2.5 偏肥尾">斜</th>
+                            <th class="opt-iv-th-put opt-iv-th-wing" scope="col" title="认沽最新隐含波动率">最新</th>
+                            <th class="opt-iv-th-put opt-iv-th-per" scope="col" title="近 252 交易日分位：当前 IV 相对最近一年的位置。窗口样本不足 60 日显示 —">Per 1y</th>
+                            <th class="opt-iv-th-put opt-iv-th-per" scope="col" title="自定义锚点分位：自配置锚点日起（波动率中枢跃升后的新常态）的中间秩百分位。未配锚点的标的显示 —，锚点与样本量见单元格 title">Per C</th>
+                            <th class="opt-iv-th-put opt-iv-th-per" scope="col" title="全样本分位：当前 IV 在该期限该方向全部历史中的中间秩百分位（越高=相对有史以来越贵）">Per A</th>
+                            <th class="opt-iv-th-put" scope="col">Max日</th>
+                            <th class="opt-iv-th-put" scope="col">Max</th>
+                            <th class="opt-iv-th-put opt-iv-th-sigma" scope="col" title="样本经验分位 Φ(+3)≈99.865%，非 mean+3σ">+3σ</th>
+                            <th class="opt-iv-th-put opt-iv-th-sigma" scope="col" title="样本经验分位 Φ(+2)≈97.725%，非 mean+2σ">+2σ</th>
+                            <th class="opt-iv-th-put" scope="col">Med</th>
+                            <th class="opt-iv-th-put opt-iv-th-sigma" scope="col" title="样本经验分位 Φ(−2)≈2.275%，非 mean−2σ">−2σ</th>
+                            <th class="opt-iv-th-put opt-iv-th-sigma" scope="col" title="样本经验分位 Φ(−3)≈0.135%，非 mean−3σ">−3σ</th>
+                            <th class="opt-iv-th-put" scope="col">Min</th>
+                            <th class="opt-iv-th-put" scope="col">Min日</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for t in block.tenors %}
+                        <tr>
+                            <td class="opt-iv-cell-call opt-iv-cell-date" title="{{ t.call.min_date_full }}">{{ t.call.min_date }}</td>
+                            <td class="opt-iv-cell-call opt-iv-cell-ext">{{ t.call.min }}</td>
+                            <td class="opt-iv-cell-call opt-iv-cell-sigma {{ t.call.m3_cls }}"{% if t.call.m3_title %} title="{{ t.call.m3_title }}"{% endif %}>{{ t.call.m3 }}</td>
+                            <td class="opt-iv-cell-call opt-iv-cell-sigma {{ t.call.m2_cls }}"{% if t.call.m2_title %} title="{{ t.call.m2_title }}"{% endif %}>{{ t.call.m2 }}</td>
+                            <td class="opt-iv-cell-call opt-iv-cell-med">{{ t.call.med }}</td>
+                            <td class="opt-iv-cell-call opt-iv-cell-sigma {{ t.call.p2_cls }}"{% if t.call.p2_title %} title="{{ t.call.p2_title }}"{% endif %}>{{ t.call.p2 }}</td>
+                            <td class="opt-iv-cell-call opt-iv-cell-sigma {{ t.call.p3_cls }}"{% if t.call.p3_title %} title="{{ t.call.p3_title }}"{% endif %}>{{ t.call.p3 }}</td>
+                            <td class="opt-iv-cell-call opt-iv-cell-ext"{% if t.call.max_title %} title="{{ t.call.max_title }}"{% endif %}>{{ t.call.max }}</td>
+                            <td class="opt-iv-cell-call opt-iv-cell-date" title="{{ t.call.max_date_full }}">{{ t.call.max_date }}</td>
+                            <td class="opt-iv-cell-call opt-iv-cell-per {{ t.call.pera_cls }}"{% if t.call.pera_title %} title="{{ t.call.pera_title }}"{% endif %}>{{ t.call.pera }}</td>
+                            <td class="opt-iv-cell-call opt-iv-cell-per {{ t.call.perc_cls }}"{% if t.call.perc_title %} title="{{ t.call.perc_title }}"{% endif %}>{{ t.call.perc }}</td>
+                            <td class="opt-iv-cell-call opt-iv-cell-per {{ t.call.per1y_cls }}"{% if t.call.per1y_title %} title="{{ t.call.per1y_title }}"{% endif %}>{{ t.call.per1y }}</td>
+                            <td class="opt-iv-cell-call opt-iv-cell-wing{% if t.call.current != '—' %} opt-iv-cell-wing--click{% endif %}"
+                                {% if t.call.current != '—' %}role="button" tabindex="0"
+                                data-opt-iv-open="1"
+                                data-u="{{ block.underlying }}"
+                                data-name="{{ block.name }}"
+                                data-tenor="{{ t.tenor }}"
+                                data-tenor-cn="{{ t.tenor_cn }}"
+                                data-cp="C"
+                                data-side-cn="认购"{% endif %}
+                                title="认购最新 IV{% if t.call.asof %}（{{ t.call.asof }}）{% endif %}{% if t.call.current != '—' %} · 点击查看全历史{% endif %}">{{ t.call.current }}</td>
+                            <td class="opt-iv-cell-hv {{ t.axis.muted_cls }}"{% if t.axis.hv_title %} title="{{ t.axis.hv_title }}"{% endif %}>{{ t.axis.hv }}</td>
+                            <td class="opt-iv-cell-delta {{ t.axis.delta_cls }} {{ t.axis.muted_cls }}"{% if t.axis.delta_title %} title="{{ t.axis.delta_title }}"{% endif %}>{{ t.axis.delta }}</td>
+                            <th class="opt-iv-cell-center" scope="row">{{ t.tenor_cn }}</th>
+                            <td class="opt-iv-cell-hvper {{ t.axis.hv_per_cls }} {{ t.axis.muted_cls }}" title="该窗口回看 HV 全样本分位">{{ t.axis.hv_per }}</td>
+                            <td class="opt-iv-cell-skew {{ t.axis.skew_cls }}"{% if t.axis.skew_title %} title="{{ t.axis.skew_title }}"{% endif %}>{{ t.axis.skew }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-wing{% if t.put.current != '—' %} opt-iv-cell-wing--click{% endif %}"
+                                {% if t.put.current != '—' %}role="button" tabindex="0"
+                                data-opt-iv-open="1"
+                                data-u="{{ block.underlying }}"
+                                data-name="{{ block.name }}"
+                                data-tenor="{{ t.tenor }}"
+                                data-tenor-cn="{{ t.tenor_cn }}"
+                                data-cp="P"
+                                data-side-cn="认沽"{% endif %}
+                                title="认沽最新 IV{% if t.put.asof %}（{{ t.put.asof }}）{% endif %}{% if t.put.current != '—' %} · 点击查看全历史{% endif %}">{{ t.put.current }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-per {{ t.put.per1y_cls }}"{% if t.put.per1y_title %} title="{{ t.put.per1y_title }}"{% endif %}>{{ t.put.per1y }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-per {{ t.put.perc_cls }}"{% if t.put.perc_title %} title="{{ t.put.perc_title }}"{% endif %}>{{ t.put.perc }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-per {{ t.put.pera_cls }}"{% if t.put.pera_title %} title="{{ t.put.pera_title }}"{% endif %}>{{ t.put.pera }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-date" title="{{ t.put.max_date_full }}">{{ t.put.max_date }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-ext"{% if t.put.max_title %} title="{{ t.put.max_title }}"{% endif %}>{{ t.put.max }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-sigma {{ t.put.p3_cls }}"{% if t.put.p3_title %} title="{{ t.put.p3_title }}"{% endif %}>{{ t.put.p3 }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-sigma {{ t.put.p2_cls }}"{% if t.put.p2_title %} title="{{ t.put.p2_title }}"{% endif %}>{{ t.put.p2 }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-med">{{ t.put.med }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-sigma {{ t.put.m2_cls }}"{% if t.put.m2_title %} title="{{ t.put.m2_title }}"{% endif %}>{{ t.put.m2 }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-sigma {{ t.put.m3_cls }}"{% if t.put.m3_title %} title="{{ t.put.m3_title }}"{% endif %}>{{ t.put.m3 }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-ext">{{ t.put.min }}</td>
+                            <td class="opt-iv-cell-put opt-iv-cell-date" title="{{ t.put.min_date_full }}">{{ t.put.min_date }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if not block.has_data %}
+            <p class="opt-iv-block-hint">{{ block.code6 }} 暂无面板行</p>
+            {% endif %}
+        </section>
+        {% endfor %}
+    </div>
+</aside>

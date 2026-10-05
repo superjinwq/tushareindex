@@ -153,8 +153,37 @@ def testStandaloneRoutesReturnPageSnapshotAndHealth() -> None:
     pageText = page.get_data(as_text=True)
     assert '510050 独立期权墙' in pageText
     assert 'data-endpoint="/api/oi-wall"' in pageText
+    assert 'data-selected-underlying="510050"' in pageText
+    assert all(code in pageText for code in ('510050', '510300', '510500', '588000', '159915'))
     assert '计算过程' in pageText
     assert '解释边界' in pageText
+    assert '日均流速占当前同侧OI' in pageText
+    assert '日均流速 ÷ 当前期限同侧总OI' in pageText
+    assert 'function buildFlowTraceInstance(horizon, flowExpiry, sideName, item, currentExpiry, dynamicsExpiry = null)' in pageText
+    assert 'const currentTotalOi = currentExpiry?.[sideName]?.totalOi ?? null;' in pageText
+    assert 'horizon.baselineDate} → ${state.snapshot.dataDate} · ${flowExpiry.maturityDate}' in pageText
+    assert 'formatOiWan(currentTotalOi)} = ${velocityShareText}' in pageText
+    assert 'renderFlowTrace(flowExpiry, horizon, selections = null)' in pageText
+    assert 'buildFlowTraceInstance(horizon, flowExpiry, sideName, item, currentExpiry, dynamicsExpiry)' in pageText
+    assert 'Flow Acceleration' in pageText
+    assert 'FlowAcceleration = FlowVelocity1D - FlowVelocity3D' in pageText
+    assert 'function renderFlowDynamics(expiry)' in pageText
+    assert 'flowAccelerationRatio' in pageText
+    assert 'Max Pain' in pageText
+    assert 'function renderMaxPain(expiry)' in pageText
+    assert 'Pain(K) = Σ CallOIᵢ × max(K − Kᵢ, 0) × per_unit' in pageText
+    assert 'Absolute Gamma Wall' in pageText
+    assert 'function renderGammaWall(expiry)' in pageText
+    assert 'GammaExposure(K, side)' in pageText
+    assert 'Absolute Gamma Zone' in pageText
+    assert 'Gamma Flip 代理' in pageText
+    assert 'Call |GEX| − Put |GEX|' in pageText
+    assert 'Call−Put 代理' in pageText
+    assert 'formatGammaExposure,' in pageText
+
+    selectedPage = client.get('/?underlying=159915.SZ')
+    assert selectedPage.status_code == 200
+    assert 'data-selected-underlying="159915"' in selectedPage.get_data(as_text=True)
 
     response = client.get('/api/oi-wall')
     assert response.status_code == 200
@@ -163,6 +192,78 @@ def testStandaloneRoutesReturnPageSnapshotAndHealth() -> None:
     health = client.get('/health')
     assert health.status_code == 200
     assert health.get_json()['database'] == 'ok'
+
+
+def testSupportedUnderlyingCatalogResolvesFiveEtfOptionChains() -> None:
+    assert wall.SUPPORTED_UNDERLYINGS == (
+        '510050',
+        '510300',
+        '510500',
+        '588000',
+        '159915',
+    )
+    assert wall.resolveUnderlying('510300').optionRoot == 'OP510300.SH'
+    assert wall.resolveUnderlying('159915.SZ').code == '159915.SZ'
+    with pytest.raises(ValueError, match='不支持的 ETF 品种'):
+        wall.resolveUnderlying('000300')
+
+
+def testUiHelpersFormatMaxPainInReadableUnits() -> None:
+    script = r"""
+      const ui = require('./static/js/opt_wall_510050.js');
+      console.log(JSON.stringify({
+        thousandWan: ui.formatPainYuan(340000),
+        hundredMillion: ui.formatPainYuan(200000000),
+        zero: ui.formatPainYuan(0),
+        unavailable: ui.formatPainYuan(null),
+      }));
+    """
+    result = subprocess.run(
+        ['node', '-e', script],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+        encoding='utf-8',
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        'thousandWan': '34.00万元',
+        'hundredMillion': '2.00亿元',
+        'zero': '0.00元',
+        'unavailable': '不可计算',
+    }
+
+
+def testApiUsesRequestedUnderlyingAndRejectsUnknownCode() -> None:
+    requested: list[str] = []
+    expectedSnapshot = {
+        'underlying': '510300.SH',
+        'dataDate': '2026-09-22',
+        'spot': 4.0,
+        'expiries': [],
+        'quality': {'dateAligned': True},
+    }
+    app = createApp(
+        snapshotLoaderByUnderlying=lambda underlyingCode: requested.append(underlyingCode) or expectedSnapshot,
+        healthLoader=lambda: {'database': 'ok'},
+    )
+    client = app.test_client()
+
+    response = client.get('/api/oi-wall?underlying=510300')
+
+    assert response.status_code == 200
+    assert requested == ['510300.SH']
+    assert response.get_json() == {'ok': True, 'snapshot': expectedSnapshot}
+
+    invalid = client.get('/api/oi-wall?underlying=000300')
+    assert invalid.status_code == 400
+    assert invalid.get_json() == {
+        'ok': False,
+        'error': '不支持的 ETF 品种：000300',
+        'errorCode': 'INVALID_UNDERLYING',
+    }
 
 
 def testApiDoesNotExposeDatabaseErrorDetails(caplog: pytest.LogCaptureFixture) -> None:
@@ -227,10 +328,54 @@ def testUiHelpersSortStrikesFormatOiInWanAndKeepBothWallsSeparate() -> None:
       };
       console.log(JSON.stringify({
         strikes: ui.collectStrikesAsc(expiry),
-            formattedCallOi: ui.formatOiWan(95320),
-            formattedPutOi: ui.formatOiWan(37576),
-            balance: ui.summarizeBalance(expiry),
-            summaries: ['call', 'put'].map((sideName) => ui.summarizeSide(expiry[sideName])),
+        formattedCallOi: ui.formatOiWan(95320),
+        formattedPutOi: ui.formatOiWan(37576),
+        formattedGammaExposure: ui.formatGammaExposure(1234567),
+        formattedUnavailableGammaExposure: ui.formatGammaExposure(null),
+        formattedIv: ui.formatIvPct(0.172345),
+        formattedUnavailableIv: ui.formatIvPct(null),
+        formattedPositiveFlow: ui.formatFlowWan(12500),
+        formattedNegativeFlow: ui.formatFlowWan(-6000),
+        formattedFlowVelocity: ui.formatFlowVelocityWan(12500 / 3),
+        formattedFlowAcceleration: ui.formatFlowAccelerationWan(12500 / 3),
+        formattedPositiveAccelerationRatio: ui.formatFlowAccelerationRatio(50 / (80 / 3)),
+        formattedNegativeAccelerationRatio: ui.formatFlowAccelerationRatio(-1.5),
+        formattedUnavailableAccelerationRatio: ui.formatFlowAccelerationRatio(null),
+        formattedSmallPositiveVelocity: ui.formatFlowVelocityWan(33.333333),
+        formattedSmallNegativeVelocity: ui.formatFlowVelocityWan(-33.333333),
+        formattedPositiveVelocityShare: ui.formatFlowVelocityShare(12500 / 3, 200000),
+        formattedNegativeVelocityShare: ui.formatFlowVelocityShare(-6000 / 3, 200000),
+        formattedSmallPositiveVelocityShare: ui.formatFlowVelocityShare(1, 200000),
+        formattedFlowShare: ui.formatFlowShare(0.625),
+        formattedPositiveDistance: ui.formatDistancePct(0.2179),
+        formattedNegativeDistance: ui.formatDistancePct(-3.3333),
+        formattedUnavailableDistance: ui.formatDistancePct(null),
+        balance: ui.summarizeBalance(expiry),
+        summaries: ['call', 'put'].map((sideName) => ui.summarizeSide(expiry[sideName])),
+        flow: ui.summarizeFlowSide({
+          positiveWallOi: 12500,
+          positiveWallStrikes: [3.10],
+          positiveFlowTotalOi: 20000,
+          positiveWallConcentration: 0.625,
+          positiveWallVelocityOi: 12500 / 3,
+          negativeWallOi: -6000,
+          negativeWallStrikes: [2.90, 3.00],
+          negativeFlowTotalOi: -10000,
+          negativeWallConcentration: 0.6,
+          negativeWallVelocityOi: -6000 / 3,
+          strikes: [],
+        }, 200000),
+        emptyFlow: ui.summarizeFlowSide({
+          positiveWallOi: null,
+          positiveWallStrikes: [],
+          positiveFlowTotalOi: 0,
+          positiveWallConcentration: null,
+          negativeWallOi: null,
+          negativeWallStrikes: [],
+          negativeFlowTotalOi: 0,
+          negativeWallConcentration: null,
+          strikes: [],
+        }),
         walls: ui.collectWallSelections(expiry).map((item) => ({
           sideName: item.sideName,
           strike: item.item.strike,
@@ -251,6 +396,26 @@ def testUiHelpersSortStrikesFormatOiInWanAndKeepBothWallsSeparate() -> None:
         'strikes': [2.9, 3, 3.1, 3.2],
         'formattedCallOi': '9.53万',
         'formattedPutOi': '3.76万',
+        'formattedGammaExposure': '123.46万元/1%',
+        'formattedUnavailableGammaExposure': '不可计算',
+        'formattedIv': '17.23%',
+        'formattedUnavailableIv': '不可计算',
+        'formattedPositiveFlow': '+1.25万',
+        'formattedNegativeFlow': '-0.60万',
+        'formattedFlowVelocity': '+0.42万/日',
+        'formattedFlowAcceleration': '+0.42万/日',
+        'formattedPositiveAccelerationRatio': '+1.88×',
+        'formattedNegativeAccelerationRatio': '-1.50×',
+        'formattedUnavailableAccelerationRatio': '不可计算',
+        'formattedSmallPositiveVelocity': '+<0.01万/日',
+        'formattedSmallNegativeVelocity': '-<0.01万/日',
+        'formattedPositiveVelocityShare': '+2.08%/日',
+        'formattedNegativeVelocityShare': '-1.00%/日',
+        'formattedSmallPositiveVelocityShare': '+<0.01%/日',
+        'formattedFlowShare': '62.50%',
+        'formattedPositiveDistance': '+0.22%',
+        'formattedNegativeDistance': '-3.33%',
+        'formattedUnavailableDistance': '不可计算',
         'balance': {
             'callOi': 120000,
             'putOi': 80000,
@@ -273,8 +438,52 @@ def testUiHelpersSortStrikesFormatOiInWanAndKeepBothWallsSeparate() -> None:
                 'top1Share': 0.4697,
                 'top3Strikes': [3.1],
                 'top3Share': 0.6543,
-            },
+          },
         ],
+        'flow': {
+          'positiveWallOi': 12500,
+          'positiveWallStrikes': [3.1],
+          'positiveFlowTotalOi': 20000,
+          'positiveWallConcentration': 0.625,
+          'positiveWallVelocityOi': 12500 / 3,
+          'positiveWallVelocityLabel': '+0.42万/日',
+          'positiveWallVelocityShare': (12500 / 3) / 200000,
+          'positiveWallVelocityShareLabel': '+2.08%/日',
+          'positiveConcentrationLabel': '62.50%',
+          'negativeWallOi': -6000,
+          'negativeWallStrikes': [2.9, 3],
+          'negativeFlowTotalOi': -10000,
+          'negativeWallConcentration': 0.6,
+          'negativeWallVelocityOi': -6000 / 3,
+          'negativeWallVelocityLabel': '-0.20万/日',
+          'negativeWallVelocityShare': (-6000 / 3) / 200000,
+          'negativeWallVelocityShareLabel': '-1.00%/日',
+          'negativeConcentrationLabel': '60.00%',
+          'positiveWallLabel': '+1.25万',
+          'negativeWallLabel': '-0.60万',
+        },
+        'emptyFlow': {
+          'positiveFlowTotalOi': 0,
+          'positiveWallOi': None,
+          'positiveWallStrikes': [],
+          'positiveWallConcentration': None,
+          'positiveWallVelocityOi': None,
+          'positiveWallVelocityLabel': '不可计算',
+          'positiveWallVelocityShare': None,
+          'positiveWallVelocityShareLabel': '不可计算',
+          'positiveConcentrationLabel': '不可计算',
+          'negativeFlowTotalOi': 0,
+          'negativeWallOi': None,
+          'negativeWallStrikes': [],
+          'negativeWallConcentration': None,
+          'negativeWallVelocityOi': None,
+          'negativeWallVelocityLabel': '不可计算',
+          'negativeWallVelocityShare': None,
+          'negativeWallVelocityShareLabel': '不可计算',
+          'negativeConcentrationLabel': '不可计算',
+          'positiveWallLabel': '—',
+          'negativeWallLabel': '—',
+        },
         'walls': [
             {'sideName': 'call', 'strike': 3},
             {'sideName': 'put', 'strike': 3.1},

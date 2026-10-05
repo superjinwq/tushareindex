@@ -1,0 +1,45 @@
+{# 垂直价差铁律：右侧 IV 下方，切换标的不刷新 #}
+<aside class="opt-t-rules-panel" id="opt-t-rules-panel" aria-label="垂直价差策略铁律">
+    <div class="opt-t-rules-panel-inner">
+        <p class="opt-t-rules-eyebrow">回测验证 · 四标的一致</p>
+        <h2 class="opt-t-rules-title">垂直价差铁律</h2>
+        <ol class="opt-t-rules-list">
+            <li class="opt-t-rules-item opt-t-rules-item--critical">
+                <span class="opt-t-rules-num" aria-hidden="true">1</span>
+                <div class="opt-t-rules-body">
+                    <strong class="opt-t-rules-lead">方向决定一切</strong>
+                    <p>全样本平均收益为负；<span class="opt-t-kw opt-t-kw--pos">方向对</span>时全转正，盈亏比 <span class="opt-t-kw">2.3~3.6</span>。</p>
+                </div>
+            </li>
+            <li class="opt-t-rules-item">
+                <span class="opt-t-rules-num" aria-hidden="true">2</span>
+                <div class="opt-t-rules-body">
+                    <strong class="opt-t-rules-lead">窄价差最优</strong>
+                    <p><span class="opt-t-kw">1 档</span>宽度在四标、牛/熊两方向上胜率与盈亏比最佳，越宽越差。</p>
+                </div>
+            </li>
+            <li class="opt-t-rules-item">
+                <span class="opt-t-rules-num" aria-hidden="true">3</span>
+                <div class="opt-t-rules-body">
+                    <strong class="opt-t-rules-lead">成本甜点</strong>
+                    <p>净成本占比 <span class="opt-t-kw">0.3~0.4</span>（510500 可含 <span class="opt-t-kw">0.2~0.3</span>）；<span class="opt-t-kw opt-t-kw--warn">&gt;0.6</span> 普遍恶化，<span class="opt-t-kw opt-t-kw--danger">&gt;0.7</span> 亏损。</p>
+                </div>
+            </li>
+            <li class="opt-t-rules-item">
+                <span class="opt-t-rules-num" aria-hidden="true">4</span>
+                <div class="opt-t-rules-body">
+                    <strong class="opt-t-rules-lead">止盈倍数</strong>
+                    <p><span class="opt-t-kw">2.0×</span> 净成本为通用最优；588000 / 159915 可放到 <span class="opt-t-kw">2.5×</span>；<span class="opt-t-kw opt-t-kw--warn">1.3×</span> 对高波动标的几乎不赚。</p>
+                </div>
+            </li>
+            <li class="opt-t-rules-item">
+                <span class="opt-t-rules-num" aria-hidden="true">5</span>
+                <div class="opt-t-rules-body">
+                    <strong class="opt-t-rules-lead">到期月选择</strong>
+                    <p><span class="opt-t-kw opt-t-kw--bull">牛认购</span> 优先 <span class="opt-t-kw">下月</span>；<span class="opt-t-kw opt-t-kw--bear">熊认沽</span> <span class="opt-t-kw">当月</span> 时间效率最高，<span class="opt-t-kw">下月</span> 最稳。</p>
+                </div>
+            </li>
+        </ol>
+        <p class="opt-t-rules-foot">标注腿位已按上列铁律 + 分标的回测参数选券；<span class="opt-t-kw opt-t-kw--warn">成本占比 &gt;0.5 剔除</span>。切换标的仅更新左侧 T 型表。</p>
+    </div>
+</aside>

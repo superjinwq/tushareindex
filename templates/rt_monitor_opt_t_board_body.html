@@ -1,0 +1,322 @@
+{# 期权 T 型：表体片段，供整页 include 与 /api/opt-t-board 返回的 html 共用 #}
+    {% if opt_t_error %}
+    <div class="opt-t-err" role="alert">查询失败：{{ opt_t_error }}</div>
+    {% endif %}
+    {% if not opt_t_sections and not opt_t_error %}
+    <p class="opt-t-empty-sec">当前条件下无合约数据（请确认已同步 opt_basic）。</p>
+    {% endif %}
+    {% if opt_t_obligation_selector and opt_t_sections %}
+    <section class="opt-t-selector" aria-label="义务仓优选">
+        <div class="opt-t-selector-head">
+            <div class="opt-t-selector-title">
+                <strong>义务仓优选</strong>
+                <span>☆ 同一标准 K 的四期限时年化最高；Δ、有效价仅供比较。盘中买一（3 分钟内）；其余时段按最新价→收盘价估算</span>
+            </div>
+            <div class="opt-t-selector-tabs" role="tablist" aria-label="义务仓类型">
+                <button type="button" class="opt-t-selector-tab is-active" role="tab" aria-selected="true" data-opt-selector-tab="put">Put · 现金担保</button>
+                <button type="button" class="opt-t-selector-tab" role="tab" aria-selected="false" data-opt-selector-tab="call">Call · 备兑</button>
+            </div>
+        </div>
+        {% for side in ('put', 'call') %}
+        {% set tab = opt_t_obligation_selector[side] %}
+        <div class="opt-t-selector-panel{% if side == 'put' %} is-active{% endif %}" role="tabpanel" data-opt-selector-panel="{{ side }}">
+            <div class="opt-t-selector-scroll">
+                <table class="opt-t-selector-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">档位 / K / 虚实%</th>
+                            {% for col in opt_t_obligation_selector.columns %}
+                            <th scope="col" class="opt-t-tenor-{{ col.kind }}">
+                                <div class="opt-t-selector-th">{{ col.head_expiry }} {{ col.head_left }} ┊ {{ col.head_right }}</div>
+                            </th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for selector_row in tab.rows %}
+                        <tr class="opt-t-selector-row {{ selector_row.bucket_cls }}">
+                            <th scope="row" class="opt-t-selector-strike {{ selector_row.bucket_cls }}">
+                                <span class="opt-t-selector-strike-layout">
+                                    <span class="opt-t-selector-strike-label">{{ selector_row.label }}</span>
+                                    <span class="opt-t-selector-strike-k">（{{ selector_row.strike_display }}）</span>
+                                    <span class="opt-t-selector-moneyness {{ selector_row.moneyness_cls }}">{{ selector_row.moneyness_pct }}</span>
+                                </span>
+                            </th>
+                            {% for cell in selector_row.cells %}
+                            <td class="opt-t-selector-cell opt-t-tenor-{{ opt_t_obligation_selector.columns[loop.index0].kind }}{% if cell.status == 'empty' %} is-empty{% elif cell.status == 'missing' %} is-missing{% endif %}" data-opt-selector-status="{{ cell.status }}"{% if cell.price_source %} title="{% if cell.price_source == 'bid1' %}盘中三分钟内买一{% elif cell.price_source == 'last' %}最新价估算{% else %}收盘价估算{% endif %}"{% endif %}>
+                                {% if cell.status == 'ready' %}
+                                <div class="opt-t-selector-metrics">
+                                    <span class="opt-t-selector-metrics-left">
+                                        <span>{{ cell.tv_ann }}</span>
+                                        <span>{{ cell.delta }}</span>
+                                        <span>{{ cell.eff_px }}</span>
+                                    </span>
+                                    <span class="opt-t-selector-metrics-sep" aria-hidden="true">┊</span>
+                                    <span class="opt-t-selector-metrics-right">
+                                        <span class="opt-t-selector-per {{ cell.per1y_cls }}"{% if cell.per1y_title %} title="{{ cell.per1y_title }}"{% endif %}>{{ cell.per1y }}</span>
+                                        <span class="opt-t-selector-per {{ cell.perc_cls }}"{% if cell.perc_title %} title="{{ cell.perc_title }}"{% endif %}>{{ cell.perc }}</span>
+                                        <span class="opt-t-selector-per {{ cell.pera_cls }}"{% if cell.pera_title %} title="{{ cell.pera_title }}"{% endif %}>{{ cell.pera }}</span>
+                                    </span>
+                                </div>
+                                {% if cell.yield_star %}
+                                <span class="opt-t-selector-stars" title="☆ 对应档位时年化最高">
+                                    ☆
+                                </span>
+                                {% endif %}
+                                {% elif cell.status == 'missing' %}
+                                <span class="opt-t-selector-status">—</span>
+                                {% else %}
+                                <span class="opt-t-selector-status">—</span>
+                                {% endif %}
+                            </td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
+    {% if opt_t_rights_selector and opt_t_sections %}
+    <section class="opt-t-selector opt-t-rights" aria-label="权利仓观察">
+        <div class="opt-t-selector-head">
+            <div class="opt-t-selector-title">
+                <strong>权利仓观察</strong>
+                <span class="opt-t-rights-rule" data-opt-rights-rule="vol">HARD：该档Per两列&lt;10且max&lt;15 → 斜否决(C≤−2/P≥+2.5) → |Δ|&gt;0.2 → 非修复 → 当月DTE&gt;15；翼部过门见悬停</span>
+                <span class="opt-t-rights-rule" data-opt-rights-rule="parity" hidden>HARD折价β：深实且折溢≤−2%且时值&lt;0且卖一折价且有量仓；过门K全列含实深</span>
+            </div>
+            <div class="opt-t-rights-tabs">
+                <div class="opt-t-selector-tabs" role="tablist" aria-label="权利仓类型">
+                    <button type="button" class="opt-t-selector-tab is-active" role="tab" aria-selected="true" data-opt-rights-kind="vol">波动型</button>
+                    <button type="button" class="opt-t-selector-tab" role="tab" aria-selected="false" data-opt-rights-kind="parity">平价型</button>
+                </div>
+                <div class="opt-t-selector-tabs" role="tablist" aria-label="权利仓方向">
+                    <button type="button" class="opt-t-selector-tab is-active" role="tab" aria-selected="true" data-opt-rights-side="call">Call</button>
+                    <button type="button" class="opt-t-selector-tab" role="tab" aria-selected="false" data-opt-rights-side="put">Put</button>
+                </div>
+            </div>
+        </div>
+        {% for mode in ('vol', 'parity') %}
+        {% for side in ('call', 'put') %}
+        {% set tab = opt_t_rights_selector[mode][side] %}
+        <div class="opt-t-selector-panel{% if mode == 'vol' and side == 'call' %} is-active{% endif %}" role="tabpanel" data-opt-rights-panel="{{ mode }}-{{ side }}">
+            <div class="opt-t-selector-scroll">
+                <table class="opt-t-selector-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">档位 / K / 虚实%</th>
+                            {% for col in opt_t_rights_selector.columns %}
+                            <th scope="col" class="opt-t-tenor-{{ col.kind }}">
+                                <div class="opt-t-selector-th">{{ col.head_expiry }} {% if mode == 'vol' %}Δ/折溢/时值 ┊ Per 1y/C/A{% else %}Δ/折溢/时值 ┊ 量/仓{% endif %}</div>
+                            </th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for rights_row in tab.rows %}
+                        <tr class="opt-t-selector-row {{ rights_row.bucket_cls }}">
+                            <th scope="row" class="opt-t-selector-strike {{ rights_row.bucket_cls }}">
+                                <span class="opt-t-selector-strike-layout">
+                                    <span class="opt-t-selector-strike-label">{{ rights_row.label }}</span>
+                                    <span class="opt-t-selector-strike-k">（{{ rights_row.strike_display }}）</span>
+                                    <span class="opt-t-selector-moneyness {{ rights_row.moneyness_cls }}">{{ rights_row.moneyness_pct }}</span>
+                                </span>
+                            </th>
+                            {% for cell in rights_row.cells %}
+                            <td class="opt-t-selector-cell opt-t-tenor-{{ opt_t_rights_selector.columns[loop.index0].kind }}{% if cell.status == 'empty' %} is-empty{% elif cell.status == 'missing' %} is-missing{% endif %}" data-opt-rights-status="{{ cell.status }}">
+                                {% if cell.status == 'ready' %}
+                                <div class="opt-t-selector-metrics opt-t-rights-metrics{% if not cell.show_per %} is-parity{% endif %}{% if cell.is_wing_pass %} is-wing-pass{% endif %}"{% if cell.axis_note %} title="{{ cell.axis_note }}"{% endif %}>
+                                    <span class="opt-t-selector-metrics-left opt-t-rights-left">
+                                        <span>{{ cell.delta }}</span>
+                                        <span class="{{ cell.disc_cls }}">{{ cell.disc }}</span>
+                                        <span class="{{ cell.time_cls }}">{{ cell.time_val }}</span>
+                                    </span>
+                                    <span class="opt-t-selector-metrics-sep" aria-hidden="true">┊</span>
+                                    <span class="opt-t-selector-metrics-right opt-t-rights-right">
+                                        {% if cell.show_per %}
+                                        <span class="opt-t-selector-per {{ cell.per1y_cls }}"{% if cell.per1y_title %} title="{{ cell.per1y_title }}"{% endif %}>{{ cell.per1y }}</span>
+                                        <span class="opt-t-selector-per {{ cell.perc_cls }}"{% if cell.perc_title %} title="{{ cell.perc_title }}"{% endif %}>{{ cell.perc }}</span>
+                                        <span class="opt-t-selector-per {{ cell.pera_cls }}"{% if cell.pera_title %} title="{{ cell.pera_title }}"{% endif %}>{{ cell.pera }}</span>
+                                        {% else %}
+                                        <span>{{ cell.vol }}</span>
+                                        <span>{{ cell.oi }}</span>
+                                        {% endif %}
+                                    </span>
+                                </div>
+                                {% else %}
+                                <span class="opt-t-selector-status">—</span>
+                                {% endif %}
+                            </td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endfor %}
+        {% endfor %}
+    </section>
+    {% endif %}
+    {% if opt_t_term_gate %}
+    <div class="opt-t-term {{ opt_t_term_gate.cls }}" role="note">
+        <p class="opt-t-term-head" title="{{ opt_t_term_gate.title }}">
+            <span class="opt-t-term-fact">{{ opt_t_term_gate.text }}</span>
+            {% if opt_t_term_gate.curve_explain %}
+            <span class="opt-t-term-sep" aria-hidden="true">｜</span>
+            <span class="opt-t-term-curve">{{ opt_t_term_gate.curve_explain }}</span>
+            {% if opt_t_term_gate.curve_action %}
+            <span class="opt-t-term-act opt-t-term-act--{{ opt_t_term_gate.curve_act_tone }}">{{ opt_t_term_gate.curve_action }}</span>
+            {% endif %}
+            {% endif %}
+        </p>
+        {% if opt_t_term_gate.reads %}
+        <p class="opt-t-term-reads">
+            {% for row in opt_t_term_gate.reads %}
+            <span class="opt-t-term-read">
+                <span class="opt-t-term-metrics">{{ row.metrics }}</span>
+                {% for side in row.sides %}
+                <span class="opt-t-term-side" title="{{ side.title }}">
+                    {% if side.name %}<span class="opt-t-term-side-name">{{ side.name }}</span>{% endif %}
+                    <span class="opt-t-term-tag opt-t-term-tag--{{ side.tone }}">{{ side.tag }}</span>
+                    {% if side.action %}<span class="opt-t-term-act opt-t-term-act--{{ side.act_tone }}">{{ side.action }}</span>{% endif %}
+                </span>
+                {% endfor %}
+            </span>
+            {% endfor %}
+        </p>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% for sec in opt_t_sections %}
+    <section class="opt-t-section{% if sec.spread_alt %} opt-t-section--alt{% endif %}">
+        {% if sec.quote_asof or sec.expiry_meta or sec.expected_move %}
+        <p class="opt-t-spread-role" role="note">
+            {% if sec.quote_asof %}<span class="opt-t-quote-asof{% if sec.quote_asof_kind == 'partial' %} opt-t-quote-asof--partial{% elif sec.quote_asof_kind == 'daily' %} opt-t-quote-asof--daily{% endif %}" title="本地观测=桥接或本地快照最后一次确认时间；最后市场事件=本标的ETF或本链期权原始tick的最新时间。两者不同表示服务仍在读快照，但市场没有新事件；k/n张=仅部分有盘口/成交。">{{ sec.quote_asof }}</span>{% endif %}
+            {% if sec.expiry_meta %}<span class="opt-t-spread-role-main"><span class="opt-t-spread-expiry">{{ sec.expiry_meta }}</span></span>{% endif %}
+            {% if sec.expected_move %}<span class="opt-t-em" title="{{ sec.expected_move.title }}">{{ sec.expected_move.text }}</span>{% endif %}
+        </p>
+        {% endif %}
+        {% if sec.rows %}
+        <div class="opt-t-scroll">
+            <table class="opt-t-table" aria-label="期权T型报价">
+                {# 逐列固定宽度：保证当月/下月/当季/下季四个区块表头与列宽严格对齐 #}
+                <colgroup>
+                    <col class="opt-t-cg-oi">
+                    <col class="opt-t-cg-vol">
+                    <col class="opt-t-cg-last">
+                    <col class="opt-t-cg-prem">
+                    <col class="opt-t-cg-iv">
+                    <col class="opt-t-cg-per">
+                    <col class="opt-t-cg-per">
+                    <col class="opt-t-cg-per">
+                    <col class="opt-t-cg-gamma">
+                    <col class="opt-t-cg-delta">
+                    <col class="opt-t-cg-tvann">
+                    <col class="opt-t-cg-tv">
+                    <col class="opt-t-cg-eff">
+                    <col class="opt-t-cg-disc">
+                    <col class="opt-t-cg-spread">
+                    <col class="opt-t-cg-strike">
+                    <col class="opt-t-cg-mny">
+                    <col class="opt-t-cg-spread">
+                    <col class="opt-t-cg-eff">
+                    <col class="opt-t-cg-disc">
+                    <col class="opt-t-cg-tv">
+                    <col class="opt-t-cg-tvann">
+                    <col class="opt-t-cg-delta">
+                    <col class="opt-t-cg-gamma">
+                    <col class="opt-t-cg-per">
+                    <col class="opt-t-cg-per">
+                    <col class="opt-t-cg-per">
+                    <col class="opt-t-cg-iv">
+                    <col class="opt-t-cg-prem">
+                    <col class="opt-t-cg-last">
+                    <col class="opt-t-cg-vol">
+                    <col class="opt-t-cg-oi">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th scope="col" class="opt-t-th-call">持仓量</th>
+                        <th scope="col" class="opt-t-th-call">成交量</th>
+                        <th scope="col" class="opt-t-th-call" title="最新成交价（last→昨收）；不是买一/卖一。时值/有效价/折溢/权利金%另按买一或卖一评估">最新</th>
+                        <th scope="col" class="opt-t-th-call opt-t-th-core" title="评估用：仅卖一时值&lt;0 用卖一，否则买一；Call 备兑 C/(现价−C)×100；色阶≥3/5/8/10/20">权利金%</th>
+                        <th scope="col" class="opt-t-th-call" title="Black-76 IV%；远期=段内平价隐含F（失败回退现货）；r=中债10Y">IV</th>
+                        <th scope="col" class="opt-t-th-call" title="Per 1y：本合约 IV 在同期限代表IV「近252交易日」中的分位。仅 |Δ|∈[0.10,0.90] 显示；样本不足60日为 —。与右侧 IV 看板 Per 1y 同一口径同一精度">Per 1y</th>
+                        <th scope="col" class="opt-t-th-call" title="Per C：自配置锚点日起（波动率中枢跃升后的新常态）的分位。未配锚点的标的为 —；锚点与样本量见单元格 title">Per C</th>
+                        <th scope="col" class="opt-t-th-call" title="Per A：全样本分位（该期限该方向全部历史）。三列一起看：A 高而 1y 低 = 高波动段里已回落，不是便宜">Per A</th>
+                        <th scope="col" class="opt-t-th-call" title="Black-76 现货Γ；标的每涨1元，Δ的变动；Call/Put同值；两位小数">Γ</th>
+                        <th scope="col" class="opt-t-th-call" title="Black-76 现货Δ；Call为正；≈到期实值概率近似；实务常瞄0.20~0.35">Δ</th>
+                        <th scope="col" class="opt-t-th-call opt-t-th-core" title="时年化=(时值/行权价)×365/剩余自然日×100；两位小数；时值≤0 不展示；色阶≥15/20/30/50/100">时年化</th>
+                        <th scope="col" class="opt-t-th-call" title="时值=评估价−内在；固定四位小数；仅当卖一时值&lt;0 用卖一(买入折价)，否则用买一(卖方)；不是「最新」列">时值</th>
+                        <th scope="col" class="opt-t-th-call" title="Call 有效价=行权价+评估价；固定四位小数；口径同「时值」（真折价用卖一，否则买一）">有效价</th>
+                        <th scope="col" class="opt-t-th-call" title="Call 折溢%=(有效价−现价)/现价×100；与时值同一评估价；正=溢价，负=折价">折溢%</th>
+                        <th scope="col" class="opt-t-th-call">价差</th>
+                        <th scope="col" class="opt-t-th-strike">行权价</th>
+                        <th scope="col" class="opt-t-th-strike" title="(行权价−标的价)/标的价×100；负=行权价低于现价，正=高于现价">虚实%</th>
+                        <th scope="col" class="opt-t-th-put">价差</th>
+                        <th scope="col" class="opt-t-th-put" title="Put 有效价=行权价−评估价；固定四位小数；口径同「时值」（真折价用卖一，否则买一）">有效价</th>
+                        <th scope="col" class="opt-t-th-put" title="Put 折溢%=(现价−有效价)/现价×100；与时值同一评估价；正=折价有利，负=溢价不利">折溢%</th>
+                        <th scope="col" class="opt-t-th-put" title="时值=评估价−内在；固定四位小数；仅当卖一时值&lt;0 用卖一(买入折价)，否则用买一(卖方)；不是「最新」列">时值</th>
+                        <th scope="col" class="opt-t-th-put opt-t-th-core" title="时年化=(时值/行权价)×365/剩余自然日×100；两位小数；时值≤0 不展示；色阶≥15/20/30/50/100">时年化</th>
+                        <th scope="col" class="opt-t-th-put" title="Black-76 现货Δ；Put为负；|Δ|≈到期实值概率近似；实务常瞄0.20~0.35">Δ</th>
+                        <th scope="col" class="opt-t-th-put" title="Black-76 现货Γ；标的每涨1元，Δ的变动；Call/Put同值；两位小数">Γ</th>
+                        <th scope="col" class="opt-t-th-put" title="Per A：全样本分位（该期限该方向全部历史）。三列一起看：A 高而 1y 低 = 高波动段里已回落，不是便宜">Per A</th>
+                        <th scope="col" class="opt-t-th-put" title="Per C：自配置锚点日起（波动率中枢跃升后的新常态）的分位。未配锚点的标的为 —；锚点与样本量见单元格 title">Per C</th>
+                        <th scope="col" class="opt-t-th-put" title="Per 1y：本合约 IV 在同期限代表IV「近252交易日」中的分位。仅 |Δ|∈[0.10,0.90] 显示；样本不足60日为 —。与右侧 IV 看板 Per 1y 同一口径同一精度">Per 1y</th>
+                        <th scope="col" class="opt-t-th-put" title="Black-76 IV%；远期=段内平价隐含F（失败回退现货）；r=中债10Y">IV</th>
+                        <th scope="col" class="opt-t-th-put opt-t-th-core" title="评估用：仅卖一时值&lt;0 用卖一，否则买一；Put 净接货 C/(行权价−C)×100；色阶≥3/5/8/10/20">权利金%</th>
+                        <th scope="col" class="opt-t-th-put" title="最新成交价（last→昨收）；不是买一/卖一。时值/有效价/折溢/权利金%另按买一或卖一评估">最新</th>
+                        <th scope="col" class="opt-t-th-put">成交量</th>
+                        <th scope="col" class="opt-t-th-put">持仓量</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in sec.rows %}
+                    <tr{% if row.row_cls %} class="{{ row.row_cls }}"{% endif %}>
+                        <td class="opt-t-cell-call opt-t-cell-num {{ row.call_oi_cls }} {{ row.call_oi_age_cls }}" data-opt-quote-code="{{ row.call_ts_code }}" data-opt-quote-field="oi" data-opt-quote-base-title="持仓量{% if row.call_oi_n is defined and row.call_oi_n is not none %} {{ row.call_oi_n|int }}{% endif %}">{{ row.call_oi }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num {{ row.call_vol_cls }} {{ row.call_vol_age_cls }}" data-opt-quote-code="{{ row.call_ts_code }}" data-opt-quote-field="vol" data-opt-quote-base-title="成交量{% if row.call_vol_n is defined and row.call_vol_n is not none %} {{ row.call_vol_n|int }}{% endif %}">{{ row.call_vol }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num{% if not row.call_live %} opt-t-px-daily{% endif %} {{ row.call_last_age_cls }}" data-opt-quote-code="{{ row.call_ts_code }}" data-opt-quote-field="last" data-opt-quote-base-title="{% if row.call_px_title %}{{ row.call_px_title }}{% elif not row.call_live %}无成交叠价，最新=昨收{% else %}最新成交{% endif %}"{% if row.call_px_title %} title="{{ row.call_px_title }}"{% elif not row.call_live %} title="无成交叠价，最新=昨收"{% endif %}>{{ row.call_close }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num {{ row.call_prem_cls }}">{{ row.call_prem_pct }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num" data-opt-greek-code="{{ row.call_ts_code }}" data-opt-greek-field="iv">{{ row.call_iv }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num {{ row.call_per1y_cls }}" data-opt-greek-code="{{ row.call_ts_code }}" data-opt-greek-field="per1y"{% if row.call_per1y_title %} title="{{ row.call_per1y_title }}"{% endif %}>{{ row.call_per1y }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num {{ row.call_perc_cls }}" data-opt-greek-code="{{ row.call_ts_code }}" data-opt-greek-field="perc"{% if row.call_perc_title %} title="{{ row.call_perc_title }}"{% endif %}>{{ row.call_perc }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num {{ row.call_pera_cls }}" data-opt-greek-code="{{ row.call_ts_code }}" data-opt-greek-field="pera"{% if row.call_pera_title %} title="{{ row.call_pera_title }}"{% endif %}>{{ row.call_pera }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num" data-opt-greek-code="{{ row.call_ts_code }}" data-opt-greek-field="gamma">{{ row.call_gamma }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num {{ row.call_delta_cls }}" data-opt-greek-code="{{ row.call_ts_code }}" data-opt-greek-field="delta">{{ row.call_delta }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num {{ row.call_tv_ann_cls }}">{{ row.call_tv_ann }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num {{ row.call_time_cls }}">{{ row.call_time_val }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num">{{ row.call_eff_px }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num {{ row.call_disc_cls }}">{{ row.call_disc_prem_pct }}</td>
+                        <td class="opt-t-cell-call opt-t-cell-num">{{ row.call_spread }}</td>
+                        <th scope="row" class="opt-t-cell-strike {{ row.em_cls }}"{% if row.strike_title %} title="{{ row.strike_title }}"{% endif %}>
+                            <span>{{ row.strike_display }}</span>
+                        </th>
+                        <td class="opt-t-cell-strike opt-t-cell-num {{ row.moneyness_cls }} {{ row.em_cls }}">{{ row.moneyness_pct }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num">{{ row.put_spread }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num">{{ row.put_eff_px }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num {{ row.put_disc_cls }}">{{ row.put_disc_prem_pct }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num {{ row.put_time_cls }}">{{ row.put_time_val }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num {{ row.put_tv_ann_cls }}">{{ row.put_tv_ann }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num {{ row.put_delta_cls }}" data-opt-greek-code="{{ row.put_ts_code }}" data-opt-greek-field="delta">{{ row.put_delta }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num" data-opt-greek-code="{{ row.put_ts_code }}" data-opt-greek-field="gamma">{{ row.put_gamma }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num {{ row.put_pera_cls }}" data-opt-greek-code="{{ row.put_ts_code }}" data-opt-greek-field="pera"{% if row.put_pera_title %} title="{{ row.put_pera_title }}"{% endif %}>{{ row.put_pera }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num {{ row.put_perc_cls }}" data-opt-greek-code="{{ row.put_ts_code }}" data-opt-greek-field="perc"{% if row.put_perc_title %} title="{{ row.put_perc_title }}"{% endif %}>{{ row.put_perc }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num {{ row.put_per1y_cls }}" data-opt-greek-code="{{ row.put_ts_code }}" data-opt-greek-field="per1y"{% if row.put_per1y_title %} title="{{ row.put_per1y_title }}"{% endif %}>{{ row.put_per1y }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num" data-opt-greek-code="{{ row.put_ts_code }}" data-opt-greek-field="iv">{{ row.put_iv }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num {{ row.put_prem_cls }}">{{ row.put_prem_pct }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num{% if not row.put_live %} opt-t-px-daily{% endif %} {{ row.put_last_age_cls }}" data-opt-quote-code="{{ row.put_ts_code }}" data-opt-quote-field="last" data-opt-quote-base-title="{% if row.put_px_title %}{{ row.put_px_title }}{% elif not row.put_live %}无成交叠价，最新=昨收{% else %}最新成交{% endif %}"{% if row.put_px_title %} title="{{ row.put_px_title }}"{% elif not row.put_live %} title="无成交叠价，最新=昨收"{% endif %}>{{ row.put_close }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num {{ row.put_vol_cls }} {{ row.put_vol_age_cls }}" data-opt-quote-code="{{ row.put_ts_code }}" data-opt-quote-field="vol" data-opt-quote-base-title="成交量{% if row.put_vol_n is defined and row.put_vol_n is not none %} {{ row.put_vol_n|int }}{% endif %}">{{ row.put_vol }}</td>
+                        <td class="opt-t-cell-put opt-t-cell-num {{ row.put_oi_cls }} {{ row.put_oi_age_cls }}" data-opt-quote-code="{{ row.put_ts_code }}" data-opt-quote-field="oi" data-opt-quote-base-title="持仓量{% if row.put_oi_n is defined and row.put_oi_n is not none %} {{ row.put_oi_n|int }}{% endif %}">{{ row.put_oi }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="opt-t-empty-sec">该分组下无有效行权价行。</p>
+        {% endif %}
+    </section>
+    {% endfor %}

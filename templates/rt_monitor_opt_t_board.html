@@ -1,0 +1,3929 @@
+<!DOCTYPE html>
+<!-- rt-monitor-opt-t-board: {{ rt_monitor_static_ver }} -->
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>window.__RT_MONITOR_API_PREFIX__ = {{ rt_monitor_api_prefix | tojson }};</script>
+    <script>
+    (function () {
+        var u = {{ opt_t_underlying | tojson }};
+        try {
+            var qs = new URLSearchParams(location.search);
+            if (!qs.has('u')) {
+                var last = localStorage.getItem('rt_monitor_opt_t_board_last');
+                if (last && /^[0-9]{6}$/.test(last)) u = last;
+            }
+        } catch (e) {}
+        window.__optSpPlanPendingU = u;
+        window.__optSpPlanBoot = {{ opt_sp_plan_boot | default(none) | tojson }};
+        window.__optChipSpots = {{ opt_chip_spots | default({}) | tojson }};
+        window.__optSma120ByCode = {{ opt_sma120_boot | default({}) | tojson }};
+        var wan = 100;
+        try {
+            var n = parseInt(localStorage.getItem('rt_monitor_opt_sp_capital_wan_v1'), 10);
+            if (n >= 10 && n <= 10000) wan = n;
+        } catch (e2) {}
+        var prefix = (window.__RT_MONITOR_API_PREFIX__ || '').replace(/\/$/, '');
+        window.__optSpPlanEarlyKey = String(u || '') + '|' + String(wan);
+        var boot = window.__optSpPlanBoot;
+        var bootWan = boot && boot.capitalWan != null ? Number(boot.capitalWan) : NaN;
+        // 壳页已嵌入可用计划时不要抢 Flask 连接，留给静态脚本；SWR 由后续 loadPlan 补。
+        if (boot && boot.ok && String(boot.u || '') === String(u || '') && bootWan === wan) {
+            window.__optSpPlanEarly = null;
+        } else {
+            window.__optSpPlanEarly = fetch(
+                prefix + '/api/opt-sp-plan?u=' + encodeURIComponent(u || '') +
+                    '&hist=5&capitalWan=' + encodeURIComponent(String(wan)),
+                { credentials: 'same-origin' }
+            ).then(function (r) { return r.json(); }).catch(function () { return null; });
+        }
+    })();
+    </script>
+    <title>期权T型报价 · {{ opt_t_underlying }}</title>
+    <link rel="preload" as="script" href="{{ url_for('static', filename='js/rt_monitor_opt_sp_plan.js') }}?v={{ rt_monitor_static_ver }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ rt_monitor_static_ver }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rt_monitor.css') }}?v={{ rt_monitor_static_ver }}">
+    <style id="rt-monitor-opt-t-board-styles">
+        html, body.rt-monitor.rt-monitor-opt-t-board-page {
+            min-height: 100vh;
+            margin: 0;
+            padding: 0 !important;
+        }
+        body.rt-monitor.rt-monitor-opt-t-board-page {
+            overscroll-behavior-x: contain;
+            background: linear-gradient(165deg, #dce2ea 0%, #e8ecf1 45%, #e4e7ec 100%);
+            font-size: 14px;
+            line-height: 1.45;
+            color: #1a237e;
+            /* T型 / IV 共用字号，左右视觉对齐 */
+            --opt-board-fs: 0.82rem;
+            --opt-board-fs-th: 0.72rem;
+            --opt-board-lh: 1.22;
+            --opt-board-fs-label: 0.82rem;
+        }
+        .opt-t-wrap {
+            max-width: none;
+            width: 100%;
+            margin: 0;
+            padding: 1px 2px 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+        /* 桌面左右并排。右栏按 IV 表完整宽度（约 1560 含内边距）给足，
+           超出视口时才收缩；左栏至少 40%。禁止 3360 类 max-width 换行。 */
+        .opt-t-layout {
+            display: flex;
+            flex-wrap: nowrap;
+            align-items: flex-start;
+            justify-content: flex-start;
+            gap: 1px;
+        }
+        .opt-t-main-col {
+            flex: 1 1 0%;
+            min-width: 40%;
+            max-width: none;
+            overflow-x: auto;
+        }
+        .opt-t-right-col {
+            flex: 0 1 1560px;
+            width: auto;
+            max-width: 1560px;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+        .opt-sp-plan {
+            /* 与铁律相同：不撑开右列，铺满 IV 看板定下的宽度，左右对齐 */
+            width: 0;
+            min-width: 100%;
+            max-width: 100%;
+        }
+        .opt-sp-plan-inner {
+            width: 100%;
+            box-sizing: border-box;
+            background: #fff;
+            border: 1px solid #dbeafe;
+            border-right: 5px solid #0f766e;
+            border-radius: 4px;
+            padding: 8px 8px 10px;
+        }
+        .opt-sp-preview {
+            margin: 0 0 8px;
+            padding: 7px 8px 8px;
+            border: 1px dashed #f59e0b;
+            border-radius: 8px;
+            background: #fffbeb;
+        }
+        .opt-sp-preview-head {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 6px 10px;
+            margin-bottom: 6px;
+            font-size: 13px;
+            line-height: 1.35;
+            color: #92400e;
+        }
+        .opt-sp-preview-title {
+            font-weight: 650;
+            color: #b45309;
+        }
+        .opt-sp-preview-note {
+            color: #a16207;
+        }
+        .opt-sp-preview .opt-sp-sec {
+            margin-top: 6px;
+        }
+        .opt-sp-preview .opt-sp-open-card {
+            background: #fff;
+        }
+        .opt-sp-head {
+            display: flex;
+            flex-direction: row;
+            flex-wrap: nowrap;
+            align-items: baseline;
+            gap: 0;
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #eee;
+            white-space: nowrap;
+            overflow: hidden;
+        }
+        .opt-sp-title {
+            margin: 0;
+            flex: 0 0 auto;
+            font-size: 14px;
+            font-weight: 600;
+            color: #444;
+            line-height: 1.35;
+        }
+        .opt-sp-head-item,
+        .opt-sp-head-note {
+            margin: 0;
+            flex: 0 0 auto;
+            font-size: 13px;
+            line-height: 1.35;
+            color: #64748b;
+        }
+        .opt-sp-capital-lab {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .opt-sp-capital-wan {
+            width: 4.6em;
+            height: 22px;
+            margin: 0;
+            padding: 0 4px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            font-size: 13px;
+            line-height: 20px;
+            color: #334155;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+            background: #fff;
+            box-sizing: border-box;
+        }
+        .opt-sp-capital-wan:focus {
+            outline: 2px solid #99f6e4;
+            border-color: #0f766e;
+        }
+        .opt-sp-head-note {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .opt-sp-head > * + *::before {
+            content: '·';
+            margin: 0 8px;
+            color: #cbd5e1;
+        }
+        .opt-sp-asof, .opt-sp-flags, .opt-sp-empty, .opt-sp-occ-lab, .opt-sp-occ-sub {
+            margin: 0;
+            font-size: 13px;
+            color: #64748b;
+            line-height: 1.5;
+        }
+        .opt-sp-flags {
+            display: flex;
+            flex-wrap: nowrap;
+            align-items: center;
+            gap: 6px;
+            margin: 0;
+            color: #0f172a;
+            flex: 0 0 auto;
+        }
+        .opt-sp-pulse {
+            display: flex;
+            flex-wrap: nowrap;
+            align-items: center;
+            gap: 10px;
+            margin: 0 0 8px;
+            white-space: nowrap;
+            overflow: hidden;
+        }
+        .opt-sp-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 1px 8px;
+            border-radius: 999px;
+            background: #f1f5f9;
+            color: #334155;
+            font-size: 12px;
+            line-height: 1.5;
+            border: 1px solid #e2e8f0;
+        }
+        .opt-sp-chip--spot {
+            background: #0f766e;
+            border-color: #0d9488;
+            color: #fff;
+            font-size: 13px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            padding: 1px 10px;
+        }
+        .opt-sp-chip--sig {
+            background: #ecfdf5;
+            border-color: #a7f3d0;
+            color: #115e59;
+        }
+        .opt-sp-chip--warn {
+            background: #fff7ed;
+            border-color: #fed7aa;
+            color: #9a3412;
+        }
+        .opt-sp-chip--bt {
+            background: #f8fafc;
+            border-color: #cbd5e1;
+            color: #0f172a;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+        .opt-sp-chip--on {
+            background: #f0fdfa;
+            border-color: #99f6e4;
+            color: #115e59;
+            font-weight: 700;
+        }
+        .opt-sp-status-pills {
+            display: flex;
+            flex-wrap: nowrap;
+            align-items: center;
+            gap: 6px;
+            margin: 0 0 8px;
+        }
+        .opt-sp-h {
+            margin: 0 0 6px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #444;
+            line-height: 1.35;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            justify-content: space-between;
+            flex-wrap: nowrap;
+        }
+        .opt-sp-h-lead {
+            display: inline-flex;
+            align-items: center;
+            flex-wrap: nowrap;
+            gap: 8px;
+            min-width: 0;
+            flex: 1 1 auto;
+            white-space: nowrap;
+            overflow: hidden;
+        }
+        .opt-sp-bt-inline {
+            font-size: 12px;
+            font-weight: 500;
+            color: #475569;
+            font-variant-numeric: tabular-nums;
+        }
+        .opt-sp-sec {
+            margin: 0 0 10px;
+            padding: 8px 8px 6px;
+            background: #f8fafc;
+            border: 1px solid #e8eef8;
+            border-radius: 8px;
+        }
+        .opt-sp-stat-row {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+            margin: 0 0 10px;
+        }
+        .opt-sp-stat {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            padding: 8px 10px;
+            background: #f8fafc;
+            border: 1px solid #e8eef8;
+            border-radius: 8px;
+        }
+        .opt-sp-stat.is-on {
+            background: #f0fdfa;
+            border-color: #99f6e4;
+        }
+        .opt-sp-stat-k {
+            font-size: 12px;
+            color: #64748b;
+        }
+        .opt-sp-stat-v {
+            font-size: 13px;
+            font-weight: 600;
+            color: #0f172a;
+        }
+        .opt-sp-table-wrap {
+            overflow-x: auto;
+            max-width: 100%;
+        }
+        .opt-sp-table {
+            width: 100%;
+            table-layout: auto;
+            border-collapse: collapse;
+            font-size: 13px;
+            line-height: 1.5;
+            font-variant-numeric: tabular-nums;
+        }
+        .opt-sp-table th, .opt-sp-table td {
+            border-bottom: 1px solid #e8eef8;
+            padding: 5px 8px;
+            text-align: center;
+            vertical-align: middle;
+            white-space: nowrap;
+        }
+        .opt-sp-table thead th {
+            color: #64748b;
+            font-weight: 600;
+            font-size: 12px;
+            background: #eef2f7;
+        }
+        .opt-sp-table tbody td {
+            background: #fff;
+        }
+        .opt-sp-table th.opt-sp-th-fill,
+        .opt-sp-table td.opt-sp-td-text {
+            width: 99%;
+            text-align: left;
+        }
+        .opt-sp-table td.opt-sp-td-act,
+        .opt-sp-table th.opt-sp-th-act {
+            padding-right: 8px;
+            text-align: center;
+            width: 1%;
+            white-space: nowrap;
+        }
+        .opt-sp-fill-table.opt-sp-table {
+            width: 100%;
+        }
+        .opt-sp-table tbody tr:hover td { background: #f8fafc; }
+        .opt-sp-open-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .opt-sp-open-card {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: #fff;
+            border: 1px solid #e8eef8;
+            border-radius: 8px;
+            padding: 6px 10px;
+        }
+        .opt-sp-open-id {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex: 0 0 auto;
+        }
+        .opt-sp-open-act {
+            font-size: 13px;
+            font-weight: 600;
+            color: #334155;
+        }
+        .opt-sp-open-fields {
+            display: flex;
+            align-items: stretch;
+            flex: 1 1 auto;
+            min-width: 0;
+            margin: 0;
+        }
+        .opt-sp-fld {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 1px;
+            padding: 0 10px;
+            border-left: 1px solid #e2e8f0;
+            min-width: 0;
+            flex: 0 0 auto;
+        }
+        .opt-sp-fld--exit {
+            flex: 1 1 auto;
+        }
+        .opt-sp-fld dt {
+            margin: 0;
+            font-size: 11px;
+            font-weight: 600;
+            color: #64748b;
+            line-height: 1.2;
+        }
+        .opt-sp-fld dd {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 700;
+            color: #0f172a;
+            line-height: 1.3;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .opt-sp-fld--exit dd {
+            font-weight: 500;
+        }
+        .opt-sp-open-card .opt-sp-btn {
+            flex: 0 0 auto;
+        }
+        .opt-sp-sig-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 6px;
+            width: 100%;
+        }
+        .opt-sp-sig-card {
+            background: #fff;
+            border: 1px solid #e8eef8;
+            border-radius: 8px;
+            padding: 6px 8px;
+            min-width: 0;
+        }
+        .opt-sp-sig-card.is-danger {
+            border-color: #fed7aa;
+            background: #fffbeb;
+        }
+        .opt-sp-sig-card-top {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 13px;
+            font-variant-numeric: tabular-nums;
+            color: #0f172a;
+        }
+        .opt-sp-sig-spot {
+            color: #475569;
+        }
+        .opt-sp-sig-card-bot {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+            margin-top: 4px;
+            min-width: 0;
+        }
+        .opt-sp-sig-card-bot .opt-sp-chip {
+            min-width: 0;
+            max-width: 100%;
+        }
+        .opt-sp-sig-danger {
+            flex: 0 0 auto;
+            font-size: 12px;
+            font-weight: 600;
+            color: #9a3412;
+        }
+        .opt-sp-btn {
+            font-size: 13px;
+            padding: 4px 12px;
+            min-height: 28px;
+            border: 1px solid #0f766e;
+            background: #f0fdfa;
+            color: #115e59;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 160ms ease, border-color 160ms ease;
+        }
+        .opt-sp-btn:hover { background: #ccfbf1; }
+        .opt-sp-btn:focus-visible {
+            outline: 2px solid #0f766e;
+            outline-offset: 2px;
+        }
+        .opt-sp-btn-act {
+            font-weight: 600;
+        }
+        .opt-sp-rule-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .opt-sp-rule-card {
+            background: #fff;
+            border: 1px solid #e8eef8;
+            border-radius: 8px;
+            padding: 8px 10px 10px;
+            min-width: 0;
+        }
+        .opt-sp-rule-card--ch { border-left: 3px solid #3b82f6; }
+        .opt-sp-rule-card--gap { border-left: 3px solid #10b981; }
+        .opt-sp-rule-card--mom { border-left: 3px solid #f59e0b; }
+        .opt-sp-rule-card--bias { border-left: 3px solid #8b5cf6; }
+        @media (max-width: 1100px) {
+            .opt-sp-rule-grid,
+            .opt-sp-stat-row { grid-template-columns: 1fr; }
+        }
+        .opt-sp-rule-top {
+            display: flex;
+            align-items: baseline;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 6px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #eee;
+        }
+        .opt-sp-rule-top .opt-sp-chip--bt {
+            flex: 1 1 100%;
+            justify-content: flex-start;
+        }
+        .opt-sp-rule-name {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 700;
+            color: #0f172a;
+        }
+        .opt-sp-rule-dl {
+            display: grid;
+            grid-template-columns: 3em minmax(0, 1fr);
+            gap: 4px 8px;
+            margin: 0;
+        }
+        .opt-sp-rule-dl dt {
+            margin: 0;
+            font-size: 12px;
+            color: #64748b;
+            font-weight: 600;
+        }
+        .opt-sp-rule-dl dd {
+            margin: 0;
+            font-size: 13px;
+            color: #0f172a;
+            line-height: 1.5;
+            white-space: normal;
+        }
+        .opt-sp-occ { margin: 0 0 10px; }
+        .opt-sp-occ--inline {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0;
+            min-width: 0;
+            flex: 1 1 auto;
+        }
+        .opt-sp-occ-lab {
+            margin: 0 0 4px;
+            font-size: 13px;
+            color: #334155;
+        }
+        .opt-sp-occ--inline .opt-sp-occ-lab {
+            margin: 0;
+            flex: 0 0 auto;
+        }
+        .opt-sp-occ-track {
+            height: 8px;
+            background: #f1f5f9;
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            margin: 3px 0 6px;
+        }
+        .opt-sp-occ--inline .opt-sp-occ-track {
+            width: 88px;
+            flex: 0 0 88px;
+            margin: 0;
+        }
+        .opt-sp-occ-track i { display: block; height: 100%; }
+        .opt-sp-occ-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 12px;
+            font-size: 12px;
+            color: #475569;
+        }
+        .opt-sp-occ--inline .opt-sp-occ-legend {
+            flex-wrap: nowrap;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .opt-sp-occ-legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .opt-sp-occ-legend i {
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
+            display: inline-block;
+        }
+        .opt-sp-occ-ch { background: #3b82f6; }
+        .opt-sp-occ-gap { background: #10b981; }
+        .opt-sp-occ-mom { background: #f59e0b; }
+        .opt-sp-occ-bias { background: #8b5cf6; }
+        /* 右侧栏：IV 看板 + 读盘卡 + 铁律；宽度跟右栏走，避免 1530 表把 flex min-width 顶死 */
+        #opt-iv-board-root,
+        .opt-iv-panel {
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+        }
+        .opt-iv-panel-inner {
+            width: 100%;
+            max-width: 100%;
+            box-sizing: border-box;
+            background: linear-gradient(165deg, #f8fafc 0%, #ffffff 40%, #eef4ff 100%);
+            border: 1px solid #dbeafe;
+            border-right: 5px solid #1e40af;
+            border-radius: 4px;
+            padding: 8px 8px 10px;
+            box-shadow: none;
+        }
+        .opt-iv-head {
+            display: flex;
+            align-items: baseline;
+            flex-wrap: nowrap;
+            gap: 8px;
+            margin-bottom: 6px;
+            white-space: nowrap;
+            overflow-x: auto;
+        }
+        .opt-iv-eyebrow,
+        .opt-iv-title,
+        .opt-iv-asof {
+            margin: 0;
+            flex: 0 0 auto;
+            font-size: var(--opt-board-fs-label);
+            line-height: var(--opt-board-lh);
+        }
+        .opt-iv-eyebrow {
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            color: #3b82f6;
+        }
+        .opt-iv-title {
+            font-weight: 800;
+            color: #1e3a8a;
+            letter-spacing: 0.02em;
+        }
+        .opt-iv-asof {
+            font-weight: 500;
+            color: #64748b;
+        }
+        .opt-iv-err {
+            margin: 0 0 8px;
+            padding: 6px 8px;
+            font-size: 0.78rem;
+            color: #991b1b;
+            background: #fef2f2;
+            border-radius: 6px;
+        }
+        .opt-iv-empty {
+            margin: 0;
+            font-size: 0.8rem;
+            color: #64748b;
+        }
+        .opt-iv-block {
+            margin-top: 10px;
+            padding-top: 8px;
+            border-top: 1px dashed #bfdbfe;
+        }
+        .opt-iv-block:first-of-type { border-top: none; padding-top: 0; }
+        .opt-iv-scroll {
+            overflow-x: hidden;
+            width: 100%;
+            max-width: 100%;
+            overscroll-behavior-x: contain;
+            border-radius: 6px;
+            border: 1px solid #dbeafe;
+            background: #fff;
+        }
+        /* 铺满右栏，列宽按原 1530 比例缩放，避免 1530 固定宽在窄栏里出横条 */
+        .opt-iv-table {
+            width: 100%;
+            max-width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-size: var(--opt-board-fs);
+            line-height: var(--opt-board-lh);
+        }
+        /* 合计 100%：与原 1530px 列宽同比例（日期/Per/中轴略宽，σ/Min/Max 略紧） */
+        .opt-iv-cg-date { width: 3.66%; }
+        .opt-iv-cg-val { width: 3.01%; }
+        .opt-iv-cg-sig { width: 2.88%; }
+        .opt-iv-cg-sig3 { width: 3.01%; }
+        .opt-iv-cg-max { width: 3.14%; }
+        .opt-iv-cg-per { width: 3.14%; }
+        .opt-iv-cg-per1y { width: 3.40%; }
+        .opt-iv-cg-wing { width: 3.79%; }
+        .opt-iv-cg-hv { width: 3.27%; }
+        .opt-iv-cg-delta { width: 3.14%; }
+        .opt-iv-cg-center { width: 4.18%; }
+        .opt-iv-cg-hvper { width: 3.27%; }
+        .opt-iv-cg-skew { width: 3.01%; }
+        .opt-iv-table th,
+        .opt-iv-table td {
+            padding: 4px 3px;
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+            text-align: center;
+            border-bottom: 1px solid #e8eef8;
+            vertical-align: middle;
+            font-size: var(--opt-board-fs);
+            line-height: var(--opt-board-lh);
+        }
+        .opt-iv-table thead th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            font-weight: 600;
+            font-size: var(--opt-board-fs-th);
+            letter-spacing: 0.01em;
+            line-height: var(--opt-board-lh);
+            padding: 4px 5px;
+        }
+        .opt-iv-th-call { background: #ffe4e6; color: #9f1239; }
+        .opt-iv-th-put { background: #dbeafe; color: #1e3a8a; }
+        .opt-iv-th-center {
+            background: #1e40af;
+            color: #fff;
+            font-weight: 800;
+        }
+        .opt-iv-th-hv,
+        .opt-iv-th-delta,
+        .opt-iv-th-hvper,
+        .opt-iv-th-skew {
+            background: #e2e8f0;
+            color: #334155;
+            font-weight: 700;
+        }
+        .opt-iv-th-wing { font-weight: 800; font-size: var(--opt-board-fs-th); }
+        .opt-iv-th-sigma { background-image: linear-gradient(180deg, rgba(255,255,255,0.25), transparent); }
+        .opt-iv-th-per {
+            outline: 1px solid rgba(217, 119, 6, 0.45);
+            font-size: var(--opt-board-fs-th);
+        }
+        .opt-iv-cell-call { background: #fff7f8; color: #1f2937; }
+        .opt-iv-cell-put { background: #f5f9ff; color: #1f2937; }
+        /* 中轴扫视带：字重区分，字号与 T型/IV 正文统一 */
+        .opt-iv-cell-center {
+            background: #e0e7ff;
+            color: #1e3a8a;
+            font-weight: 800;
+            font-size: var(--opt-board-fs);
+            padding: 4px 6px !important;
+        }
+        .opt-iv-cell-hv,
+        .opt-iv-cell-delta,
+        .opt-iv-cell-hvper,
+        .opt-iv-cell-skew {
+            background: #f1f5f9;
+            color: #0f172a;
+            font-weight: 700;
+        }
+        .opt-iv-delta--pos { color: #9a3412; }
+        .opt-iv-delta--neg { color: #1d4ed8; }
+        .opt-iv-skew--put { color: #0f766e; }
+        .opt-iv-skew--fat { color: #c2410c; }
+        .opt-iv-skew--call { color: #be123c; }
+        .opt-iv-hv--muted {
+            opacity: 0.42;
+            font-weight: 500 !important;
+            color: #64748b !important;
+        }
+        .opt-iv-cell-wing {
+            font-weight: 800;
+            color: #0f172a;
+            background: #e2e8f0 !important;
+            font-size: var(--opt-board-fs);
+            padding: 4px 5px !important;
+            font-variant-numeric: tabular-nums;
+        }
+        .opt-iv-cell-wing--click {
+            cursor: pointer;
+            text-decoration: underline;
+            text-decoration-color: rgba(30, 64, 175, 0.35);
+            text-underline-offset: 2px;
+        }
+        .opt-iv-cell-wing--click:hover,
+        .opt-iv-cell-wing--click:focus-visible {
+            background: #cbd5e1 !important;
+            outline: 2px solid #1e40af;
+            outline-offset: -2px;
+        }
+        /* IV 双轴弹窗：透明遮罩可点背后；壳可拖+resize（对齐融资占比范式） */
+        body.rt-monitor-opt-t-board-page #opt-iv-series-modal-overlay.bias-series-modal-overlay {
+            background: transparent;
+            backdrop-filter: none;
+            pointer-events: none;
+            z-index: 240;
+        }
+        body.rt-monitor-opt-t-board-page #opt-iv-series-modal-overlay.bias-series-modal-overlay .opt-iv-series-modal-shell {
+            pointer-events: auto;
+        }
+        .bias-series-modal.opt-iv-series-modal-shell {
+            width: min(1400px, 96vw);
+            min-width: 360px;
+            min-height: 320px;
+            height: min(72vh, 95vh);
+            max-width: min(96vw, 100%);
+            max-height: 95vh;
+            box-sizing: border-box;
+            overflow: auto;
+            resize: both;
+        }
+        .bias-series-chart-wrap.opt-iv-series-modal-chart-wrap {
+            flex: 1;
+            min-height: 160px;
+            width: 100%;
+            margin-top: 8px;
+        }
+        .opt-iv-series-vrp {
+            margin: 0 12px 4px;
+            font-size: 0.82rem;
+            color: #334155;
+            line-height: 1.4;
+        }
+        body.rt-monitor-opt-t-board-page #opt-sp-hist-modal-overlay.bias-series-modal-overlay {
+            background: transparent;
+            backdrop-filter: none;
+            pointer-events: none;
+            z-index: 241;
+        }
+        body.rt-monitor-opt-t-board-page #opt-sp-hist-modal-overlay.bias-series-modal-overlay .opt-sp-hist-modal-shell {
+            pointer-events: auto;
+        }
+        .bias-series-modal.opt-sp-hist-modal-shell {
+            width: min(920px, 96vw);
+            min-width: 360px;
+            min-height: 320px;
+            height: min(72vh, 95vh);
+            max-width: min(96vw, 100%);
+            max-height: 95vh;
+            box-sizing: border-box;
+            overflow: auto;
+            resize: both;
+        }
+        .opt-sp-hist-modal-body {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+        }
+        .opt-sp-hist-modal-msg {
+            margin: 0 0 8px;
+            font-size: 13px;
+            color: #666;
+        }
+        body.rt-monitor-opt-t-board-page #opt-sp-fill-modal-overlay.bias-series-modal-overlay {
+            background: transparent;
+            backdrop-filter: none;
+            pointer-events: none;
+            z-index: 260;
+        }
+        body.rt-monitor-opt-t-board-page #opt-sp-fill-modal-overlay.bias-series-modal-overlay .opt-sp-fill-modal-shell {
+            pointer-events: auto;
+        }
+        #opt-sp-fill-modal-header {
+            cursor: move;
+            user-select: none;
+        }
+        .bias-series-modal.opt-sp-fill-modal-shell {
+            width: min(780px, 96vw);
+            min-width: 360px;
+            min-height: 240px;
+            height: min(420px, 90vh);
+            max-width: min(96vw, 100%);
+            max-height: 95vh;
+            box-sizing: border-box;
+            overflow: auto;
+            resize: both;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+        .opt-sp-fill-modal-body {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            padding: 12px 16px 16px;
+        }
+        .opt-sp-fill-form-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0 0 10px;
+            font-size: 13px;
+        }
+        .opt-sp-fill-form-row[hidden] { display: none !important; }
+        .opt-sp-fill-form-row input[type="date"] {
+            font: inherit;
+            padding: 2px 8px;
+        }
+        .opt-sp-fill-form-row input[type="date"]:disabled {
+            color: #334155;
+            background: #f8fafc;
+            border-color: #e2e8f0;
+        }
+        .opt-sp-fill-meta {
+            margin: 0 0 8px;
+            font-size: 13px;
+            color: #64748b;
+        }
+        .opt-sp-fill-err {
+            color: #b91c1c;
+            font-size: 13px;
+            margin: 8px 0 0;
+        }
+        .opt-sp-fill-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .opt-sp-btn-primary {
+            background: #0f766e;
+            color: #fff;
+            border-color: #0f766e;
+        }
+        .opt-sp-btn-primary:hover { background: #0d9488; color: #fff; }
+        .opt-sp-fill-table input {
+            width: 6em;
+            font: inherit;
+            padding: 1px 4px;
+            box-sizing: border-box;
+        }
+        .opt-sp-fill-table input.opt-sp-fill-lots {
+            width: 4.2em;
+        }
+        .opt-iv-cell-med { font-weight: 700; color: #0f172a; background: #fef3c7 !important; }
+        .opt-iv-cell-ext { font-weight: 700; color: #b45309; }
+        .opt-iv-cell-sigma { color: #475569; }
+        /* 最新越过 σ 阈：σ 列醒目底色（±3 比 ±2 更深） */
+        .opt-iv-sig--hi2 {
+            background: #ffedd5 !important;
+            color: #c2410c !important;
+            font-weight: 800;
+            box-shadow: inset 0 0 0 1px rgba(194, 65, 12, 0.35);
+        }
+        .opt-iv-sig--hi3 {
+            background: #fecdd3 !important;
+            color: #9f1239 !important;
+            font-weight: 800;
+            box-shadow: inset 0 0 0 1px rgba(159, 18, 57, 0.45);
+        }
+        .opt-iv-sig--lo2 {
+            background: #cffafe !important;
+            color: #0e7490 !important;
+            font-weight: 800;
+            box-shadow: inset 0 0 0 1px rgba(14, 116, 144, 0.35);
+        }
+        .opt-iv-sig--lo3 {
+            background: #ddd6fe !important;
+            color: #5b21b6 !important;
+            font-weight: 800;
+            box-shadow: inset 0 0 0 1px rgba(91, 33, 182, 0.4);
+        }
+        .opt-iv-cell-date {
+            color: #64748b;
+            font-size: var(--opt-board-fs);
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+        }
+        .opt-iv-cell-per {
+            font-weight: 800;
+            font-size: var(--opt-board-fs);
+            padding: 4px 3px !important;
+        }
+        .opt-iv-per--low { background: #cffafe !important; color: #0e7490; }
+        .opt-iv-per--mid { background: #ecfccb !important; color: #3f6212; }
+        .opt-iv-per--warm { background: #ffedd5 !important; color: #c2410c; }
+        .opt-iv-per--high { background: #fecdd3 !important; color: #9f1239; }
+        .opt-iv-block-hint {
+            margin: 4px 2px 0;
+            font-size: 0.76rem;
+            color: #64748b;
+        }
+        .opt-iv-block--empty .opt-iv-table { opacity: 0.55; }
+        /* 仅真正窄屏才上下堆叠；1200 以上一律左右（含 1920 / 2560） */
+        @media (max-width: 1200px) {
+            .opt-t-layout {
+                flex-wrap: wrap;
+            }
+            .opt-t-main-col {
+                flex: 1 1 100%;
+                max-width: 100%;
+            }
+            .opt-t-right-col {
+                flex: 0 0 auto;
+                width: auto;
+                max-width: 100%;
+            }
+        }
+        /* 铁律：放在右侧 IV 下方。width:0 让长文本不参与右列固有宽度计算，
+           右列宽度只由 IV 表决定；min-width:100% 保证实际铺满右列 */
+        .opt-t-rules-panel {
+            width: 0;
+            min-width: 100%;
+            position: static;
+        }
+        .opt-t-rules-panel-inner {
+            background: linear-gradient(165deg, #fffdf8 0%, #ffffff 42%, #f3f7fc 100%);
+            border: 1px solid rgba(21, 101, 192, 0.22);
+            border-left: 5px solid #0d47a1;
+            border-radius: 4px;
+            padding: 14px 14px 12px;
+            box-shadow: none;
+        }
+        .opt-t-rules-eyebrow {
+            margin: 0 0 4px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #5c6bc0;
+        }
+        .opt-t-rules-title {
+            margin: 0 0 12px;
+            font-size: 1.05rem;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+            color: #0d47a1;
+            line-height: 1.3;
+        }
+        .opt-t-rules-list {
+            margin: 0;
+            padding: 0;
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .opt-t-rules-item {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            padding: 8px 8px 8px 0;
+            border-bottom: 1px solid rgba(21, 101, 192, 0.1);
+        }
+        .opt-t-rules-item:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+        .opt-t-rules-item--critical .opt-t-rules-num {
+            background: #b71c1c;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+        }
+        .opt-t-rules-num {
+            flex: 0 0 26px;
+            width: 26px;
+            height: 26px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            background: #1565c0;
+            color: #fff;
+            font-size: 0.82rem;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            line-height: 1;
+        }
+        .opt-t-rules-body {
+            flex: 1;
+            min-width: 0;
+        }
+        .opt-t-rules-lead {
+            display: block;
+            margin: 0 0 4px;
+            font-size: 0.9rem;
+            font-weight: 800;
+            color: #1a237e;
+            line-height: 1.35;
+        }
+        .opt-t-rules-body p {
+            margin: 0;
+            font-size: 0.84rem;
+            line-height: 1.55;
+            color: #37474f;
+        }
+        .opt-t-kw {
+            display: inline;
+            padding: 0 4px;
+            border-radius: 4px;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            color: #0d47a1;
+            background: rgba(21, 101, 192, 0.12);
+        }
+        .opt-t-kw--pos {
+            color: #1b5e20;
+            background: rgba(27, 94, 32, 0.14);
+        }
+        .opt-t-kw--warn {
+            color: #e65100;
+            background: rgba(230, 81, 0, 0.14);
+        }
+        .opt-t-kw--danger {
+            color: #b71c1c;
+            background: rgba(183, 28, 28, 0.12);
+        }
+        .opt-t-kw--bull {
+            color: #c62828;
+            background: rgba(198, 40, 40, 0.1);
+        }
+        .opt-t-kw--bear {
+            color: #1b5e20;
+            background: rgba(27, 94, 32, 0.12);
+        }
+        .opt-t-rules-foot {
+            margin: 12px 0 0;
+            padding-top: 10px;
+            border-top: 1px dashed rgba(21, 101, 192, 0.2);
+            font-size: 0.75rem;
+            line-height: 1.45;
+            color: #607d8b;
+        }
+        /* 读盘卡：IV 与铁律之间。width:0 同铁律，不撑宽右列 */
+        .opt-vol-guide {
+            width: 0;
+            min-width: 100%;
+            position: static;
+        }
+        .opt-vol-guide-inner {
+            background: linear-gradient(165deg, #f4fbf9 0%, #ffffff 40%, #eef6f4 100%);
+            border: 1px solid rgba(15, 118, 110, 0.22);
+            border-left: 5px solid #0f766e;
+            border-radius: 4px;
+            padding: 12px 12px 10px;
+            box-shadow: none;
+        }
+        .opt-vol-guide-eyebrow {
+            margin: 0 0 2px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #0f766e;
+        }
+        .opt-vol-guide-title {
+            margin: 0 0 10px;
+            font-size: 1.05rem;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+            color: #115e59;
+            line-height: 1.3;
+        }
+        .opt-vol-guide-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px 12px;
+        }
+        .opt-vol-guide-sec {
+            min-width: 0;
+        }
+        .opt-vol-guide-sec--wide {
+            grid-column: 1 / -1;
+            margin-top: 4px;
+            padding-top: 8px;
+            border-top: 1px dashed rgba(15, 118, 110, 0.18);
+        }
+        .opt-vol-guide-sec h3 {
+            margin: 0 0 6px;
+            font-size: 0.86rem;
+            font-weight: 800;
+            color: #134e4a;
+            line-height: 1.35;
+        }
+        .opt-vol-guide-sec ul,
+        .opt-vol-guide-sec ol {
+            margin: 0;
+            padding-left: 1.15em;
+            font-size: 0.8rem;
+            line-height: 1.5;
+            color: #37474f;
+        }
+        .opt-vol-guide-sec li + li {
+            margin-top: 3px;
+        }
+        .opt-vol-guide-sec p {
+            margin: 6px 0 0;
+            font-size: 0.8rem;
+            line-height: 1.5;
+            color: #37474f;
+        }
+        .opt-vol-guide-note {
+            color: #546e7a !important;
+        }
+        .opt-vol-guide-sec code {
+            font-size: 0.76rem;
+            padding: 0 3px;
+            border-radius: 3px;
+            background: rgba(15, 118, 110, 0.08);
+            color: #115e59;
+        }
+        .opt-vol-guide-chip {
+            display: inline-block;
+            margin-left: 4px;
+            padding: 0 6px;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: #0f766e;
+            background: rgba(15, 118, 110, 0.12);
+            vertical-align: 1px;
+        }
+        .opt-vol-guide-cols {
+            columns: 2;
+            column-gap: 14px;
+        }
+        .opt-vol-guide-cols li {
+            break-inside: avoid;
+        }
+        .opt-vol-guide-sec--todo ol {
+            padding-left: 1.2em;
+        }
+        @media (max-width: 1100px) {
+            .opt-vol-guide-grid,
+            .opt-vol-guide-cols {
+                grid-template-columns: 1fr;
+                columns: 1;
+            }
+        }
+        /* 顶栏（标的 chips / 弹性排序 / 警示）：滚页时固定 */
+        .opt-t-head {
+            position: sticky;
+            top: 1px;
+            z-index: 40;
+            background: linear-gradient(180deg, #ffffff 0%, #f0f6fc 100%);
+            border: 1px solid rgba(21, 101, 192, 0.18);
+            border-radius: 4px;
+            padding: 1px 16px;
+            margin: 0;
+            box-shadow: none;
+        }
+        .opt-t-head h1 {
+            margin: 0;
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            color: #0d47a1;
+        }
+        .opt-t-head p {
+            margin: 0;
+            font-size: 0.88rem;
+            color: #3949ab;
+        }
+        .opt-t-head-bar {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            align-items: center;
+            gap: 8px 12px;
+            margin-bottom: 0;
+        }
+        .opt-t-head-bar h1 {
+            margin: 0;
+            flex: 0 0 auto;
+            line-height: 1.1;
+            align-self: center;
+            font-size: 1.12rem;
+            white-space: nowrap;
+        }
+        .opt-t-title-stack {
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 2px;
+            flex: 0 0 auto;
+            width: max-content;
+        }
+        .opt-t-title-actions {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 4px;
+        }
+        .opt-t-title-actions .opt-t-add {
+            padding: 2px 7px;
+            font-size: 0.72rem;
+            line-height: 1.2;
+        }
+        .opt-t-chips-wrap {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            justify-self: center;
+        }
+        .opt-t-chips-label {
+            font-size: 0.82rem;
+            color: #5c6bc0;
+            font-weight: 600;
+        }
+        .opt-t-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            align-items: center;
+        }
+        /* SMA120 动量闸状态灯：高对比，只展示不禁开 */
+        .opt-t-sma120-lamp {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 999px;
+            border: 2px solid transparent;
+            font-size: 0.88rem;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 0.01em;
+            line-height: 1.2;
+            white-space: nowrap;
+            user-select: none;
+        }
+        .opt-t-sma120-lamp::before {
+            content: '';
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+        }
+        .opt-t-sma120-lamp .opt-t-sma120-gap {
+            font-weight: 700;
+            opacity: 0.95;
+        }
+        .opt-t-sma120-lamp.is-pass {
+            background: #bbf7d0;
+            border-color: #16a34a;
+            color: #14532d;
+        }
+        .opt-t-sma120-lamp.is-pass::before {
+            background: #16a34a;
+            box-shadow: 0 0 0 2px #fff, 0 0 8px rgba(22, 163, 74, 0.75);
+        }
+        .opt-t-sma120-lamp.is-fail {
+            background: #ffedd5;
+            border-color: #ea580c;
+            color: #7c2d12;
+        }
+        .opt-t-sma120-lamp.is-fail::before {
+            background: #ea580c;
+            box-shadow: 0 0 0 2px #fff, 0 0 8px rgba(234, 88, 12, 0.7);
+        }
+        .opt-t-sma120-lamp.is-empty {
+            background: #f1f5f9;
+            border-color: #94a3b8;
+            color: #475569;
+            font-weight: 700;
+        }
+        .opt-t-sma120-lamp.is-empty::before {
+            background: #94a3b8;
+            box-shadow: none;
+        }
+        /* chip 内嵌：挂在标的名后，更紧凑 */
+        .opt-t-chip .opt-t-sma120-lamp {
+            padding: 1px 6px;
+            gap: 3px;
+            border-width: 1.5px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            margin-left: 2px;
+        }
+        .opt-t-chip .opt-t-sma120-lamp::before {
+            width: 6px;
+            height: 6px;
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
+        }
+        .opt-t-chip .opt-t-sma120-lamp.is-pass::before {
+            box-shadow: 0 0 0 1px #fff, 0 0 5px rgba(22, 163, 74, 0.7);
+        }
+        .opt-t-chip .opt-t-sma120-lamp.is-fail::before {
+            box-shadow: 0 0 0 1px #fff, 0 0 5px rgba(234, 88, 12, 0.7);
+        }
+        .opt-t-chip {
+            position: relative;
+            display: inline-flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 2px;
+            padding: 4px 10px 5px;
+            border-radius: 12px;
+            border: 1px solid rgba(21, 101, 192, 0.35);
+            background: #fff;
+            color: #0d47a1;
+            font-size: 0.88rem;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            cursor: pointer;
+        }
+        .opt-t-chip-main {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            white-space: nowrap;
+        }
+        .opt-t-chip-quote {
+            display: grid;
+            grid-template-columns: auto auto;
+            justify-content: center;
+            column-gap: 12px;
+            row-gap: 3px;
+            padding-top: 1px;
+            min-height: 1.15em;
+            line-height: 1.15;
+            white-space: nowrap;
+        }
+        .opt-t-chip-quote.is-empty {
+            display: flex;
+        }
+        .opt-t-chip-last {
+            font-size: 1.02rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            color: #0f172a;
+            margin: 0 2px 0 6px;
+        }
+        .opt-t-chip-metric {
+            position: relative;
+            display: inline-flex;
+            align-items: baseline;
+            gap: 3px;
+        }
+        .opt-t-chip-metric-lab {
+            font-size: 10px;
+            line-height: 1;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            color: #94a3b8;
+        }
+        .opt-t-chip-pct {
+            font-size: 0.78rem;
+            font-weight: 800;
+            padding: 1px 7px;
+            min-width: 4.6em;
+            box-sizing: border-box;
+            text-align: center;
+            border-radius: 999px;
+            letter-spacing: 0.01em;
+        }
+        .opt-t-chip-pct.is-up {
+            color: #fff;
+            background: #e53935;
+            box-shadow: 0 1px 2px rgba(229, 57, 53, 0.28);
+        }
+        .opt-t-chip-pct.is-down {
+            color: #fff;
+            background: #2e7d32;
+            box-shadow: 0 1px 2px rgba(46, 125, 50, 0.28);
+        }
+        .opt-t-chip-pct.is-flat {
+            color: #546e7a;
+            background: #eceff1;
+        }
+        .opt-t-chip-pct.is-tail.is-up {
+            background: #b71c1c;
+            box-shadow: 0 0 0 2px #ffcdd2, 0 1px 3px rgba(183, 28, 28, 0.45);
+        }
+        .opt-t-chip-pct.is-tail.is-down {
+            background: #1b5e20;
+            box-shadow: 0 0 0 2px #c8e6c9, 0 1px 3px rgba(27, 94, 32, 0.45);
+        }
+        .opt-t-chip-per {
+            min-width: 2ch;
+            text-align: right;
+            font-size: 11px;
+            font-weight: 600;
+            color: #888;
+            font-variant-numeric: tabular-nums;
+        }
+        .opt-t-chip-per.is-up { color: #e74c3c; font-weight: 800; }
+        .opt-t-chip-per.is-down { color: #27ae60; font-weight: 800; }
+        .opt-t-chip-meta {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 3px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: #64748b;
+        }
+        .opt-t-chip-meta-lab {
+            font-size: 0.6rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            color: #94a3b8;
+        }
+        .opt-t-chip-meta.is-up { color: #c62828; }
+        .opt-t-chip-meta.is-down { color: #2e7d32; }
+        .opt-t-chip-meta.is-flat { color: #64748b; }
+        .opt-t-chip-src {
+            grid-column: 1 / -1;
+            justify-self: center;
+            font-size: 0.68rem;
+            font-weight: 700;
+            color: #546e7a;
+            letter-spacing: 0.01em;
+        }
+        .opt-t-chip-intra-lab {
+            font-size: 0.62rem;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+            opacity: 0.88;
+            margin-right: 3px;
+        }
+        .opt-t-chip-quote.is-empty {
+            color: #90a4ae;
+            font-size: 0.78rem;
+            font-weight: 700;
+        }
+        .opt-t-chip:hover {
+            border-color: #1565c0;
+            background: #e3f2fd;
+        }
+        .opt-t-chip.is-active,
+        .opt-t-chip.is-active:hover {
+            background: #fff;
+            color: #0d47a1;
+            border-color: #1565c0;
+            border-width: 1.5px;
+            padding-right: 18px;
+        }
+        .opt-t-chip.is-active::after {
+            content: '';
+            position: absolute;
+            top: 5px;
+            right: 6px;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #1565c0;
+            pointer-events: none;
+        }
+        .opt-t-chip-remove {
+            margin: 0 0 0 2px;
+            padding: 0 4px;
+            border: none;
+            background: transparent;
+            color: inherit;
+            font-size: 1rem;
+            line-height: 1;
+            cursor: pointer;
+            opacity: 0.75;
+        }
+        .opt-t-chip-remove:hover {
+            opacity: 1;
+        }
+        .opt-t-chip-rank {
+            display: inline-block;
+            min-width: 1.1em;
+            padding: 0 4px;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            font-weight: 800;
+            background: rgba(21, 101, 192, 0.12);
+            color: #1565c0;
+        }
+        .opt-t-chip-caution {
+            font-size: 0.78rem;
+            color: #e65100;
+            font-weight: 800;
+        }
+        /* 弹性排序 + 标的警示同排一行，窄屏才回落成两行 */
+        .opt-t-hint-row {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px 12px;
+            margin-top: 0;
+        }
+        .opt-t-hint-row:not(:has(.opt-t-caution-banner:not([hidden]))):not(:has(.opt-t-elastic-hint:not([hidden]))) {
+            display: none;
+        }
+        .opt-t-hint-row:has(.opt-t-caution-banner:not([hidden])),
+        .opt-t-hint-row:has(.opt-t-elastic-hint:not([hidden])) {
+            margin-top: 1px;
+        }
+        .opt-t-elastic-hint {
+            margin: 0;
+            font-size: 0.8rem;
+            color: #455a64;
+            line-height: 1.45;
+        }
+        .opt-t-caution-banner {
+            margin: 0;
+            padding: 4px 10px;
+            font-size: 0.84rem;
+            font-weight: 600;
+            color: #bf360c;
+            background: #fff3e0;
+            border-left: 4px solid #e65100;
+            border-radius: 0 6px 6px 0;
+        }
+        .opt-t-live-stack {
+            justify-self: end;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 1px;
+            min-width: 0;
+        }
+        .opt-t-chips-wrap .opt-t-live-observation,
+        .opt-t-live-observation {
+            margin: 0;
+            padding: 0;
+            font-size: 0.72rem;
+            font-weight: 500;
+            color: #607d8b;
+            line-height: 1.35;
+            white-space: nowrap;
+            text-align: right;
+            cursor: help;
+        }
+        .opt-t-spot-src {
+            font-size: 0.68rem;
+            font-weight: 700;
+            color: #546e7a;
+            line-height: 1.2;
+            text-align: right;
+            cursor: help;
+            white-space: nowrap;
+        }
+        .opt-t-add {
+            padding: 5px 12px;
+            border-radius: 8px;
+            border: 1px dashed rgba(21, 101, 192, 0.45);
+            background: #fafafa;
+            color: #1565c0;
+            font-size: 0.82rem;
+            cursor: pointer;
+        }
+        .opt-t-add:hover {
+            background: #e8eaf6;
+        }
+        .opt-t-perc-wrap {
+            position: relative;
+            flex: 0 0 auto;
+        }
+        .opt-t-perc-panel {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            z-index: 50;
+            min-width: 268px;
+            padding: 10px 10px 8px;
+            border: 1px solid rgba(21, 101, 192, 0.28);
+            border-radius: 8px;
+            background: #fff;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+        .opt-t-perc-lead {
+            margin: 0 0 8px;
+            font-size: 0.75rem;
+            color: #546e7a;
+            line-height: 1.4;
+        }
+        .opt-t-perc-rows {
+            display: grid;
+            grid-template-columns: minmax(4.5em, auto) 11.5em;
+            gap: 4px 8px;
+            align-items: center;
+        }
+        .opt-t-perc-rows label {
+            font-size: 0.78rem;
+            color: #37474f;
+            white-space: nowrap;
+        }
+        .opt-t-perc-rows input[type="date"] {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 2px 4px;
+            font-size: 0.78rem;
+            border: 1px solid #cfd8dc;
+            border-radius: 4px;
+            color: #263238;
+        }
+        .opt-t-perc-msg {
+            margin: 6px 0 0;
+            font-size: 0.75rem;
+            color: #c62828;
+        }
+        .opt-t-perc-msg.is-ok {
+            color: #2e7d32;
+        }
+        .opt-t-perc-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+            justify-content: flex-end;
+        }
+        .opt-t-warn {
+            margin: 0 0 8px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: #fff8e1;
+            border: 1px solid #ffcc80;
+            color: #e65100;
+            font-size: 0.85rem;
+        }
+        .opt-t-rowcount {
+            font-size: 0.85rem;
+            color: #5c6bc0;
+            margin-top: 8px;
+        }
+        .opt-t-err {
+            background: #ffebee;
+            border: 1px solid #e57373;
+            color: #b71c1c;
+            padding: 12px 14px;
+            border-radius: 8px;
+            margin-bottom: 14px;
+        }
+        #opt-t-body-root {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+        /* 跨月义务仓选择器：独立于 T 表列，保留原始行权价密度。 */
+        .opt-t-selector {
+            margin: 0;
+            border: 1px solid #cbd5e1;
+            border-left: 4px solid #0f766e;
+            background: #f8fafc;
+            font-size: var(--opt-board-fs);
+            line-height: var(--opt-board-lh);
+            color: #334155;
+        }
+        /* 与义务仓的竖缝走 #opt-t-body-root 的 1px gap，勿再叠 margin */
+        .opt-t-rights { border-left-color: #6d28d9; margin-top: 0; }
+        .opt-t-rights-tabs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 0 0 auto; }
+        .opt-t-rights .opt-t-selector-title {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 4px 10px;
+            flex: 1 1 16rem;
+            min-width: 0;
+        }
+        .opt-t-rights .opt-t-rights-rule {
+            margin: 0;
+            padding: 0;
+            border: none;
+            color: #64748b;
+            font-size: var(--opt-board-fs-th);
+            font-weight: 500;
+            line-height: 1.35;
+            flex: 1 1 12rem;
+            min-width: 0;
+        }
+        .opt-t-selector-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 5px 8px;
+            border-bottom: 1px solid #dbeafe;
+            background: #eef2f7;
+        }
+        .opt-t-selector-title {
+            display: flex;
+            align-items: baseline;
+            flex-wrap: wrap;
+            gap: 4px 8px;
+            min-width: 0;
+        }
+        .opt-t-selector-title strong { color: #0f172a; font-size: var(--opt-board-fs-label); }
+        .opt-t-selector-title span { color: #64748b; font-size: var(--opt-board-fs-th); }
+        .opt-t-selector-tabs { display: inline-flex; flex: 0 0 auto; gap: 2px; }
+        .opt-t-selector-tab {
+            border: 1px solid #cbd5e1;
+            border-radius: 3px;
+            padding: 2px 7px;
+            background: #fff;
+            color: #475569;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .opt-t-selector-tab[data-opt-selector-tab="put"].is-active { color: #166534; border-color: #86efac; background: #dcfce7; }
+        .opt-t-selector-tab[data-opt-selector-tab="call"].is-active { color: #b91c1c; border-color: #fca5a5; background: #fee2e2; }
+        .opt-t-selector-panel { display: none; }
+        .opt-t-selector-panel.is-active { display: block; }
+        .opt-t-selector-scroll { overflow-x: hidden; }
+        .opt-t-selector-table {
+            width: 100%;
+            min-width: 0;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-size: var(--opt-board-fs);
+            line-height: var(--opt-board-lh);
+            font-variant-numeric: tabular-nums;
+        }
+        .opt-t-selector-table th,
+        .opt-t-selector-table td {
+            padding: 2px 1px;
+            text-align: center;
+            vertical-align: middle;
+            border-right: 1px solid #e2e8f0;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: var(--opt-board-fs);
+            line-height: var(--opt-board-lh);
+        }
+        .opt-t-selector-table thead th { padding: 3px 1px; color: #475569; background: #f1f5f9; font-size: var(--opt-board-fs-th); font-weight: 600; line-height: var(--opt-board-lh); white-space: nowrap; }
+        /* rem 定宽：避免 thead 0.72rem 把 em 列宽算窄，档位左右被裁 */
+        .opt-t-selector-table thead th:first-child,
+        .opt-t-selector-table tbody th {
+            width: 12.2rem;
+            padding-left: 8px;
+            padding-right: 4px;
+            color: #334155;
+            background: #f8fafc;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .opt-t-selector-table tbody th.opt-t-selector-strike { background: #f5f7fa; font-size: var(--opt-board-fs); font-weight: 700; }
+        .opt-t-selector-strike-layout { display: grid; grid-template-columns: 2.8em 5.2em 3.5em; justify-content: center; align-items: center; gap: 0 6px; }
+        .opt-t-selector-strike-label { justify-self: end; }
+        .opt-t-selector-strike-k { justify-self: center; font-variant-numeric: tabular-nums; }
+        .opt-t-selector-moneyness { justify-self: start; min-width: 0; font-size: var(--opt-board-fs); font-weight: 700; line-height: var(--opt-board-lh); }
+        .opt-t-selector-moneyness.opt-t-mny-below { color: #1565c0; }
+        .opt-t-selector-moneyness.opt-t-mny-above { color: #e65100; }
+        .opt-t-selector-moneyness.opt-t-mny-atm { color: #546e7a; }
+        .opt-t-selector-bucket-otm .opt-t-selector-strike-label { color: #1d4ed8; }
+        .opt-t-selector-bucket-atm .opt-t-selector-strike-label { color: #92400e; background: #fde68a; border-radius: 2px; padding: 0 3px; }
+        .opt-t-selector-bucket-itm .opt-t-selector-strike-label { color: #c2410c; }
+        .opt-t-selector-cell { position: relative; }
+        /* 四期限浅底：近月冷、远月暖，只分层不抢数字色 */
+        .opt-t-selector-table thead th.opt-t-tenor-near { background: #dce8f4; }
+        .opt-t-selector-table td.opt-t-tenor-near { background: #f4f8fc; }
+        .opt-t-selector-table td.opt-t-tenor-near.is-empty,
+        .opt-t-selector-table td.opt-t-tenor-near.is-missing { background: #eef3f8; }
+        .opt-t-selector-table thead th.opt-t-tenor-next { background: #d8eee4; }
+        .opt-t-selector-table td.opt-t-tenor-next { background: #f3faf6; }
+        .opt-t-selector-table td.opt-t-tenor-next.is-empty,
+        .opt-t-selector-table td.opt-t-tenor-next.is-missing { background: #eef6f2; }
+        .opt-t-selector-table thead th.opt-t-tenor-quarter { background: #eee6d6; }
+        .opt-t-selector-table td.opt-t-tenor-quarter { background: #faf6ee; }
+        .opt-t-selector-table td.opt-t-tenor-quarter.is-empty,
+        .opt-t-selector-table td.opt-t-tenor-quarter.is-missing { background: #f4efe6; }
+        .opt-t-selector-table thead th.opt-t-tenor-next_quarter { background: #e6deee; }
+        .opt-t-selector-table td.opt-t-tenor-next_quarter { background: #f6f2fa; }
+        .opt-t-selector-table td.opt-t-tenor-next_quarter.is-empty,
+        .opt-t-selector-table td.opt-t-tenor-next_quarter.is-missing { background: #f0ebf5; }
+        /* 表头整段居中单行，字号与 T 型表头同一套 token，不单独缩小 */
+        .opt-t-selector-th {
+            display: block;
+            width: 100%;
+            text-align: center;
+            white-space: nowrap;
+        }
+        .opt-t-selector-metrics {
+            display: grid;
+            /* 单行：左贴年/Δ/有效价，右 Per 吃剩余；不改页面左右栏宽度 */
+            grid-template-columns: max-content auto minmax(0, 1fr);
+            align-items: center;
+            column-gap: 4px;
+            width: 100%;
+            min-width: 0;
+            line-height: var(--opt-board-lh);
+            white-space: nowrap;
+        }
+        .opt-t-selector-metrics-left {
+            justify-self: start;
+            display: grid;
+            /* 义务仓：年 / Δ / 有效价 — 各轨累计 +6px（两次×3）；Per 由 1fr 自动各约 −6px */
+            grid-template-columns: calc(2.7em + 6px) calc(3.05em + 6px) calc(3.15em + 6px);
+            column-gap: 3px;
+            align-items: center;
+            width: max-content;
+            padding-left: 2px;
+            padding-right: 2px;
+        }
+        .opt-t-selector-metrics-left > span {
+            min-width: 0;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        .opt-t-selector-metrics-sep {
+            color: #94a3b8;
+            font-weight: 600;
+            flex: 0 0 auto;
+            padding: 0 1px;
+        }
+        .opt-t-selector-metrics-right {
+            justify-self: stretch;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            column-gap: 2px;
+            align-items: center;
+            justify-items: center;
+            min-width: 0;
+            width: 100%;
+            padding-left: 1px;
+            padding-right: 14px; /* ☆ */
+        }
+        .opt-t-selector-metrics-right > span {
+            min-width: 0;
+            width: 100%;
+            text-align: center;
+            box-sizing: border-box;
+        }
+        .opt-t-selector-metrics-left > span:first-child { color: #a16207; font-weight: 700; }
+        .opt-t-selector-metrics-left > span:nth-child(2) { color: #0f766e; }
+        .opt-t-selector-metrics-left > span:nth-child(3) { color: #1e3a8a; }
+        .opt-t-selector-metrics .opt-t-ivr-flat { color: #64748b; font-weight: 600; }
+        .opt-t-selector-metrics .opt-t-ivr-lo { color: #0369a1; font-weight: 700; }
+        /* mid 也铺浅蓝底：优选格字小，单靠字色不够醒目；hi 仍用更深的底拉开档 */
+        .opt-t-selector-metrics .opt-t-ivr-mid { color: #1d4ed8; font-weight: 800; background: #eff6ff; border-radius: 2px; padding: 0 1px; }
+        .opt-t-selector-metrics .opt-t-ivr-hi { color: #1e3a8a; font-weight: 800; background: #dbeafe; border-radius: 2px; padding: 0 1px; }
+        .opt-t-selector-stars { position: absolute; top: 1px; right: 2px; width: 12px; text-align: center; color: #b45309; font-size: 12px; font-weight: 800; letter-spacing: 0; line-height: 1; pointer-events: none; }
+        .opt-t-selector-cell.is-empty,
+        .opt-t-selector-cell.is-missing { color: #94a3b8; }
+        .opt-t-selector-row.opt-t-selector-bucket-atm > th.opt-t-selector-strike { background: #fff3e0; }
+        /* 平值行：琥珀金为主、期限色只留一点，避免被四列浅底吃掉；上下描边把整行连成一条 */
+        .opt-t-selector-row.opt-t-selector-bucket-atm > th.opt-t-selector-strike,
+        .opt-t-selector-row.opt-t-selector-bucket-atm > td {
+            box-shadow: inset 0 2px 0 0 rgba(217, 119, 6, 0.62), inset 0 -2px 0 0 rgba(217, 119, 6, 0.62);
+        }
+        .opt-t-selector-row.opt-t-selector-bucket-atm > th.opt-t-selector-strike {
+            box-shadow: inset 3px 0 0 0 #d97706, inset 0 2px 0 0 rgba(217, 119, 6, 0.62), inset 0 -2px 0 0 rgba(217, 119, 6, 0.62);
+        }
+        .opt-t-selector-row.opt-t-selector-bucket-atm > td.opt-t-tenor-near { background: color-mix(in srgb, #f4f8fc 28%, #fde68a 72%); }
+        .opt-t-selector-row.opt-t-selector-bucket-atm > td.opt-t-tenor-next { background: color-mix(in srgb, #f3faf6 28%, #fde68a 72%); }
+        .opt-t-selector-row.opt-t-selector-bucket-atm > td.opt-t-tenor-quarter { background: color-mix(in srgb, #faf6ee 28%, #fde68a 72%); }
+        .opt-t-selector-row.opt-t-selector-bucket-atm > td.opt-t-tenor-next_quarter { background: color-mix(in srgb, #f6f2fa 28%, #fde68a 72%); }
+        .opt-t-selector-status { font-size: var(--opt-board-fs); font-weight: 700; }
+        .opt-t-cell-strike { position: relative; }
+        @media (max-width: 760px) {
+            .opt-t-selector-head { align-items: flex-start; flex-direction: column; }
+            .opt-t-selector-tabs { width: 100%; }
+            .opt-t-selector-tab { flex: 1 1 0; }
+        }
+        .opt-t-section {
+            background: var(--rt-monitor-surface, #fff);
+            border: 1px solid rgba(21, 101, 192, 0.16);
+            border-radius: 4px;
+            margin: 0;
+            overflow: hidden;
+            box-shadow: none;
+            width: auto;
+            max-width: 100%;
+        }
+        .opt-t-tab-rights-vol.is-active,
+        .opt-t-selector-tab[data-opt-rights-kind="vol"].is-active {
+            color: #5b21b6;
+            border-color: #c4b5fd;
+            background: #ede9fe;
+        }
+        .opt-t-tab-rights-parity.is-active,
+        .opt-t-selector-tab[data-opt-rights-kind="parity"].is-active {
+            color: #9a3412;
+            border-color: #fdba74;
+            background: #ffedd5;
+        }
+        .opt-t-tab-rights-call.is-active,
+        .opt-t-selector-tab[data-opt-rights-side="call"].is-active {
+            color: #b91c1c;
+            border-color: #fca5a5;
+            background: #fee2e2;
+        }
+        .opt-t-tab-rights-put.is-active,
+        .opt-t-selector-tab[data-opt-rights-side="put"].is-active {
+            color: #166534;
+            border-color: #86efac;
+            background: #dcfce7;
+        }
+        /* 权利仓单行：Δ/折溢/时值各轨累计 +6px；Per 由 1fr 自动各约 −6px */
+        .opt-t-rights .opt-t-rights-metrics .opt-t-rights-left {
+            grid-template-columns: calc(2.9em + 6px) calc(3.25em + 6px) calc(3.4em + 6px);
+            column-gap: 3px;
+        }
+        .opt-t-rights .opt-t-rights-right {
+            padding-right: 2px; /* 无 ☆ */
+        }
+        .opt-t-rights .opt-t-rights-metrics .opt-t-rights-left > span,
+        .opt-t-rights .opt-t-rights-metrics .opt-t-rights-right > span {
+            white-space: nowrap;
+        }
+        .opt-t-rights .opt-t-rights-metrics.is-parity {
+            grid-template-columns: max-content auto max-content;
+            justify-content: start;
+            width: max-content;
+        }
+        .opt-t-rights .opt-t-rights-metrics.is-parity .opt-t-rights-right {
+            display: grid;
+            grid-template-columns: max-content max-content;
+            justify-content: start;
+            column-gap: 12px;
+            width: max-content;
+            padding-right: 0;
+        }
+        /* 该档 Per 过门、中轴未过：虚线框提示，悬停见 title */
+        .opt-t-rights .opt-t-rights-metrics.is-wing-pass {
+            outline: 1px dashed rgba(245, 124, 0, 0.75);
+            outline-offset: 1px;
+            border-radius: 2px;
+        }
+        .opt-t-rights .opt-t-rights-left > span.opt-t-disc-neg { color: #b71c1c; font-weight: 700; }
+        .opt-t-rights .opt-t-rights-left > span.opt-t-disc-pos { color: #00695c; font-weight: 700; }
+        .opt-t-rights .opt-t-rights-left > span.opt-t-disc-flat { color: #78909c; }
+        .opt-t-rights .opt-t-rights-left > span.opt-t-tv-neg { color: #6a1b9a; font-weight: 700; }
+        .opt-t-scroll {
+            /* 禁止横向滚动条：列随容器等比收缩 */
+            overflow-x: hidden;
+            max-width: 100%;
+        }
+        /* fixed + 百分比列宽：铺满左栏、四区块对齐；不设 min-width，避免横滚 */
+        .opt-t-table {
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-size: var(--opt-board-fs);
+            line-height: var(--opt-board-lh);
+        }
+        /* 列宽比例（合计 100%）：Γ 各 2.5%，从 Per/Δ/时年化/有效价/折溢/权利金%/最新匀出；IV/时值/行权价不动 */
+        .opt-t-cg-oi { width: 3.4%; }
+        .opt-t-cg-vol { width: 3.8%; }
+        .opt-t-cg-last { width: 3.5%; }
+        .opt-t-cg-prem { width: 3.8%; }
+        .opt-t-cg-iv { width: 2.4%; }
+        /* Per 1y/C/A 三列等宽 */
+        .opt-t-cg-per { width: 2.4%; }
+        .opt-t-cg-gamma { width: 2.5%; }
+        .opt-t-cg-delta { width: 3.0%; }
+        .opt-t-cg-tvann { width: 3.2%; }
+        .opt-t-cg-tv { width: 4.0%; }
+        .opt-t-cg-eff { width: 3.3%; }
+        .opt-t-cg-disc { width: 3.2%; }
+        .opt-t-cg-spread { width: 3.0%; }
+        .opt-t-cg-strike {
+            width: 4.0%;
+        }
+        .opt-t-cg-mny {
+            width: 3.4%;
+        }
+        .opt-t-table thead th {
+            padding: 4px 2px;
+            font-size: var(--opt-board-fs-th);
+            font-weight: 600;
+            text-align: center;
+            border-bottom: 2px solid rgba(21, 101, 192, 0.2);
+            background: #fafafa;
+            line-height: var(--opt-board-lh);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: clip;
+        }
+        .opt-t-th-call { background: #fff8f6; color: #c62828; }
+        .opt-t-th-strike { background: #eceff1; color: #263238; }
+        .opt-t-th-put { background: #f1fff5; color: #2e7d32; }
+        /* 核心列（权利金%/时年化）表头加粗+底边强调 */
+        .opt-t-th-call.opt-t-th-core {
+            background: #ffe4de;
+            color: #b71c1c;
+            font-weight: 800;
+            box-shadow: inset 0 -2px 0 0 #e53935;
+        }
+        .opt-t-th-put.opt-t-th-core {
+            background: #d9f5e3;
+            color: #1b5e20;
+            font-weight: 800;
+            box-shadow: inset 0 -2px 0 0 #43a047;
+        }
+        .opt-t-th-spread-mark {
+            font-size: var(--opt-board-fs-th);
+            letter-spacing: 0.02em;
+        }
+        .opt-t-spread-role {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0;
+            padding: 5px 8px;
+            font-size: var(--opt-board-fs-label);
+            font-weight: 600;
+            color: #37474f;
+            background: #eceff1;
+            border-left: 4px solid #1565c0;
+            border-radius: 0;
+            white-space: nowrap;
+        }
+        .opt-t-quote-asof {
+            flex: 0 0 auto;
+            margin-right: 2px;
+            padding: 1px 7px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: #37474f;
+            background: #cfd8dc;
+            border-radius: 3px;
+            white-space: nowrap;
+        }
+        .opt-t-quote-asof--partial {
+            color: #e65100;
+            background: #ffe0b2;
+        }
+        .opt-t-quote-asof--daily {
+            font-weight: 600;
+            color: #546e7a;
+            background: #eceff1;
+        }
+        .opt-t-px-daily {
+            color: #78909c !important;
+        }
+        /* 字段级灰阶陈旧度（A2）：只用灰阶，不引入新色相，避免与红绿涨跌/换手语义冲突。
+           正常=原色（不加 class）；>10s=淡灰；>60s=更浅灰。
+           阈值定义见 rt_monitor/services/opt_t_board.py 的 _OPT_T_AGE_*。 */
+        .opt-t-age-stale {
+            color: #9e9e9e !important;
+        }
+        .opt-t-age-ancient {
+            color: #c4c4c4 !important;
+        }
+        .opt-t-spread-role-main {
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+        .opt-t-spread-expiry {
+            font-weight: 600;
+            color: #1565c0;
+            white-space: nowrap;
+        }
+        .opt-t-term {
+            margin: 0 0 4px;
+            padding: 5px 8px;
+            font-size: var(--opt-board-fs-label);
+            font-weight: 700;
+            border-left: 4px solid #546e7a;
+            background: #eceff1;
+            color: #37474f;
+        }
+        .opt-t-term-head,
+        .opt-t-term-reads {
+            margin: 0;
+        }
+        .opt-t-term-head {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 0 8px;
+        }
+        .opt-t-term-sep {
+            color: #90a4ae;
+            font-weight: 500;
+        }
+        .opt-t-term-curve {
+            margin: 0;
+            font-weight: 650;
+        }
+        .opt-t-term-reads {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 10px;
+            margin-top: 4px;
+            font-weight: 650;
+        }
+        .opt-t-term-read {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 4px;
+            white-space: nowrap;
+        }
+        .opt-t-term-metrics {
+            color: #37474f;
+            font-weight: 600;
+        }
+        .opt-t-term-side {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 4px;
+        }
+        .opt-t-term-side-name {
+            font-weight: 800;
+        }
+        .opt-t-term-tag {
+            font-weight: 800;
+        }
+        .opt-t-term-tag--soft { color: #e65100; }
+        .opt-t-term-tag--repair { color: #455a64; }
+        .opt-t-term-tag--rich { color: #bf360c; }
+        .opt-t-term-tag--hot { color: #6a1b9a; }
+        .opt-t-term-tag--rent { color: #0d47a1; }
+        .opt-t-term-tag--cheap { color: #00695c; }
+        .opt-t-term-tag--flat,
+        .opt-t-term-tag--mute { color: #546e7a; }
+        .opt-t-term-act {
+            padding: 0 5px;
+            border-radius: 3px;
+            font-weight: 800;
+        }
+        .opt-t-term-act--stop { color: #263238; background: #cfd8dc; }
+        .opt-t-term-act--warn { color: #e65100; background: #ffe0b2; }
+        .opt-t-term-act--go { color: #0d47a1; background: #fff; box-shadow: inset 0 0 0 1px #1565c0; }
+        .opt-t-term-act--info { color: #37474f; background: #fff; box-shadow: inset 0 0 0 1px #90a4ae; }
+        .opt-t-term--back {
+            border-left-color: #e65100;
+            background: #fff3e0;
+            color: #e65100;
+        }
+        .opt-t-term--contango {
+            border-left-color: #1565c0;
+            background: #e3f2fd;
+            color: #0d47a1;
+        }
+        .opt-t-term--flat {
+            border-left-color: #78909c;
+            background: #eceff1;
+            color: #455a64;
+        }
+        .opt-t-em {
+            margin-left: 8px;
+            padding: 1px 6px;
+            font-weight: 700;
+            color: #e65100;
+            background: #fff3e0;
+            border-radius: 3px;
+            white-space: nowrap;
+        }
+        .opt-t-table tbody tr > .opt-t-cell-strike.opt-t-em-in {
+            box-shadow: inset 0 -3px 0 0 #f9a825;
+        }
+        .opt-t-table tbody tr > .opt-t-cell-strike.opt-t-em-edge {
+            box-shadow: inset 4px 0 0 0 #e65100, inset 0 -3px 0 0 #f9a825;
+        }
+        .opt-t-section--alt .opt-t-spread-expiry {
+            color: #6a1b9a;
+        }
+        .opt-t-section--alt .opt-t-spread-role {
+            border-left-color: #7b1fa2;
+            background: #f3e5f5;
+            color: #4a148c;
+        }
+        .opt-t-section--alt .opt-t-quote-asof {
+            color: #4a148c;
+            background: #e1bee7;
+        }
+        .opt-t-section--alt .opt-t-quote-asof--partial {
+            color: #e65100;
+            background: #ffe0b2;
+        }
+        .opt-t-section--alt .opt-t-quote-asof--daily {
+            color: #6a1b9a;
+            background: #f3e5f5;
+        }
+        .opt-t-table tbody td, .opt-t-table tbody th {
+            padding: 3px 2px;
+            vertical-align: middle;
+            border-bottom: 1px solid #e0e0e0;
+            font-size: var(--opt-board-fs);
+            line-height: var(--opt-board-lh);
+            white-space: nowrap;
+            overflow: hidden;
+        }
+        .opt-t-cell-call { background: #fffaf9; }
+        .opt-t-cell-num {
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+            font-size: var(--opt-board-fs);
+            color: #212121;
+            padding: 3px 2px;
+        }
+        .opt-t-cell-strike {
+            background: #f5f7fa;
+            font-weight: 700;
+            font-size: var(--opt-board-fs);
+            text-align: center;
+            color: #111;
+            font-variant-numeric: tabular-nums;
+            padding: 3px 2px;
+            white-space: nowrap;
+        }
+        /* 虚实%/负时值/Δ/IVR：须压过 .opt-t-cell-num 默认色 */
+        .opt-t-table td.opt-t-delta-flat { color: #64748b !important; font-weight: 600; }
+        .opt-t-table td.opt-t-delta-lo { color: #0f766e !important; font-weight: 700; }
+        .opt-t-table td.opt-t-delta-mid { color: #b45309 !important; font-weight: 800; }
+        .opt-t-table td.opt-t-delta-hi { color: #9f1239 !important; font-weight: 800; }
+        .opt-t-table td.opt-t-ivr-flat { color: #64748b !important; font-weight: 600; }
+        .opt-t-table td.opt-t-ivr-lo { color: #0369a1 !important; font-weight: 700; }
+        .opt-t-table td.opt-t-ivr-mid { color: #1d4ed8 !important; font-weight: 800; }
+        .opt-t-table td.opt-t-ivr-hi {
+            color: #1e3a8a !important;
+            font-weight: 800;
+            background: #dbeafe !important;
+        }
+        .opt-t-table td.opt-t-mny-below { color: #1565c0 !important; font-weight: 600; }
+        .opt-t-table td.opt-t-mny-above { color: #e65100 !important; font-weight: 600; }
+        .opt-t-table td.opt-t-mny-atm { color: #546e7a !important; font-weight: 600; }
+        /* 负时值：深实值折价（相对对买方有利），紫字+浅底，避开涨跌红绿 */
+        .opt-t-table td.opt-t-tv-neg {
+            color: #6a1b9a !important;
+            font-weight: 700;
+            background: #f3e5f5 !important;
+        }
+        /* 折溢%：正=卖方口径有利（青绿），负=不利（砖红），近零灰 */
+        .opt-t-table td.opt-t-disc-pos { color: #00695c !important; font-weight: 600; }
+        .opt-t-table td.opt-t-disc-neg { color: #b71c1c !important; font-weight: 600; }
+        .opt-t-table td.opt-t-disc-flat { color: #78909c !important; font-weight: 600; }
+        /*
+         * 核心列色阶（避开涨跌红绿 / 虚实蓝橙 / 负时值紫 / 折溢青绿）：
+         * 权利金%=靛蓝（&lt;3 / ≥3 / ≥5 / ≥8 / ≥10 / ≥20）；
+         * 时年化=琥珀（&lt;15 / ≥15 / ≥20 / ≥30 / ≥50 / ≥100）。
+         * 字重+浅底，不全靠颜色。
+         */
+        .opt-t-table td.opt-t-prem-lo { color: #475569 !important; font-weight: 600; }
+        .opt-t-table td.opt-t-prem-t1 { color: #2563eb !important; font-weight: 700; }
+        .opt-t-table td.opt-t-prem-t2 { color: #1d4ed8 !important; font-weight: 700; }
+        .opt-t-table td.opt-t-prem-t3 {
+            color: #1e40af !important;
+            font-weight: 800;
+            background: #dbeafe !important;
+        }
+        .opt-t-table td.opt-t-prem-t4 {
+            color: #1e3a8a !important;
+            font-weight: 800;
+            background: #bfdbfe !important;
+        }
+        .opt-t-table td.opt-t-prem-t5 {
+            color: #312e81 !important;
+            font-weight: 800;
+            background: #a5b4fc !important;
+        }
+        .opt-t-table td.opt-t-tvann-lo { color: #78716c !important; font-weight: 600; }
+        .opt-t-table td.opt-t-tvann-t1 { color: #d97706 !important; font-weight: 700; }
+        .opt-t-table td.opt-t-tvann-t2 { color: #b45309 !important; font-weight: 700; }
+        .opt-t-table td.opt-t-tvann-t3 {
+            color: #b45309 !important;
+            font-weight: 800;
+            background: #fef3c7 !important;
+        }
+        .opt-t-table td.opt-t-tvann-t4 {
+            color: #92400e !important;
+            font-weight: 800;
+            background: #fde68a !important;
+        }
+        .opt-t-table td.opt-t-tvann-t5 {
+            color: #78350f !important;
+            font-weight: 800;
+            background: #fcd34d !important;
+        }
+        .opt-t-table tbody tr.opt-t-row-atm > td:not([class*="opt-t-rank-"]),
+        .opt-t-table tbody tr.opt-t-row-atm > th {
+            background-color: #fff3e0 !important;
+            box-shadow: inset 0 0 0 1px rgba(255, 152, 0, 0.55);
+        }
+        /* ATM 行仍保留核心列浅底（压过统一橙底） */
+        .opt-t-table tbody tr.opt-t-row-atm > td.opt-t-prem-t3 { background: #dbeafe !important; }
+        .opt-t-table tbody tr.opt-t-row-atm > td.opt-t-prem-t4 { background: #bfdbfe !important; }
+        .opt-t-table tbody tr.opt-t-row-atm > td.opt-t-prem-t5 { background: #a5b4fc !important; }
+        .opt-t-table tbody tr.opt-t-row-atm > td.opt-t-tvann-t3 { background: #fef3c7 !important; }
+        .opt-t-table tbody tr.opt-t-row-atm > td.opt-t-tvann-t4 { background: #fde68a !important; }
+        .opt-t-table tbody tr.opt-t-row-atm > td.opt-t-tvann-t5 { background: #fcd34d !important; }
+        .opt-t-table tbody tr.opt-t-row-atm .opt-t-cell-strike {
+            background: #ffcc80 !important;
+            color: #bf360c;
+        }
+        .opt-t-table tbody tr.opt-t-row-adj .opt-t-cell-strike {
+            font-style: italic;
+            font-weight: 600;
+        }
+        .opt-t-cell-put { background: #f6fff8; }
+        .opt-t-signal-cell {
+            text-align: center;
+            padding: 4px 2px;
+            line-height: 1.15;
+        }
+        /* 牛差/熊差单列：买=暖色实心、卖=冷色实心，白字+左边条，扫表一眼可分 */
+        .opt-t-mark-buy,
+        .opt-t-mark-sell {
+            display: inline-block;
+            min-width: 1.6em;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.82rem;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            color: #fff;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+        }
+        .opt-t-bull-mark .opt-t-mark-buy {
+            background: #c62828;
+            box-shadow: inset 3px 0 0 0 #ff8f00, 0 1px 2px rgba(0, 0, 0, 0.15);
+        }
+        .opt-t-bull-mark .opt-t-mark-sell {
+            background: #0d47a1;
+            box-shadow: inset 3px 0 0 0 #42a5f5, 0 1px 2px rgba(0, 0, 0, 0.15);
+        }
+        .opt-t-bear-mark .opt-t-mark-buy {
+            background: #1b5e20;
+            box-shadow: inset 3px 0 0 0 #69f0ae, 0 1px 2px rgba(0, 0, 0, 0.15);
+        }
+        .opt-t-bear-mark .opt-t-mark-sell {
+            background: #6a1b9a;
+            box-shadow: inset 3px 0 0 0 #ea80fc, 0 1px 2px rgba(0, 0, 0, 0.15);
+        }
+        .opt-t-empty-sec {
+            padding: 16px;
+            text-align: center;
+            color: #757575;
+        }
+        /* 分组内成交量/持仓量前三：暖色=认购量、冷蓝=认购仓、绿系=认沽量、玫系=认沽仓；左边条+略加字重，不单靠色相 */
+        .opt-t-rank-call-vol-1 { background: #ffe0b2 !important; box-shadow: inset 4px 0 0 0 #e65100; font-weight: 700; color: #1a1a1a; }
+        .opt-t-rank-call-vol-2 { background: #ffecb3 !important; box-shadow: inset 4px 0 0 0 #ef6c00; font-weight: 600; color: #1a1a1a; }
+        .opt-t-rank-call-vol-3 { background: #fff8e1 !important; box-shadow: inset 4px 0 0 0 #fb8c00; font-weight: 600; color: #212121; }
+        .opt-t-rank-call-oi-1 { background: #bbdefb !important; box-shadow: inset 4px 0 0 0 #0d47a1; font-weight: 700; color: #0d1b2a; }
+        .opt-t-rank-call-oi-2 { background: #c5e1f5 !important; box-shadow: inset 4px 0 0 0 #1565c0; font-weight: 600; color: #102027; }
+        .opt-t-rank-call-oi-3 { background: #e3f2fd !important; box-shadow: inset 4px 0 0 0 #1976d2; font-weight: 600; color: #102027; }
+        .opt-t-rank-put-vol-1 { background: #c8e6c9 !important; box-shadow: inset 4px 0 0 0 #1b5e20; font-weight: 700; color: #0d1f0f; }
+        .opt-t-rank-put-vol-2 { background: #dcedc8 !important; box-shadow: inset 4px 0 0 0 #2e7d32; font-weight: 600; color: #102015; }
+        .opt-t-rank-put-vol-3 { background: #e8f5e9 !important; box-shadow: inset 4px 0 0 0 #43a047; font-weight: 600; color: #102015; }
+        .opt-t-rank-put-oi-1 { background: #f8bbd0 !important; box-shadow: inset 4px 0 0 0 #880e4f; font-weight: 700; color: #1a0a12; }
+        .opt-t-rank-put-oi-2 { background: #fce4ec !important; box-shadow: inset 4px 0 0 0 #ad1457; font-weight: 600; color: #1a0a12; }
+        .opt-t-rank-put-oi-3 { background: #f3e5f5 !important; box-shadow: inset 4px 0 0 0 #c2185b; font-weight: 600; color: #210910; }
+        @media (prefers-reduced-motion: reduce) {
+            * { scroll-behavior: auto !important; }
+        }
+    </style>
+</head>
+<body class="rt-monitor rt-monitor-opt-t-board-page">
+<main class="opt-t-wrap" id="opt-t-main" aria-label="期权T型报价">
+    <header class="opt-t-head" id="opt-t-head">
+        <div class="opt-t-head-bar">
+            <div class="opt-t-title-stack">
+                <h1>期权T型报价</h1>
+                <div class="opt-t-title-actions">
+                    <button type="button" id="opt-t-add" class="opt-t-add" title="添加标的">添标的</button>
+                    <div class="opt-t-perc-wrap">
+                        <button type="button" id="opt-t-perc-cfg" class="opt-t-add" aria-expanded="false" aria-controls="opt-t-perc-panel" title="配置 Per C 分位锚点">Per C</button>
+                        <div id="opt-t-perc-panel" class="opt-t-perc-panel" hidden role="dialog" aria-label="Per C 锚点">
+                            <p class="opt-t-perc-lead">留空则该标的 Per C 为 —。保存立即生效。</p>
+                            <div id="opt-t-perc-rows" class="opt-t-perc-rows"></div>
+                            <p class="opt-t-perc-msg" id="opt-t-perc-msg" hidden></p>
+                            <div class="opt-t-perc-actions">
+                                <button type="button" id="opt-t-perc-cancel" class="opt-t-add">关闭</button>
+                                <button type="button" id="opt-t-perc-save" class="opt-t-add">保存</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="opt-t-chips-wrap">
+                <div id="opt-t-chips" class="opt-t-chips" role="tablist" aria-label="切换标的"></div>
+            </div>
+            <div class="opt-t-live-stack">
+            <span class="opt-t-live-observation" id="opt-t-live-observation" role="status" title="盘口/量仓每秒补丁&#10;字段最后变动见悬停&#10;数值未变不等于未观测">Update —</span>
+            <span class="opt-t-spot-src" id="opt-t-spot-src" hidden></span>
+            </div>
+        </div>
+        <div class="opt-t-hint-row">
+            {# 弹性排序说明先隐藏；需恢复时去掉 hidden #}
+            {% if opt_t_elastic_order_label %}
+            <p class="opt-t-elastic-hint" id="opt-t-elastic-hint" hidden>弹性排序：{{ opt_t_elastic_order_label }}</p>
+            {% endif %}
+            <p class="opt-t-caution-banner" id="opt-t-caution-banner" role="status" hidden></p>
+        </div>
+        {% if opt_t_warn %}
+        <p class="opt-t-warn" role="status">{{ opt_t_warn }}</p>
+        {% endif %}
+    </header>
+    <div class="opt-t-layout">
+        <div class="opt-t-main-col">
+    <div id="opt-t-body-root" data-underlying="{{ opt_t_underlying }}" data-static-ver="{{ rt_monitor_static_ver }}">
+{% if opt_t_defer_load %}
+    <p class="opt-t-empty-sec">加载 T 型报价…</p>
+{% elif opt_t_body_html %}
+{{ opt_t_body_html|safe }}
+{% else %}
+{% include 'rt_monitor_opt_t_board_body.html' %}
+{% endif %}
+    </div>
+        </div>
+        <div class="opt-t-right-col">
+    <div id="opt-iv-board-root">
+{% if opt_iv_defer_load %}
+        <aside class="opt-iv-panel" aria-label="隐含波动率看板">
+            <div class="opt-iv-panel-inner">
+                <p class="opt-iv-empty">加载隐含波动率…</p>
+            </div>
+        </aside>
+{% elif opt_iv_body_html %}
+{{ opt_iv_body_html|safe }}
+{% else %}
+{% include 'rt_monitor_opt_iv_board.html' %}
+{% endif %}
+    </div>
+{% include 'rt_monitor_opt_sp_plan.html' %}
+{% include 'rt_monitor_opt_vol_guide.html' %}
+{% include 'rt_monitor_opt_t_board_rules.html' %}
+        </div>
+    </div>
+    <!-- IV 最新值：全历史 IV%（左）+ ETF 现货（右），可拖可缩 -->
+    <div id="opt-iv-series-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="opt-iv-series-modal-title">
+        <div class="bias-series-modal opt-iv-series-modal-shell">
+            <div class="bias-series-modal-header" id="opt-iv-series-modal-header">
+                <h2 id="opt-iv-series-modal-title" class="bias-series-modal-title">隐含波动率 &amp; ETF 价格</h2>
+                <button type="button" id="opt-iv-series-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body">
+                <p id="opt-iv-series-modal-vrp" class="opt-iv-series-vrp" hidden></p>
+                <div id="opt-iv-series-modal-chart-wrap" class="bias-series-chart-wrap opt-iv-series-modal-chart-wrap">
+                    <div id="opt-iv-series-modal-loading" class="bias-series-loading" style="display: none;">加载中…</div>
+                    <div id="opt-iv-series-modal-msg" class="bias-series-msg" style="display: none;"></div>
+                    <canvas id="opt-iv-series-modal-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="opt-sp-hist-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="opt-sp-hist-modal-title">
+        <div class="bias-series-modal opt-sp-hist-modal-shell">
+            <div class="bias-series-modal-header" id="opt-sp-hist-modal-header">
+                <h2 id="opt-sp-hist-modal-title" class="bias-series-modal-title">历史信号</h2>
+                <button type="button" id="opt-sp-hist-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body opt-sp-hist-modal-body">
+                <p id="opt-sp-hist-modal-msg" class="opt-sp-hist-modal-msg" hidden>加载中…</p>
+                <div id="opt-sp-hist-modal-table"></div>
+            </div>
+        </div>
+    </div>
+    <div id="opt-sp-fill-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="opt-sp-fill-modal-title">
+        <div class="bias-series-modal opt-sp-fill-modal-shell">
+            <div class="bias-series-modal-header" id="opt-sp-fill-modal-header">
+                <h2 id="opt-sp-fill-modal-title" class="bias-series-modal-title">确认成交</h2>
+                <button type="button" id="opt-sp-fill-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body opt-sp-fill-modal-body">
+                <div class="opt-sp-fill-form-row" id="opt-sp-fill-date-row">
+                    <label for="opt-sp-fill-date">交易日期</label>
+                    <input type="date" id="opt-sp-fill-date">
+                </div>
+                <p id="opt-sp-fill-meta" class="opt-sp-fill-meta"></p>
+                <div id="opt-sp-fill-table"></div>
+                <p id="opt-sp-fill-err" class="opt-sp-fill-err" hidden></p>
+                <div class="opt-sp-fill-actions">
+                    <button type="button" class="opt-sp-btn" id="opt-sp-fill-cancel">取消</button>
+                    <button type="button" class="opt-sp-btn opt-sp-btn-primary" id="opt-sp-fill-submit">确认成交</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script id="opt-t-config" type="application/json">{{ opt_t_config_json | safe }}</script>
+    <script>
+(function () {
+    var cfgEl = document.getElementById('opt-t-config');
+    var cfg = { defaults: ['588000'], allowRestrict: false, allowCodes: [], symbolProfiles: {}, elasticOrderLabel: '' };
+    try {
+        if (cfgEl && cfgEl.textContent) cfg = JSON.parse(cfgEl.textContent);
+    } catch (e) {}
+    var defaults = Array.isArray(cfg.defaults) && cfg.defaults.length ? cfg.defaults : ['588000'];
+    var symbolProfiles = cfg.symbolProfiles && typeof cfg.symbolProfiles === 'object' ? cfg.symbolProfiles : {};
+    var allowRestrict = !!cfg.allowRestrict;
+    var allowSet = allowRestrict && Array.isArray(cfg.allowCodes) ? new Set(cfg.allowCodes) : null;
+    var LS_EXTRA = 'rt_monitor_opt_t_board_chips';
+    var LS_LAST = 'rt_monitor_opt_t_board_last';
+    var LS_RIGHTS = 'rt_monitor_opt_t_board_rights_tabs';
+
+    function isSixDigits(s) {
+        return typeof s === 'string' && /^[0-9]{6}$/.test(s);
+    }
+
+    function isAllowedCode(code) {
+        if (!isSixDigits(code)) return false;
+        if (!allowSet) return true;
+        return allowSet.has(code);
+    }
+
+    function readExtraChips() {
+        try {
+            var raw = localStorage.getItem(LS_EXTRA);
+            var a = raw ? JSON.parse(raw) : [];
+            if (!Array.isArray(a)) return [];
+            return a.filter(function (x) { return isSixDigits(x); });
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function writeExtraChips(arr) {
+        var uniq = [];
+        var seen = {};
+        for (var i = 0; i < arr.length; i++) {
+            var c = arr[i];
+            if (!isSixDigits(c) || seen[c]) continue;
+            seen[c] = 1;
+            uniq.push(c);
+        }
+        localStorage.setItem(LS_EXTRA, JSON.stringify(uniq));
+    }
+
+    function profileFor(code) {
+        return symbolProfiles[code] || null;
+    }
+
+    function mergedChips() {
+        var extra = readExtraChips().filter(function (c) { return defaults.indexOf(c) < 0; });
+        var out = [];
+        for (var i = 0; i < defaults.length; i++) {
+            out.push({ code: defaults[i], isDefault: true });
+        }
+        for (var j = 0; j < extra.length; j++) {
+            out.push({ code: extra[j], isDefault: false });
+        }
+        return out;
+    }
+
+    function chipCautionText(p) {
+        var c = p && p.caution ? String(p.caution) : '';
+        if (!c || c === '强信号再做') return '';
+        return c;
+    }
+
+    function updateCautionBanner(active) {
+        var el = document.getElementById('opt-t-caution-banner');
+        if (!el) return;
+        var p = profileFor(active);
+        var caution = chipCautionText(p);
+        if (caution) {
+            el.hidden = false;
+            var name = active + (p.name ? ' ' + p.name : '');
+            el.textContent = name + '：' + caution;
+        } else {
+            el.hidden = true;
+            el.textContent = '';
+        }
+    }
+
+    function optTApiPath() {
+        var p = (window.__RT_MONITOR_API_PREFIX__ || '').replace(/\/$/, '');
+        return p + '/api/opt-t-board';
+    }
+
+    function optTQuoteDeltaApiPath() {
+        var p = (window.__RT_MONITOR_API_PREFIX__ || '').replace(/\/$/, '');
+        return p + '/api/opt-t-board/quote-delta';
+    }
+
+    function optIvDeltaApiPath() {
+        var p = (window.__RT_MONITOR_API_PREFIX__ || '').replace(/\/$/, '');
+        return p + '/api/opt-t-board/iv-delta';
+    }
+
+    function optIvApiPath() {
+        var p = (window.__RT_MONITOR_API_PREFIX__ || '').replace(/\/$/, '');
+        return p + '/api/opt-iv-board';
+    }
+
+    function optPercAnchorsApiPath() {
+        var p = (window.__RT_MONITOR_API_PREFIX__ || '').replace(/\/$/, '');
+        return p + '/api/opt-iv-perc-anchors';
+    }
+
+    function syncUrl(u) {
+        var url = location.pathname + '?u=' + encodeURIComponent(u);
+        history.replaceState({}, '', url);
+    }
+
+    function getBodyRoot() {
+        return document.getElementById('opt-t-body-root');
+    }
+
+    function getActiveUnderlying() {
+        var root = getBodyRoot();
+        if (!root) return defaults[0];
+        var d = root.getAttribute('data-underlying') || '';
+        return isSixDigits(d) ? d : defaults[0];
+    }
+
+    function fillSma120LampEl(el, trend) {
+        if (!el) return;
+        var t = trend && typeof trend === 'object' ? trend : null;
+        el.hidden = false;
+        el.classList.remove('is-pass', 'is-fail', 'is-empty');
+        el.innerHTML = '';
+        if (!t || !t.ok) {
+            el.classList.add('is-empty');
+            el.textContent = '—';
+            el.title = (t && t.title) ? t.title : 'SMA120 样本不足（需 ≥120 交易日）';
+            return;
+        }
+        var gap = String(t.gap_text || '').replace(/%/g, '');
+        el.classList.add(t.pass ? 'is-pass' : 'is-fail');
+        /* chip 内只显示距 SMA120 的缺口，不带百分号；过/未过由绿/橙与正负号表达 */
+        el.appendChild(document.createTextNode(gap || '—'));
+        el.title = t.title || '';
+    }
+
+    var sma120ByCode = {};
+    var spotByCode = {};
+
+    function spotToneClass(pct) {
+        if (typeof pct !== 'number' || pct !== pct) return 'is-flat';
+        if (pct > 0) return 'is-up';
+        if (pct < 0) return 'is-down';
+        return 'is-flat';
+    }
+
+    function perToneClass(per) {
+        if (per == null || !isFinite(Number(per))) return 'is-flat';
+        if (Number(per) >= 95) return 'is-up';
+        if (Number(per) <= 5) return 'is-down';
+        return 'is-flat';
+    }
+
+    function paintChipLast(quoteEl, spot) {
+        var chip = quoteEl && quoteEl.parentElement;
+        var lastEl = chip && chip.querySelector('[data-opt-chip-last]');
+        if (!lastEl) return;
+        lastEl.textContent = (spot && spot.last_text) ? spot.last_text : '—';
+    }
+
+    function appendChipPill(grid, label, text, tone, perText, perTone, title) {
+        var wrap = document.createElement('span');
+        wrap.className = 'opt-t-chip-metric';
+        wrap.title = title;
+        var lab = document.createElement('span');
+        lab.className = 'opt-t-chip-metric-lab';
+        lab.textContent = label;
+        var pill = document.createElement('span');
+        var tail = perTone === 'is-up' || perTone === 'is-down';
+        pill.className = 'opt-t-chip-pct ' + (tone || 'is-flat') + (tail ? ' is-tail' : '');
+        pill.textContent = text;
+        var per = document.createElement('span');
+        per.className = 'opt-t-chip-per ' + (perTone || 'is-flat');
+        per.textContent = perText || '—';
+        wrap.appendChild(lab);
+        wrap.appendChild(pill);
+        wrap.appendChild(per);
+        grid.appendChild(wrap);
+    }
+
+    function paintChipQuote(el, spot, showSrc) {
+        if (!el) return;
+        el.innerHTML = '';
+        if (!spot || spot.last == null) {
+            el.className = 'opt-t-chip-quote is-empty';
+            el.textContent = '—';
+            el.removeAttribute('title');
+            paintChipLast(el, null);
+            return;
+        }
+        el.className = 'opt-t-chip-quote';
+        paintChipLast(el, spot);
+        appendChipPill(
+            el,
+            'Pct',
+            spot.pct_text || '—',
+            spotToneClass(spot.pct),
+            spot.pct_p_text || '—',
+            perToneClass(spot.pct_p),
+            'Pct：(最新−昨收)/昨收。旁注为全历史分位，不含当日；≤5 / ≥95 着色并加粗色块'
+        );
+        appendChipPill(
+            el,
+            'Intra',
+            spot.intra_text || '—',
+            spotToneClass(spot.intra),
+            spot.intra_p_text || '—',
+            perToneClass(spot.intra_p),
+            'Intra：(最新−开盘)/开盘。旁注为全历史分位，不含当日；≤5 / ≥95 着色并加粗色块'
+        );
+        appendChipPill(
+            el,
+            'Gap',
+            spot.gap_text || '—',
+            spotToneClass(spot.gap),
+            spot.gap_p_text || '—',
+            perToneClass(spot.gap_p),
+            'Gap：(开盘−昨收)/昨收。旁注为全历史分位，不含当日；≤5 / ≥95 着色并加粗色块'
+        );
+        var ampTail = perToneClass(spot.amp_p);
+        appendChipPill(
+            el,
+            'Amp',
+            spot.amp_text || '—',
+            ampTail || 'is-flat',
+            spot.amp_p_text || '—',
+            ampTail,
+            'Amp：(最高−最低)/昨收，无涨跌方向。平时中性色块；分位 ≤5 / ≥95 才着色并加粗'
+        );
+        if (spot.source && spot.source !== 'qmt' && spot.asof_text && showSrc) {
+            var srcEl = document.createElement('span');
+            srcEl.className = 'opt-t-chip-src';
+            srcEl.textContent = (spot.source === 'rt_k' ? 'rt_k ' : '日线 ') + spot.asof_text;
+            el.appendChild(srcEl);
+        }
+        var bits = ['最新 ' + (spot.last_text || '—')];
+        if (spot.pct_text && spot.pct_text !== '—') bits.push('Pct ' + spot.pct_text + ' ' + (spot.pct_p_text || '—'));
+        if (spot.intra_text && spot.intra_text !== '—') bits.push('Intra ' + spot.intra_text + ' ' + (spot.intra_p_text || '—'));
+        if (spot.gap_text && spot.gap_text !== '—') bits.push('Gap ' + spot.gap_text + ' ' + (spot.gap_p_text || '—'));
+        if (spot.amp_text && spot.amp_text !== '—') bits.push('Amp ' + spot.amp_text + ' ' + (spot.amp_p_text || '—'));
+        if (spot.open != null) bits.push('开盘 ' + spot.open);
+        if (spot.last_close != null) bits.push('昨收 ' + spot.last_close);
+        if (spot.source === 'rt_k') bits.push('来源 rt_k ' + (spot.asof_text || ''));
+        else if (spot.source === 'daily') bits.push('来源 日线 ' + (spot.asof_text || ''));
+        else if (spot.fresh === false) bits.push('盘后/无量，数字可能不是盘中成交');
+        el.title = bits.join(' · ');
+    }
+
+    function spotSourceKey(spot) {
+        var src = (spot && spot.source) || 'qmt';
+        if (src === 'qmt') return 'qmt';
+        return src + '|' + ((spot && spot.asof_text) || '');
+    }
+
+    function spotSourceLabel(spot) {
+        if (!spot || !spot.source || spot.source === 'qmt') return 'QMT';
+        var asof = spot.asof_text || '';
+        if (spot.source === 'rt_k') return asof ? ('rt_k ' + asof) : 'rt_k';
+        return asof ? ('日线 ' + asof) : '日线';
+    }
+
+    function visibleChipSpots() {
+        var chips = mergedChips();
+        var rows = [];
+        for (var i = 0; i < chips.length; i++) {
+            var code = chips[i].code;
+            var spot = spotByCode[code];
+            if (!spot || spot.last == null) continue;
+            rows.push({ code: code, key: spotSourceKey(spot), spot: spot });
+        }
+        return rows;
+    }
+
+    function refreshSpotSourceLine() {
+        var el = document.getElementById('opt-t-spot-src');
+        var rows = visibleChipSpots();
+        var counts = {};
+        var bestKey = '';
+        var bestN = 0;
+        for (var i = 0; i < rows.length; i++) {
+            var key = rows[i].key;
+            counts[key] = (counts[key] || 0) + 1;
+            if (counts[key] > bestN) {
+                bestN = counts[key];
+                bestKey = key;
+            }
+        }
+        var kinds = Object.keys(counts);
+        var allQmt = rows.length > 0 && kinds.length === 1 && kinds[0] === 'qmt';
+        var uniform = kinds.length === 1 && !allQmt;
+        var mark = {};
+        if (kinds.length > 1) {
+            for (var j = 0; j < rows.length; j++) {
+                if (rows[j].key !== bestKey) mark[rows[j].code] = 1;
+            }
+        }
+        if (el) {
+            if (!rows.length || allQmt) {
+                el.hidden = true;
+                el.textContent = '';
+                el.removeAttribute('title');
+            } else if (uniform) {
+                el.hidden = false;
+                el.textContent = '现货 ' + spotSourceLabel(rows[0].spot);
+                el.title = rows.map(function (row) {
+                    return row.code + ' ' + spotSourceLabel(row.spot);
+                }).join('\n');
+            } else {
+                el.hidden = false;
+                el.textContent = '现货来源不一致';
+                el.title = rows.map(function (row) {
+                    return row.code + ' ' + spotSourceLabel(row.spot);
+                }).join('\n');
+            }
+        }
+        var nodes = document.querySelectorAll('[data-opt-chip-quote]');
+        for (var n = 0; n < nodes.length; n++) {
+            var node = nodes[n];
+            var codeN = node.getAttribute('data-opt-chip-quote') || '';
+            paintChipQuote(node, spotByCode[codeN], !!mark[codeN]);
+        }
+    }
+
+    function applyChipSpots(spots) {
+        if (!spots || typeof spots !== 'object') return;
+        for (var code in spots) {
+            if (Object.prototype.hasOwnProperty.call(spots, code)) {
+                spotByCode[code] = spots[code];
+            }
+        }
+        var nodes = document.querySelectorAll('[data-opt-chip-quote]');
+        for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            paintChipQuote(el, spotByCode[el.getAttribute('data-opt-chip-quote') || ''], false);
+        }
+        refreshSpotSourceLine();
+    }
+
+    function renderSma120Lamps(byCode, active) {
+        if (byCode && typeof byCode === 'object') {
+            sma120ByCode = byCode;
+        }
+        renderChips(active || getActiveUnderlying());
+    }
+
+    function renderChips(active) {
+        var host = document.getElementById('opt-t-chips');
+        if (!host) return;
+        host.innerHTML = '';
+        var chips = mergedChips();
+        for (var i = 0; i < chips.length; i++) {
+            (function (item) {
+                var wrap = document.createElement('span');
+                wrap.className = 'opt-t-chip' + (item.code === active ? ' is-active' : '');
+                wrap.setAttribute('role', 'tab');
+                wrap.setAttribute('aria-selected', item.code === active ? 'true' : 'false');
+                var main = document.createElement('span');
+                main.className = 'opt-t-chip-main';
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                var prof = profileFor(item.code);
+                var label = item.code;
+                if (prof && prof.name) label += ' ' + prof.name;
+                btn.textContent = label;
+                btn.style.cssText = 'border:none;background:transparent;color:inherit;font:inherit;cursor:pointer;padding:0;';
+                btn.addEventListener('pointerenter', function () {
+                    prefetchUnderlying(item.code);
+                    if (window.__optSpPlanPrefetch) window.__optSpPlanPrefetch(item.code);
+                });
+                main.appendChild(btn);
+                var last = document.createElement('span');
+                last.className = 'opt-t-chip-last';
+                last.setAttribute('data-opt-chip-last', item.code);
+                last.textContent = '—';
+                main.appendChild(last);
+                var lamp = document.createElement('span');
+                lamp.className = 'opt-t-sma120-lamp is-empty';
+                lamp.setAttribute('role', 'status');
+                fillSma120LampEl(lamp, sma120ByCode[item.code]);
+                main.appendChild(lamp);
+                var chipCaution = chipCautionText(prof);
+                if (chipCaution) {
+                    var cw = document.createElement('span');
+                    cw.className = 'opt-t-chip-caution';
+                    cw.textContent = '\u26a0';
+                    cw.title = chipCaution;
+                    main.appendChild(cw);
+                }
+                if (!item.isDefault) {
+                    var rm = document.createElement('button');
+                    rm.type = 'button';
+                    rm.className = 'opt-t-chip-remove';
+                    rm.setAttribute('aria-label', '移除' + item.code);
+                    rm.textContent = '\u00d7';
+                    rm.addEventListener('click', function (ev) {
+                        ev.stopPropagation();
+                        var ex = readExtraChips().filter(function (c) { return c !== item.code; });
+                        writeExtraChips(ex);
+                        if (getActiveUnderlying() === item.code) {
+                            loadUnderlying(defaults[0]);
+                        } else {
+                            renderChips(getActiveUnderlying());
+                        }
+                    });
+                    main.appendChild(rm);
+                }
+                wrap.appendChild(main);
+                var quote = document.createElement('span');
+                quote.setAttribute('data-opt-chip-quote', item.code);
+                paintChipQuote(quote, spotByCode[item.code], false);
+                wrap.appendChild(quote);
+                wrap.addEventListener('click', function (ev) {
+                    if (ev.target && ev.target.closest && ev.target.closest('.opt-t-chip-remove')) return;
+                    if (item.code !== getActiveUnderlying()) loadUnderlying(item.code);
+                });
+                host.appendChild(wrap);
+            })(chips[i]);
+        }
+        refreshSpotSourceLine();
+    }
+
+    var tBoardSeq = 0;
+    var tBoardLiveTimer = null;
+    var quoteDeltaTimer = null;
+    var ivBoardLiveTimer = null;
+    var ivBoardLiveDelayTimer = null;
+    var tBoardLiveMs = 0;
+    var quoteDeltaInflight = false;
+    var quoteDeltaSeq = 0;
+    var ivBoardLiveMs = 0;
+    var htmlByCode = {};
+    var etagByCode = {};
+    var ivEtag = '';
+    var prefetchInflight = {};
+    var prefetchQueued = false;
+    var tBoardFetchInflight = false;
+    var tBoardFetchController = null;
+    var tBoardPrimaryRetryTimer = null;
+    var ivFetchInflight = false;
+    // 重字段（SQL/IV/Greeks/完整 HTML）与轻字段（盘口/量仓）必须独立节奏。
+    var OPT_T_HEAVY_REFRESH_MS = 5000;
+    var OPT_T_DELTA_REFRESH_MS = 1000;
+    var OPT_T_IV_REFRESH_MS = 2000;
+    var T_BOARD_FETCH_TIMEOUT_MS = 12000;
+    var staticVer = (function () {
+        var root = document.getElementById('opt-t-body-root');
+        return (root && root.getAttribute('data-static-ver')) || '';
+    })();
+
+    function htmlStoreKey(u) {
+        return 'rt_monitor_opt_t_board_html:' + staticVer + ':' + u;
+    }
+
+    function readSessionHtml(u) {
+        try {
+            return sessionStorage.getItem(htmlStoreKey(u)) || '';
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function writeSessionHtml(u, html) {
+        if (!u || !html) return;
+        try {
+            sessionStorage.setItem(htmlStoreKey(u), html);
+        } catch (e) {}
+    }
+
+    function cachedHtml(u) {
+        return htmlByCode[u] || readSessionHtml(u) || '';
+    }
+
+    function rememberHtml(u, html) {
+        if (!u || !html) return;
+        htmlByCode[u] = html;
+        writeSessionHtml(u, html);
+    }
+
+    var obligationSelectorSide = 'put';
+    var rightsKind = 'vol';
+    var rightsSide = 'call';
+
+    function readRightsPrefsMap() {
+        try {
+            var raw = localStorage.getItem(LS_RIGHTS);
+            var o = raw ? JSON.parse(raw) : {};
+            return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function readRightsPref(u) {
+        var p = readRightsPrefsMap()[u];
+        if (!p || typeof p !== 'object') return { kind: 'vol', side: 'call' };
+        return {
+            kind: p.kind === 'parity' ? 'parity' : 'vol',
+            side: p.side === 'put' ? 'put' : 'call',
+        };
+    }
+
+    function writeRightsPref(u, kind, side) {
+        if (!isSixDigits(u)) return;
+        var k = kind === 'parity' ? 'parity' : 'vol';
+        var s = side === 'put' ? 'put' : 'call';
+        try {
+            var map = readRightsPrefsMap();
+            map[u] = { kind: k, side: s };
+            localStorage.setItem(LS_RIGHTS, JSON.stringify(map));
+        } catch (e) {}
+    }
+
+    function applyRightsPrefFor(u) {
+        var pref = readRightsPref(u);
+        rightsKind = pref.kind;
+        rightsSide = pref.side;
+    }
+
+    function setRightsSelector(root, kind, side, opts) {
+        opts = opts || {};
+        if (kind === 'vol' || kind === 'parity') rightsKind = kind;
+        if (side === 'call' || side === 'put') rightsSide = side;
+        if (opts.persist !== false) {
+            writeRightsPref(getActiveUnderlying(), rightsKind, rightsSide);
+        }
+        if (!root) return;
+        var kindTabs = root.querySelectorAll('[data-opt-rights-kind]');
+        for (var i = 0; i < kindTabs.length; i++) {
+            var kindOn = kindTabs[i].getAttribute('data-opt-rights-kind') === rightsKind;
+            kindTabs[i].classList.toggle('is-active', kindOn);
+            kindTabs[i].setAttribute('aria-selected', kindOn ? 'true' : 'false');
+        }
+        var sideTabs = root.querySelectorAll('[data-opt-rights-side]');
+        for (var j = 0; j < sideTabs.length; j++) {
+            var sideOn = sideTabs[j].getAttribute('data-opt-rights-side') === rightsSide;
+            sideTabs[j].classList.toggle('is-active', sideOn);
+            sideTabs[j].setAttribute('aria-selected', sideOn ? 'true' : 'false');
+        }
+        var panels = root.querySelectorAll('[data-opt-rights-panel]');
+        var want = rightsKind + '-' + rightsSide;
+        for (var k = 0; k < panels.length; k++) {
+            panels[k].classList.toggle('is-active', panels[k].getAttribute('data-opt-rights-panel') === want);
+        }
+        var rules = root.querySelectorAll('[data-opt-rights-rule]');
+        for (var n = 0; n < rules.length; n++) {
+            rules[n].hidden = rules[n].getAttribute('data-opt-rights-rule') !== rightsKind;
+        }
+    }
+
+    function setObligationSelectorTab(root, side) {
+        if (!root || (side !== 'put' && side !== 'call')) return;
+        obligationSelectorSide = side;
+        var tabs = root.querySelectorAll('[data-opt-selector-tab]');
+        for (var i = 0; i < tabs.length; i++) {
+            var active = tabs[i].getAttribute('data-opt-selector-tab') === side;
+            tabs[i].classList.toggle('is-active', active);
+            tabs[i].setAttribute('aria-selected', active ? 'true' : 'false');
+        }
+        var panels = root.querySelectorAll('[data-opt-selector-panel]');
+        for (var j = 0; j < panels.length; j++) {
+            panels[j].classList.toggle('is-active', panels[j].getAttribute('data-opt-selector-panel') === side);
+        }
+    }
+
+    function applyTBoardHtml(root, html, u) {
+        if (!root || !html) return false;
+        if (root.getAttribute('data-html-u') === u && htmlByCode[u] === html) {
+            return false;
+        }
+        root.innerHTML = html;
+        setObligationSelectorTab(root, obligationSelectorSide);
+        setRightsSelector(root, rightsKind, rightsSide, { persist: false });
+        root.setAttribute('data-html-u', u);
+        rememberHtml(u, html);
+        return true;
+    }
+
+    function prefetchUnderlying(u, done) {
+        if (window.__optSpPlanPrefetch) window.__optSpPlanPrefetch(u);
+        if (!isAllowedCode(u) || htmlByCode[u] || prefetchInflight[u]) {
+            if (done) done();
+            return;
+        }
+        prefetchInflight[u] = 1;
+        var hdrs = {};
+        if (etagByCode[u]) hdrs['If-None-Match'] = etagByCode[u];
+        fetch(optTApiPath() + '?u=' + encodeURIComponent(u), {
+            credentials: 'same-origin',
+            headers: hdrs,
+            priority: 'low'
+        })
+            .then(function (r) {
+                if (r.status === 304) return;
+                return r.json().then(function (j) {                    var et = r.headers.get('ETag');
+                    if (et && j && j.u) etagByCode[j.u] = et;
+                    if (j && j.ok && j.html) rememberHtml(j.u || u, j.html);
+                });
+            })
+            .catch(function () {})
+            .then(function () {
+                delete prefetchInflight[u];
+                if (done) done();
+            });
+    }
+
+    function prefetchIdleChips(exceptU) {
+        if (prefetchQueued) return;
+        prefetchQueued = true;
+        var rest = mergedChips().map(function (x) { return x.code; });
+        rest.forEach(function (c) {
+            if (c !== exceptU && window.__optSpPlanPrefetch) window.__optSpPlanPrefetch(c);
+        });
+        rest = rest.filter(function (c) {
+            return c !== exceptU && !htmlByCode[c];
+        });
+        function next() {
+            if (!rest.length) return;
+            prefetchUnderlying(rest.shift(), function () {
+                if (rest.length) setTimeout(next, 80);
+            });
+        }
+        setTimeout(next, 280);
+    }
+
+    // 非可见链的整表后台低频刷新（5~10s）：用户切换标的时不再看到旧 IV/希腊值。
+    // 可见链的盘口、量仓由 quote-delta 每秒逐格补丁；整表重算最低 5 秒一次。
+    // 不能让五条链同时跑整表重算，否则会把轻量实时通道再次压回秒级。
+    var bgRefreshTimer = null;
+    var bgRefreshCursor = 0;
+    var bgRefreshInflight = false;
+    function backgroundRefreshTick() {
+        if (document.hidden) return;
+        if (bgRefreshInflight) return;
+        var exceptU = getActiveUnderlying();
+        var codes = mergedChips().map(function (x) { return x.code; })
+            .filter(function (c) { return c && c !== exceptU && isAllowedCode(c); });
+        if (!codes.length) return;
+        bgRefreshCursor = (bgRefreshCursor + 1) % codes.length;
+        var u = codes[bgRefreshCursor];
+        // 轮转单条且单飞：低优先级请求可能被持续的 quote-delta 延后；不要定时 abort 后
+        // 再重发，否则会形成取消/重试循环。请求自然结束前保持 inflight 即可。
+        bgRefreshInflight = true;
+        fetch(optTApiPath() + '?u=' + encodeURIComponent(u), {
+            credentials: 'same-origin',
+            headers: etagByCode[u] ? { 'If-None-Match': etagByCode[u] } : {},
+            priority: 'low'
+        }).then(function (r) {
+            if (r.status === 304) return;
+            return r.json().then(function (j) {
+                var et = r.headers.get('ETag');
+                if (et && j && j.u) etagByCode[j.u] = et;
+                // 只更新缓存与 ETag，不触碰 DOM（DOM 属于可见链）
+                if (j && j.ok && j.html) rememberHtml(j.u || u, j.html);
+            });
+        }).catch(function () {}).then(function () {
+            bgRefreshInflight = false;
+        });
+    }
+    function scheduleBackgroundRefresh() {
+        if (bgRefreshTimer) clearInterval(bgRefreshTimer);
+        var sec = parseInt(window.__optBgRefreshSec, 10);
+        if (!(sec > 0)) sec = 6;
+        bgRefreshTimer = setInterval(backgroundRefreshTick, sec * 1000);
+    }
+
+    function updateQuoteObservation(payload) {
+        var el = document.getElementById('opt-t-live-observation');
+        if (!el) return;
+        var observed = payload && payload.observed_at ? String(payload.observed_at) : '';
+        var clock = '—';
+        if (observed.length >= 19) {
+            var now = new Date();
+            var today = now.getFullYear() + '-'
+                + String(now.getMonth() + 1).padStart(2, '0') + '-'
+                + String(now.getDate()).padStart(2, '0');
+            clock = observed.slice(0, 10) === today ? observed.slice(11, 19) : observed;
+        } else if (observed) {
+            clock = observed;
+        }
+        el.textContent = 'Update ' + clock;
+        el.title = (observed || '未知')
+            + '\n盘口/量仓每秒补丁'
+            + '\n字段最后变动见悬停'
+            + '\n数值未变不等于未观测';
+    }
+
+    function quoteCellTitle(cell, field, value, book) {
+        var base = cell.getAttribute('data-opt-quote-base-title') || '';
+        var parts = base ? [base] : [];
+        if (field === 'last' && book) {
+            parts.push('买一=' + (book.bid1 || '—') + '，卖一=' + (book.ask1 || '—'));
+        }
+        parts.push('来源=' + (value.source || '未知'));
+        parts.push('最后观测=' + (value.observed_at || '未知'));
+        parts.push('最后变动=' + (value.changed_at || '未知'));
+        if (!value.fresh) parts.push('当前字段不可证明为当日新鲜，保留原可信显示');
+        return parts.join('｜');
+    }
+
+    function applyQuoteDelta(root, payload, expectedU) {
+        if (!root || !payload || payload.u !== expectedU
+            || getActiveUnderlying() !== expectedU) return;
+        var quotes = payload.quotes && typeof payload.quotes === 'object' ? payload.quotes : {};
+        var cells = root.querySelectorAll('[data-opt-quote-code][data-opt-quote-field]');
+        for (var i = 0; i < cells.length; i++) {
+            var cell = cells[i];
+            var code = cell.getAttribute('data-opt-quote-code') || '';
+            var field = cell.getAttribute('data-opt-quote-field') || '';
+            var quote = quotes[code];
+            var value = quote && quote[field];
+            if (!value || typeof value !== 'object') continue;
+            if (value.replace && typeof value.text === 'string') {
+                cell.textContent = value.text;
+                if (field === 'last') cell.classList.remove('opt-t-px-daily');
+            }
+            cell.classList.remove('opt-t-age-stale', 'opt-t-age-ancient');
+            if (value.age_class) cell.classList.add(value.age_class);
+            if (value.observed_at) cell.setAttribute('data-opt-quote-observed-at', value.observed_at);
+            if (value.changed_at) cell.setAttribute('data-opt-quote-changed-at', value.changed_at);
+            if (field === 'last') {
+                var book = quote.book && typeof quote.book === 'object' ? quote.book : null;
+                if (book) {
+                    cell.setAttribute('data-opt-bid1', book.bid1 || '—');
+                    cell.setAttribute('data-opt-ask1', book.ask1 || '—');
+                }
+                cell.title = quoteCellTitle(cell, field, value, book);
+            } else {
+                cell.title = quoteCellTitle(cell, field, value, null);
+            }
+        }
+        updateQuoteObservation(payload);
+        applyChipSpots(payload.spots);
+    }
+
+    function loadQuoteDelta() {
+        if (document.hidden) return;
+        if (quoteDeltaInflight) return;
+        var root = getBodyRoot();
+        var u = getActiveUnderlying();
+        if (!root || !isAllowedCode(u)) return;
+        var seq = ++quoteDeltaSeq;
+        quoteDeltaInflight = true;
+        fetch(optTQuoteDeltaApiPath() + '?u=' + encodeURIComponent(u), {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            priority: 'high'
+        }).then(function (r) {
+            if (!r.ok) throw new Error('quote delta failed');
+            return r.json();
+        }).then(function (payload) {
+            // 现货是五只 chip 共用，与当前 T 表 seq 解耦；切标的丢掉整包会让顶栏长期停在 —。
+            if (payload && payload.spots) applyChipSpots(payload.spots);
+            if (seq !== quoteDeltaSeq || getActiveUnderlying() !== u) return;
+            applyQuoteDelta(getBodyRoot(), payload, u);
+        }).catch(function () {
+            // 保留最近一次可信数字；不清零、不把失败时刻伪装成新鲜。
+        }).then(function () {
+            quoteDeltaInflight = false;
+        });
+    }
+
+    function applyIvDelta(payload) {
+        var greeks = payload && payload.greeks;
+        if (!greeks) return;
+        var cells = document.querySelectorAll('[data-opt-greek-code]');
+        for (var i = 0; i < cells.length; i++) {
+            var cell = cells[i];
+            var code = cell.getAttribute('data-opt-greek-code') || '';
+            var field = cell.getAttribute('data-opt-greek-field') || '';
+            var row = greeks[code];
+            var value = row && row[field];
+            if (!value || typeof value.text !== 'string' || value.text === '—') continue;
+            cell.textContent = value.text;
+        }
+    }
+
+    var ivDeltaTimer = null;
+    var ivDeltaInflight = false;
+
+    function loadIvDelta() {
+        if (ivDeltaInflight || document.hidden) return;
+        var u = getActiveUnderlying();
+        if (!isAllowedCode(u)) return;
+        ivDeltaInflight = true;
+        fetch(optIvDeltaApiPath() + '?u=' + encodeURIComponent(u), {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            priority: 'low'
+        }).then(function (r) {
+            if (!r.ok) throw new Error('iv delta failed');
+            return r.json();
+        }).then(function (payload) {
+            if (getActiveUnderlying() !== u) return;
+            applyIvDelta(payload);
+        }).catch(function () {
+        }).then(function () {
+            ivDeltaInflight = false;
+        });
+    }
+
+    function scheduleIvDeltaRefresh() {
+        if (ivDeltaTimer) clearTimeout(ivDeltaTimer);
+        function arm() {
+            ivDeltaTimer = setTimeout(function () {
+                ivDeltaTimer = null;
+                loadIvDelta();
+                arm();
+            }, OPT_T_IV_REFRESH_MS);
+        }
+        arm();
+    }
+
+    function scheduleQuoteDeltaRefresh() {
+        if (quoteDeltaTimer) clearTimeout(quoteDeltaTimer);
+        function arm() {
+            quoteDeltaTimer = setTimeout(function () {
+                quoteDeltaTimer = null;
+                loadQuoteDelta();
+                arm();
+            }, OPT_T_DELTA_REFRESH_MS);
+        }
+        arm();
+    }
+
+    function pollMsForSource(source, pollMs) {
+        var n = parseInt(pollMs, 10);
+        if (source === 'daqmt' || source === 'tdx' || source === 'mixed') {
+            return Math.max(OPT_T_HEAVY_REFRESH_MS, n || 0);
+        }
+        if (n > 0) return n;
+        return 10000;
+    }
+
+    function headerPollMs(r) {
+        if (!r || !r.headers || !r.headers.get) return 0;
+        return parseInt(r.headers.get('X-Opt-Poll-Ms') || '0', 10) || 0;
+    }
+
+    function scheduleLiveRefresh(source, pollMs) {
+        var ms = pollMsForSource(source, pollMs);
+        if (tBoardLiveTimer && tBoardLiveMs === ms) return;
+        if (tBoardLiveTimer) {
+            clearTimeout(tBoardLiveTimer);
+            tBoardLiveTimer = null;
+        }
+        tBoardLiveMs = ms;
+        function arm() {
+            tBoardLiveTimer = setTimeout(function () {
+                tBoardLiveTimer = null;
+                if (!document.hidden && !tBoardFetchInflight) {
+                    loadUnderlying(getActiveUnderlying(), { reloadPlan: false, silent: true });
+                }
+                if (tBoardLiveMs === ms) arm();
+            }, ms);
+        }
+        arm();
+    }
+
+    function scheduleIvLiveRefresh(source, pollMs) {
+        var live = source === 'daqmt' || source === 'tdx' || source === 'mixed';
+        var ms = live ? OPT_T_IV_REFRESH_MS : pollMsForSource(source, pollMs);
+        if ((ivBoardLiveTimer || ivBoardLiveDelayTimer) && ivBoardLiveMs === ms) return;
+        if (ivBoardLiveTimer) {
+            clearTimeout(ivBoardLiveTimer);
+            ivBoardLiveTimer = null;
+        }
+        if (ivBoardLiveDelayTimer) {
+            clearTimeout(ivBoardLiveDelayTimer);
+            ivBoardLiveDelayTimer = null;
+        }
+        ivBoardLiveMs = ms;
+        function arm() {
+            ivBoardLiveTimer = setTimeout(function () {
+                ivBoardLiveTimer = null;
+                if (!document.hidden && !ivFetchInflight) loadIvBoard();
+                if (ivBoardLiveMs === ms) arm();
+            }, ms);
+        }
+        if (source === 'daqmt' || source === 'tdx' || source === 'mixed') {
+            ivBoardLiveDelayTimer = setTimeout(function () {
+                ivBoardLiveDelayTimer = null;
+                arm();
+            }, Math.floor(ms / 2));
+        } else {
+            arm();
+        }
+    }
+
+    function showTLoading() {
+        var root = getBodyRoot();
+        if (root) root.innerHTML = '<p class="opt-t-empty-sec">加载 T 型报价…</p>';
+    }
+
+    function parseIvPctText(s) {
+        if (!s || s === '—') return null;
+        var v = parseFloat(String(s).replace('%', '').trim());
+        return isFinite(v) ? v : null;
+    }
+
+    function fillIvSkewIfEmpty(host) {
+        var root = host || document.getElementById('opt-iv-board-root');
+        if (!root) return;
+        var cells = root.querySelectorAll('.opt-iv-cell-skew');
+        for (var i = 0; i < cells.length; i++) {
+            var skew = cells[i];
+            if ((skew.textContent || '').trim()) continue;
+            var tr = skew.parentNode;
+            if (!tr) continue;
+            var wings = tr.querySelectorAll('.opt-iv-cell-wing');
+            if (wings.length < 2) continue;
+            var callIv = parseIvPctText(wings[0].textContent);
+            var putIv = parseIvPctText(wings[1].textContent);
+            if (callIv == null || putIv == null) continue;
+            var pp = putIv - callIv;
+            var txt = (pp > 0 ? '+' : '') + pp.toFixed(1);
+            skew.textContent = txt;
+            if (pp >= 2.5) skew.className += ' opt-iv-skew--fat';
+            else if (pp >= 0.5) skew.className += ' opt-iv-skew--put';
+            else if (pp <= -0.5) skew.className += ' opt-iv-skew--call';
+            skew.title = '认沽最新 − 认购最新 = ' + txt + ' pp。正=认沽更贵；≥+2.5 偏肥尾';
+        }
+    }
+
+    function loadIvBoard(opts) {
+        var host = document.getElementById('opt-iv-board-root');
+        if (!host) return;
+        opts = opts || {};
+        if (document.hidden && !opts.force) return;
+        if (opts.force) {
+            ivEtag = '';
+            ivFetchInflight = false;
+        }
+        if (ivFetchInflight) return;
+        var hdrs = {};
+        if (ivEtag) hdrs['If-None-Match'] = ivEtag;
+        ivFetchInflight = true;
+        fetch(optIvApiPath(), { credentials: 'same-origin', headers: hdrs })
+            .then(function (r) {
+                if (r.status === 304) {
+                    scheduleIvLiveRefresh('daqmt', headerPollMs(r));
+                    return null;
+                }
+                var et = r.headers.get('ETag');
+                if (et) ivEtag = et;
+                return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+            })
+            .then(function (x) {
+                if (!x) return;
+                if (x.ok && x.j && x.j.ok && x.j.html) {
+                    host.innerHTML = x.j.html;
+                    fillIvSkewIfEmpty(host);
+                    scheduleIvLiveRefresh(x.j.quote_source, x.j.poll_ms);
+                    return;
+                }
+                scheduleIvLiveRefresh((x.j && x.j.quote_source) || '', x.j && x.j.poll_ms);
+            })
+            .catch(function () {
+                scheduleIvLiveRefresh('');
+            })
+            .then(function () { ivFetchInflight = false; });
+    }
+
+    function schedulePrimaryRetry(u) {
+        if (tBoardPrimaryRetryTimer) clearTimeout(tBoardPrimaryRetryTimer);
+        tBoardPrimaryRetryTimer = setTimeout(function () {
+            tBoardPrimaryRetryTimer = null;
+            if (document.hidden || getActiveUnderlying() !== u || tBoardFetchInflight) return;
+            loadUnderlying(u, { reloadPlan: false, silent: false });
+        }, 1500);
+    }
+
+    function loadUnderlying(u, opts) {
+        opts = opts || {};
+        var reloadPlan = opts.reloadPlan !== false;
+        var silent = !!opts.silent;
+        if (!isAllowedCode(u)) {
+            window.alert('标的须为6位数字' + (allowRestrict ? '且在服务器白名单内' : '') + '。');
+            return;
+        }
+        var root = getBodyRoot();
+        if (!root) return;
+        if (silent && tBoardFetchInflight) return;
+        var seq = ++tBoardSeq;
+        if (!silent && tBoardFetchController) {
+            try { tBoardFetchController.abort(); } catch (e0) {}
+        }
+        var prevU = root.getAttribute('data-underlying');
+        // 仅切标的时作废轻量盘口；同标的静默整表不得打断 1s quote-delta。
+        if (prevU && prevU !== u) {
+            quoteDeltaSeq += 1;
+        }
+        var instant = cachedHtml(u);
+        root.setAttribute('data-underlying', u);
+        applyRightsPrefFor(u);
+        renderChips(u);
+        updateCautionBanner(u);
+        if (reloadPlan) {
+            window.__optSpPlanPendingU = u;
+            if (window.__optSpPlanLoad) window.__optSpPlanLoad(u);
+        }
+        if (instant) {
+            applyTBoardHtml(root, instant, u);
+            document.title = '期权T型报价 · ' + u;
+        } else if (!silent) {
+            showTLoading();
+        }
+        var url = optTApiPath() + '?u=' + encodeURIComponent(u);
+        var y = window.scrollY;
+        var hdrs = {};
+        if (silent && etagByCode[u]) hdrs['If-None-Match'] = etagByCode[u];
+        var requestController = new AbortController();
+        tBoardFetchController = requestController;
+        var requestTimeout = setTimeout(function () {
+            if (tBoardFetchController === requestController) requestController.abort();
+        }, T_BOARD_FETCH_TIMEOUT_MS);
+        tBoardFetchInflight = true;
+        fetch(url, { credentials: 'same-origin', headers: hdrs, signal: requestController.signal })
+            .then(function (r) {
+                if (r.status === 304) {
+                    return {
+                        ok: true,
+                        notModified: true,
+                        j: { ok: true, u: u, quote_source: 'daqmt' },
+                        pollMs: headerPollMs(r),
+                    };
+                }
+                var et = r.headers.get('ETag');
+                return r.json().then(function (j) {
+                    if (et && j && (j.u || u)) etagByCode[j.u || u] = et;
+                    return { ok: r.ok, j: j };
+                });
+            })
+            .then(function (x) {
+                if (seq !== tBoardSeq) return;
+                if (x.notModified) {
+                    scheduleLiveRefresh('daqmt', x.pollMs);
+                    return;
+                }
+                if (!x.ok || !x.j || !x.j.ok) {
+                    if (silent || instant) return;
+                    var msg = (x.j && x.j.error) ? x.j.error : '加载失败';
+                    root.innerHTML = '<p class="opt-t-empty-sec">' + msg + '</p>';
+                    scheduleLiveRefresh('');
+                    return;
+                }
+                var painted = applyTBoardHtml(root, x.j.html, x.j.u);
+                root.setAttribute('data-underlying', x.j.u);
+                document.title = '期权T型报价 · ' + x.j.u;
+                if (!silent) {
+                    try {
+                        localStorage.setItem(LS_LAST, x.j.u);
+                    } catch (e2) {}
+                    syncUrl(x.j.u);
+                } else if (painted) {
+                    window.scrollTo(0, y);
+                }
+                updateCautionBanner(x.j.u);
+                if (tBoardPrimaryRetryTimer) {
+                    clearTimeout(tBoardPrimaryRetryTimer);
+                    tBoardPrimaryRetryTimer = null;
+                }
+                if (x.j.spots) applyChipSpots(x.j.spots);
+                renderSma120Lamps(x.j.trend_sma120_by_code || {}, x.j.u);
+                scheduleLiveRefresh(x.j.quote_source, x.j.poll_ms);
+                if (!silent) prefetchIdleChips(x.j.u);
+            })
+            .catch(function () {
+                if (seq !== tBoardSeq) return;
+                if (!silent && !instant) {
+                    root.innerHTML = '<p class="opt-t-empty-sec">行情请求超时，正在自动重试…</p>';
+                }
+                scheduleLiveRefresh('');
+                schedulePrimaryRetry(u);
+            })
+            .finally(function () {
+                clearTimeout(requestTimeout);
+                if (tBoardFetchController === requestController) {
+                    tBoardFetchController = null;
+                    tBoardFetchInflight = false;
+                }
+            });
+    }
+
+    function onAddClick() {
+        var raw = window.prompt('请输入6位标的代码（如510300 ETF，或000300 中金所股指期权）：', '');
+        if (raw == null) return;
+        var code = String(raw).trim().replace(/\s+/g, '');
+        if (!isSixDigits(code)) {
+            window.alert('须输入6位数字。');
+            return;
+        }
+        if (!isAllowedCode(code)) {
+            window.alert('该标的不在允许列表中（检查 OPT_T_BOARD_ALLOW_CODES）。');
+            return;
+        }
+        var all = mergedChips().map(function (x) { return x.code; });
+        if (all.indexOf(code) >= 0) {
+            loadUnderlying(code);
+            return;
+        }
+        var ex = readExtraChips();
+        if (defaults.indexOf(code) < 0) {
+            ex.push(code);
+            writeExtraChips(ex);
+        }
+        loadUnderlying(code);
+    }
+
+    function percPanelEls() {
+        return {
+            btn: document.getElementById('opt-t-perc-cfg'),
+            panel: document.getElementById('opt-t-perc-panel'),
+            rows: document.getElementById('opt-t-perc-rows'),
+            msg: document.getElementById('opt-t-perc-msg'),
+            wrap: document.querySelector('.opt-t-perc-wrap')
+        };
+    }
+
+    function setPercMsg(text, isOk) {
+        var msg = percPanelEls().msg;
+        if (!msg) return;
+        if (!text) {
+            msg.hidden = true;
+            msg.textContent = '';
+            msg.classList.remove('is-ok');
+            return;
+        }
+        msg.hidden = false;
+        msg.textContent = text;
+        msg.classList.toggle('is-ok', !!isOk);
+    }
+
+    function renderPercRows(items) {
+        var rows = percPanelEls().rows;
+        if (!rows) return;
+        rows.textContent = '';
+        (items || []).forEach(function (it) {
+            var lab = document.createElement('label');
+            var id = 'opt-t-perc-' + String(it.ts_code || '').replace(/\W/g, '');
+            lab.setAttribute('for', id);
+            lab.textContent = it.name || it.ts_code;
+            lab.title = it.ts_code || '';
+            var inp = document.createElement('input');
+            inp.type = 'date';
+            inp.id = id;
+            inp.setAttribute('data-ts-code', it.ts_code || '');
+            inp.value = it.date || '';
+            rows.appendChild(lab);
+            rows.appendChild(inp);
+        });
+    }
+
+    function collectPercAnchors() {
+        var rows = percPanelEls().rows;
+        var out = {};
+        if (!rows) return out;
+        var inputs = rows.querySelectorAll('input[data-ts-code]');
+        for (var i = 0; i < inputs.length; i++) {
+            var code = inputs[i].getAttribute('data-ts-code');
+            if (code) out[code] = inputs[i].value || '';
+        }
+        return out;
+    }
+
+    function bustPercDependentCaches() {
+        htmlByCode = {};
+        etagByCode = {};
+        ivEtag = '';
+        try {
+            var keys = [];
+            for (var i = 0; i < sessionStorage.length; i++) {
+                var k = sessionStorage.key(i);
+                if (k && k.indexOf('rt_monitor_opt_t_board_html:') === 0) keys.push(k);
+            }
+            keys.forEach(function (k) { sessionStorage.removeItem(k); });
+        } catch (e) {}
+    }
+
+    function closePercPanel() {
+        var els = percPanelEls();
+        if (els.panel) els.panel.hidden = true;
+        if (els.btn) els.btn.setAttribute('aria-expanded', 'false');
+        setPercMsg('');
+    }
+
+    function openPercPanel() {
+        var els = percPanelEls();
+        if (!els.panel || !els.btn) return;
+        els.panel.hidden = false;
+        els.btn.setAttribute('aria-expanded', 'true');
+        setPercMsg('');
+        fetch(optPercAnchorsApiPath(), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (j && j.ok && Array.isArray(j.items)) {
+                    renderPercRows(j.items);
+                    return;
+                }
+                setPercMsg((j && j.error) || '读取锚点失败');
+            })
+            .catch(function () { setPercMsg('读取锚点失败'); });
+    }
+
+    function onPercCfgClick(ev) {
+        if (ev) ev.stopPropagation();
+        var panel = percPanelEls().panel;
+        if (panel && !panel.hidden) {
+            closePercPanel();
+            return;
+        }
+        openPercPanel();
+    }
+
+    function onPercSaveClick() {
+        var saveBtn = document.getElementById('opt-t-perc-save');
+        if (saveBtn) saveBtn.disabled = true;
+        setPercMsg('');
+        fetch(optPercAnchorsApiPath(), {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ anchors: collectPercAnchors() })
+        })
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .then(function (x) {
+                if (!x.ok || !x.j || !x.j.ok) {
+                    setPercMsg((x.j && x.j.error) || '保存失败');
+                    return;
+                }
+                if (Array.isArray(x.j.items)) renderPercRows(x.j.items);
+                bustPercDependentCaches();
+                loadUnderlying(getActiveUnderlying(), { reloadPlan: false, silent: false });
+                loadIvBoard({ force: true });
+                setPercMsg('已保存，Per C 正在刷新', true);
+            })
+            .catch(function () { setPercMsg('保存失败'); })
+            .then(function () {
+                if (saveBtn) saveBtn.disabled = false;
+            });
+    }
+
+    document.addEventListener('click', function (ev) {
+        var target = ev.target;
+        if (!target || !target.closest) return;
+        var wrap = percPanelEls().wrap;
+        var panel = percPanelEls().panel;
+        if (panel && !panel.hidden && wrap && !wrap.contains(target)) {
+            closePercPanel();
+        }
+        var root = getBodyRoot();
+        var rightsKindTab = target.closest('[data-opt-rights-kind]');
+        if (rightsKindTab) {
+            setRightsSelector(root, rightsKindTab.getAttribute('data-opt-rights-kind'), rightsSide);
+            return;
+        }
+        var rightsSideTab = target.closest('[data-opt-rights-side]');
+        if (rightsSideTab) {
+            setRightsSelector(root, rightsKind, rightsSideTab.getAttribute('data-opt-rights-side'));
+            return;
+        }
+        var tab = target.closest('[data-opt-selector-tab]');
+        if (!tab) return;
+        setObligationSelectorTab(root, tab.getAttribute('data-opt-selector-tab'));
+    });
+
+    document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape') closePercPanel();
+    });
+
+    function bootOptTBoard() {
+        var root = getBodyRoot();
+        var initial = root ? (root.getAttribute('data-underlying') || defaults[0]) : defaults[0];
+        var bootU = initial;
+        var qs = new URLSearchParams(location.search);
+        if (!qs.has('u')) {
+            try {
+                var last = localStorage.getItem(LS_LAST);
+                if (last && isSixDigits(last) && isAllowedCode(last)) bootU = last;
+            } catch (e3) {}
+        }
+        if (root && bootU === initial && root.querySelector('.opt-t-table')) {
+            rememberHtml(bootU, root.innerHTML);
+            root.setAttribute('data-html-u', bootU);
+        }
+        applyRightsPrefFor(bootU);
+        if (root) setRightsSelector(root, rightsKind, rightsSide, { persist: false });
+        // 顶栏五只标的必须立刻画出；#opt-t-chips 已在上方 DOM 中。
+        // 勿再挂 DOMContentLoaded：其会等所有 defer 脚本（chart-stack 等），
+        // 静态资源若被单线程服务端拖住则永不触发 → 只剩「添加标的 / Per C」。
+        if (window.__optSma120ByCode && typeof window.__optSma120ByCode === 'object') {
+            sma120ByCode = window.__optSma120ByCode;
+        }
+        applyChipSpots(window.__optChipSpots);
+        renderChips(bootU);
+        updateCautionBanner(bootU);
+        var addBtn = document.getElementById('opt-t-add');
+        if (addBtn) addBtn.addEventListener('click', onAddClick);
+        var percBtn = document.getElementById('opt-t-perc-cfg');
+        if (percBtn) percBtn.addEventListener('click', onPercCfgClick);
+        var percSave = document.getElementById('opt-t-perc-save');
+        if (percSave) percSave.addEventListener('click', onPercSaveClick);
+        var percCancel = document.getElementById('opt-t-perc-cancel');
+        if (percCancel) percCancel.addEventListener('click', closePercPanel);
+        var hasCache = !!cachedHtml(bootU);
+        window.__optSpPlanPendingU = bootU;
+        loadQuoteDelta();
+        scheduleQuoteDeltaRefresh();
+        loadIvDelta();
+        scheduleIvDeltaRefresh();
+        loadUnderlying(bootU, { reloadPlan: true, silent: hasCache });
+        loadIvBoard();
+        // 非可见链后台低频刷新（默认 6s）；设 window.__optBgRefreshSec=0 可关。
+        scheduleBackgroundRefresh();
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden) return;
+            var active = getActiveUnderlying();
+            loadQuoteDelta();
+            if (!tBoardFetchInflight && isAllowedCode(active)) {
+                loadUnderlying(active, { reloadPlan: false, silent: !!cachedHtml(active) });
+            }
+            if (!ivFetchInflight) loadIvBoard();
+        });
+    }
+    bootOptTBoard();
+})();
+    </script>
+    {# Sell Put 须先于 chart-stack：241KB 解析会拖死计划区自启动 #}
+    <script defer src="{{ url_for('static', filename='js/rt_monitor_opt_sp_plan.js') }}?v={{ rt_monitor_static_ver }}"></script>
+    <script defer src="{{ url_for('static', filename='vendor/chart-stack.umd.js') }}?v={{ rt_monitor_static_ver }}"></script>
+    <script defer src="{{ url_for('static', filename='js/rt_monitor_opt_iv_modal.js') }}?v={{ rt_monitor_static_ver }}"></script>
+</main>
+</body>
+</html>

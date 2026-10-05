@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="zh-CN" data-endpoint="/api/history" data-selected-underlying="{{ selectedUnderlying }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ selectedUnderlying }} 历史期权墙 · OI Wall</title>
+  <style>
+    :root {
+      --paper: #10120f;
+      --panel: #191c17;
+      --panel-2: #20251e;
+      --line: #3a4034;
+      --ink: #f1ead8;
+      --muted: #a49d8b;
+      --call: #d9a441;
+      --put: #59b8ad;
+      --positive: #b7c96b;
+      --negative: #d77f6a;
+      --spot: #efe6c8;
+      --shadow: rgba(0, 0, 0, .28);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.014) 1px, transparent 1px),
+        radial-gradient(circle at 16% 0%, rgba(217,164,65,.09), transparent 28rem),
+        var(--paper);
+      background-size: 28px 28px, 28px 28px, auto, auto;
+      font-family: "Bahnschrift", "Microsoft YaHei UI", sans-serif;
+      letter-spacing: .012em;
+    }
+
+    button, select { font: inherit; }
+    .shell { width: min(1480px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 60px; }
+    .masthead {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 24px;
+      align-items: end;
+      border-bottom: 1px solid var(--line);
+      padding: 10px 0 20px;
+    }
+    .eyebrow, .kicker { color: var(--call); font-size: 12px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }
+    h1 { margin: 8px 0 6px; font-family: "STZhongsong", "SimSun", serif; font-size: clamp(32px, 5vw, 68px); font-weight: 500; line-height: .98; letter-spacing: -.045em; }
+    h2 { margin: 6px 0 0; font-family: "STZhongsong", "SimSun", serif; font-weight: 500; font-size: clamp(24px, 3vw, 38px); }
+    h3 { margin: 0; font-size: 16px; }
+    p { line-height: 1.65; }
+    .subtitle { margin: 0; color: var(--muted); font-size: 14px; }
+    .stamp, .panel { background: rgba(25,28,23,.94); border: 1px solid var(--line); box-shadow: 8px 8px 0 var(--shadow); }
+    .stamp { min-width: 245px; padding: 14px 16px; }
+    .stamp-grid { display: grid; grid-template-columns: auto auto; gap: 7px 18px; font-variant-numeric: tabular-nums; }
+    .stamp-grid span:nth-child(odd) { color: var(--muted); }
+    .stamp-grid span:nth-child(even) { text-align: right; }
+    .status-line { min-height: 44px; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--call); box-shadow: 0 0 0 5px rgba(217,164,65,.2); }
+    .status-dot.error { background: var(--negative); box-shadow: 0 0 0 5px rgba(215,127,106,.18); }
+
+    .controls { display: grid; grid-template-columns: minmax(180px, .75fr) minmax(240px, 1fr) auto; gap: 10px; align-items: end; margin: 14px 0 10px; }
+    .control { display: grid; gap: 6px; }
+    .control label { color: var(--muted); font-size: 12px; }
+    select, .refresh {
+      min-height: 40px;
+      color: var(--ink);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+    }
+    select:focus, .refresh:focus, .expiry-tab:focus { outline: 2px solid var(--put); outline-offset: 2px; }
+    .refresh { cursor: pointer; border-color: var(--call); }
+    .refresh:hover { background: var(--panel-2); }
+
+    .panel { padding: 18px; margin-top: 14px; }
+    .panel-head { display: flex; justify-content: space-between; gap: 16px; align-items: end; border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 14px; }
+    .panel-note { margin: 0; color: var(--muted); font-size: 12px; text-align: right; }
+    .expiry-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .expiry-tab { color: var(--muted); background: var(--panel); border: 1px solid var(--line); padding: 12px; text-align: left; cursor: pointer; }
+    .expiry-tab.active { color: var(--ink); border-color: var(--call); background: rgba(217,164,65,.14); }
+    .expiry-tab strong, .expiry-tab small { display: block; }
+    .expiry-tab small { margin-top: 5px; color: var(--muted); font-size: 11px; }
+
+    .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .card { background: var(--panel-2); border: 1px solid var(--line); padding: 14px; min-height: 130px; }
+    .card.call { border-left: 3px solid var(--call); }
+    .card.put { border-left: 3px solid var(--put); }
+    .card .big { margin: 6px 0 4px; font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .card .meta { color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+    .metric { background: rgba(16,18,15,.56); border: 1px solid var(--line); padding: 11px; }
+    .metric label { display: block; color: var(--muted); font-size: 11px; }
+    .metric strong { display: block; margin-top: 5px; font-size: 18px; font-variant-numeric: tabular-nums; }
+    .metric small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+    th, td { border-bottom: 1px solid rgba(58,64,52,.65); padding: 9px 8px; text-align: right; white-space: nowrap; }
+    th { color: var(--muted); font-weight: 500; }
+    th:first-child, td:first-child { text-align: left; }
+    tr.wall { background: rgba(217,164,65,.12); }
+    tr.spot-row { box-shadow: inset 3px 0 var(--spot); }
+    .call-text { color: var(--call); }
+    .put-text { color: var(--put); }
+    .positive { color: var(--positive); }
+    .negative { color: var(--negative); }
+    .tag { display: inline-block; padding: 2px 5px; margin-left: 4px; border: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+    .tag.wall { color: var(--call); border-color: var(--call); }
+    .tag.put-wall { color: var(--put); border-color: var(--put); }
+    .tag.spot { color: var(--spot); border-color: var(--spot); }
+    .table-wrap { overflow-x: auto; }
+
+    .flow-table th, .flow-table td { white-space: normal; min-width: 150px; vertical-align: top; }
+    .flow-cell { line-height: 1.65; }
+    .flow-cell strong { display: block; font-size: 13px; }
+    .flow-cell small { display: block; color: var(--muted); }
+    .formula, .boundary, .warning-box { border: 1px dashed var(--line); padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.75; }
+    .formula { margin-top: 12px; color: var(--ink); }
+    .warning-box { margin-top: 10px; border-color: rgba(215,127,106,.55); }
+    .warning-box ul { margin: 6px 0 0; padding-left: 18px; }
+    .quality-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+    .quality-item { background: var(--panel-2); border: 1px solid var(--line); padding: 10px; }
+    .quality-item label { color: var(--muted); font-size: 11px; }
+    .quality-item strong { display: block; margin-top: 4px; font-size: 17px; }
+    .empty { color: var(--muted); padding: 18px 0; }
+    .footer-note { color: var(--muted); font-size: 12px; margin-top: 18px; }
+
+    @media (max-width: 900px) {
+      .masthead { grid-template-columns: 1fr; align-items: start; }
+      .stamp { min-width: 0; }
+      .controls { grid-template-columns: 1fr 1fr; }
+      .refresh { grid-column: 1 / -1; }
+      .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .quality-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 20px, 1480px); padding-top: 16px; }
+      .controls, .cards { grid-template-columns: 1fr; }
+      .expiry-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .quality-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      h1 { font-size: 42px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <div>
+        <div class="eyebrow">HISTORICAL REPLAY / PHASE 02A</div>
+        <h1 id="page-title">{{ selectedUnderlying }} 历史期权墙</h1>
+        <p id="page-subtitle" class="subtitle">EOD 历史快照 · 先选日期，再看同日 OI、Flow 与集中度</p>
+      </div>
+      <div class="stamp" aria-label="数据快照">
+        <div class="stamp-grid">
+          <span>数据日</span><span id="data-date">—</span>
+          <span>ETF 现货</span><span id="spot-price">—</span>
+          <span>价格字段</span><span id="spot-field">—</span>
+          <span>口径</span><span>EOD / 只读</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="status-line"><span id="status-dot" class="status-dot"></span><span id="status-text">正在读取共同交易日…</span></div>
+
+    <section class="controls" aria-label="历史筛选">
+      <div class="control">
+        <label for="underlying-select">ETF 期权品种</label>
+        <select id="underlying-select">
+          {% for option in underlyingOptions %}
+          <option value="{{ option.code }}"{% if option.code == selectedUnderlying %} selected{% endif %}>{{ option.code }} · {{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="control">
+        <label for="date-select">历史共同交易日</label>
+        <select id="date-select" disabled><option>正在读取…</option></select>
+      </div>
+      <button id="reload" class="refresh" type="button">重新读取当前日期</button>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><div class="kicker">EXPIRY</div><h2>期限选择</h2></div>
+        <p id="history-note" class="panel-note">共同日期列表加载中…</p>
+      </div>
+      <div id="expiry-tabs" class="expiry-tabs"><div class="empty">等待历史数据…</div></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><div class="kicker">OPEN INTEREST STRUCTURE</div><h2>Call / Put OI Wall</h2></div>
+        <p id="expiry-note" class="panel-note">—</p>
+      </div>
+      <div id="wall-cards" class="cards"><div class="empty">等待数据…</div></div>
+      <div id="balance-metrics" class="metric-grid"></div>
+      <div class="table-wrap" style="margin-top:14px">
+        <table aria-label="OI Wall 行权价明细">
+          <thead><tr><th>行权价</th><th class="call-text">Call OI</th><th class="put-text">Put OI</th><th>判定</th></tr></thead>
+          <tbody id="oi-table-body"><tr><td colspan="4" class="empty">等待数据…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="formula">OI Wall = arg max<sub>K</sub> Σ OI(T, K, side)；Top 1 集中度 = Wall OI ÷ 同侧总 OI；Top 3 集中度 = Top 3 行权价 OI ÷ 同侧总 OI；距离现货 = (K ÷ Spot − 1) × 100%。</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><div class="kicker">OI CHANGE / FLOW</div><h2>1D / 3D / 5D Flow Wall</h2></div>
+        <p class="panel-note">Flow 只描述公开 OI 的跨日变化，不等于成交量或真实开仓量</p>
+      </div>
+      <div class="table-wrap">
+        <table class="flow-table" aria-label="Flow Wall 历史明细">
+          <thead><tr><th>周期</th><th class="call-text">Call +Flow Wall</th><th class="call-text">Call -Flow Wall</th><th class="put-text">Put +Flow Wall</th><th class="put-text">Put -Flow Wall</th></tr></thead>
+          <tbody id="flow-table-body"><tr><td colspan="5" class="empty">等待数据…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="formula">ΔOI = OI(选定日期) − OI(基准日)；日均流速 = ΔOI ÷ 可用交易日数；日均流速占当前同侧 OI = 日均流速 ÷ 当前期限同侧总 OI。缺少基线的合约排除且不补零。</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><div class="kicker">DATA INTEGRITY</div><h2>数据质量与计算边界</h2></div>
+        <p class="panel-note">每次切换日期都会重新读取同日数据</p>
+      </div>
+      <div id="quality-grid" class="quality-grid"></div>
+      <div id="quality-warnings"></div>
+      <div class="boundary" style="margin-top:12px">
+        OI 是存量，不知道谁买、谁卖，也不能仅凭正负 ΔOI 判断做市商方向。Max Pain、Gamma 和 Flow 均基于公开数据口径；Gamma 使用代表 IV 近似，不能解释为带方向的 Dealer GEX。历史页面用于可复现回看，不输出买卖建议。
+      </div>
+    </section>
+    <p class="footer-note">服务独立运行于 5012；当前页面不修改 5000 主监控，也不写入数据库。</p>
+  </main>
+
+  <script>
+    (() => {
+      const endpoint = document.documentElement.dataset.endpoint;
+      const initialUnderlying = document.documentElement.dataset.selectedUnderlying;
+      const state = { snapshot: null, expiryIndex: 0 };
+      const $ = (id) => document.getElementById(id);
+
+      function number(value) {
+        if (value === null || value === undefined || value === '') return null;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+
+      function fmtWan(value) {
+        const parsed = number(value);
+        return parsed === null ? '—' : `${(parsed / 10000).toFixed(2)}万`;
+      }
+
+      function fmtFlow(value) {
+        const parsed = number(value);
+        if (parsed === null) return '不可计算';
+        const sign = parsed > 0 ? '+' : '';
+        return `${sign}${(parsed / 10000).toFixed(2)}万`;
+      }
+
+      function fmtVelocity(value) {
+        const parsed = number(value);
+        if (parsed === null) return '不可计算';
+        if (parsed !== 0 && Math.abs(parsed) < 100) {
+          return `${parsed > 0 ? '+' : '-'}<0.01万/日`;
+        }
+        return `${fmtFlow(parsed)}/日`;
+      }
+
+      function fmtPercent(value) {
+        const parsed = number(value);
+        if (parsed === null) return '不可计算';
+        return `${(parsed * 100).toFixed(2)}%`;
+      }
+
+      function fmtDistance(value) {
+        const parsed = number(value);
+        if (parsed === null) return '不可计算';
+        return `${parsed > 0 ? '+' : ''}${parsed.toFixed(2)}%`;
+      }
+
+      function fmtRatio(value) {
+        const parsed = number(value);
+        return parsed === null ? '不可计算' : `${parsed.toFixed(2)}×`;
+      }
+
+      function fmtVelocityShare(value) {
+        const parsed = number(value);
+        if (parsed === null) return '不可计算';
+        const percentage = Math.abs(parsed) * 100;
+        const sign = parsed > 0 ? '+' : parsed < 0 ? '-' : '';
+        if (parsed !== 0 && percentage < 0.01) return `${sign}<0.01%/日`;
+        return `${sign}${percentage.toFixed(2)}%/日`;
+      }
+
+      function wallStrikes(side) {
+        return (side.wallStrikes || []).map((strike) => Number(strike).toFixed(2)).join(' / ') || '—';
+      }
+
+      function top3Strikes(side) {
+        return (side.strikes || []).filter((item) => item.isTop3).map((item) => Number(item.strike).toFixed(2)).join('、') || '—';
+      }
+
+      function setStatus(text, isError = false) {
+        $('status-text').textContent = text;
+        $('status-dot').classList.toggle('error', isError);
+      }
+
+      function renderDateSelect(snapshot) {
+        const select = $('date-select');
+        const dates = snapshot.history?.availableDates || [];
+        select.innerHTML = dates.map((date) => `<option value="${date}">${date}</option>`).join('');
+        select.value = snapshot.history?.selectedDate || snapshot.dataDate;
+        select.disabled = dates.length === 0;
+        $('history-note').textContent = `可回看 ${dates.length} 个共同交易日 · 当前第 ${(snapshot.history?.selectedDateIndex ?? 0) + 1} 个`;
+      }
+
+      function renderExpiryTabs() {
+        const expiries = state.snapshot?.expiries || [];
+        $('expiry-tabs').innerHTML = expiries.length ? expiries.map((expiry, index) => `
+          <button class="expiry-tab${index === state.expiryIndex ? ' active' : ''}" type="button" data-index="${index}">
+            <strong>${expiry.expiryLabel} · ${expiry.maturityDate}</strong>
+            <small>${expiry.dteCalendar} 自然日 · 总 OI ${fmtWan(expiry.totalOi)}</small>
+          </button>`).join('') : '<div class="empty">没有可用期限</div>';
+        $('expiry-tabs').querySelectorAll('.expiry-tab').forEach((button) => {
+          button.addEventListener('click', () => {
+            state.expiryIndex = Number(button.dataset.index);
+            renderAll();
+          });
+        });
+      }
+
+      function renderWallCards(expiry) {
+        $('wall-cards').innerHTML = ['call', 'put'].map((sideName) => {
+          const side = expiry[sideName];
+          const top1 = side.totalOi > 0 && side.wallOi !== null ? side.wallOi / side.totalOi : null;
+          const isCall = sideName === 'call';
+          return `<article class="card ${sideName}">
+            <h3>${isCall ? 'Call OI Wall · 看涨' : 'Put OI Wall · 看跌'}</h3>
+            <div class="big">${wallStrikes(side)}</div>
+            <div class="meta">Wall OI：${fmtWan(side.wallOi)} · 距现货：${side.strikes.filter((item) => item.isWall).map((item) => fmtDistance(item.distancePct)).join(' / ') || '不可计算'}<br>
+              Top 1 集中度：${fmtPercent(top1)} · Top 3：${top3Strikes(side)} · Top 3 集中度：${fmtPercent(side.top3Share)}</div>
+          </article>`;
+        }).join('');
+      }
+
+      function renderBalance(expiry) {
+        const callOi = number(expiry.call.totalOi) || 0;
+        const putOi = number(expiry.put.totalOi) || 0;
+        const total = callOi + putOi;
+        const ratio = putOi > 0 ? callOi / putOi : null;
+        $('balance-metrics').innerHTML = `
+          <div class="metric"><label>Call 总 OI</label><strong class="call-text">${fmtWan(callOi)}</strong><small>占总 OI ${fmtPercent(total > 0 ? callOi / total : null)}</small></div>
+          <div class="metric"><label>Put 总 OI</label><strong class="put-text">${fmtWan(putOi)}</strong><small>占总 OI ${fmtPercent(total > 0 ? putOi / total : null)}</small></div>
+          <div class="metric"><label>总 OI</label><strong>${fmtWan(total)}</strong><small>Call + Put</small></div>
+          <div class="metric"><label>Call / Put 比值</label><strong>${fmtRatio(ratio)}</strong><small>Call 总 OI ÷ Put 总 OI</small></div>`;
+      }
+
+      function renderOiTable(expiry) {
+        const strikes = [...new Set([
+          ...expiry.call.strikes.map((item) => Number(item.strike)),
+          ...expiry.put.strikes.map((item) => Number(item.strike)),
+        ])].sort((a, b) => a - b);
+        const nearest = strikes.reduce((best, strike) => (
+          Math.abs(strike - state.snapshot.spot) < Math.abs(best - state.snapshot.spot) ? strike : best
+        ), strikes[0]);
+        const rowByStrike = (side, strike) => side.strikes.find((item) => Number(item.strike) === strike);
+        $('oi-table-body').innerHTML = strikes.map((strike) => {
+          const call = rowByStrike(expiry.call, strike);
+          const put = rowByStrike(expiry.put, strike);
+          const tags = [];
+          if (call?.isWall) tags.push('<span class="tag wall">Call Wall</span>');
+          if (put?.isWall) tags.push('<span class="tag put-wall">Put Wall</span>');
+          if (strike === nearest) tags.push('<span class="tag spot">现货邻近</span>');
+          if (call?.isTop3 || put?.isTop3) tags.push('<span class="tag">Top 3</span>');
+          return `<tr class="${call?.isWall || put?.isWall ? 'wall ' : ''}${strike === nearest ? 'spot-row' : ''}">
+            <td>${strike.toFixed(2)}</td><td class="call-text">${fmtWan(call?.oi)}</td><td class="put-text">${fmtWan(put?.oi)}</td><td>${tags.join('') || '—'}</td>
+          </tr>`;
+        }).join('') || '<tr><td colspan="4" class="empty">没有可用行权价</td></tr>';
+      }
+
+      function flowCell(side, currentTotalOi, direction) {
+        if (!side) return '<div class="flow-cell">不可计算</div>';
+        const isPositive = direction === 'positive';
+        const wallOi = isPositive ? side.positiveWallOi : side.negativeWallOi;
+        const strikes = isPositive ? side.positiveWallStrikes : side.negativeWallStrikes;
+        const concentration = isPositive ? side.positiveWallConcentration : side.negativeWallConcentration;
+        const velocity = isPositive ? side.positiveWallVelocityOi : side.negativeWallVelocityOi;
+        const velocityShare = velocity === null || !currentTotalOi ? null : velocity / currentTotalOi;
+        const label = wallOi === null ? '—' : `${(strikes || []).join(' / ')} · ${fmtFlow(wallOi)}`;
+        return `<div class="flow-cell"><strong class="${isPositive ? 'positive' : 'negative'}">${label}</strong><small>同号集中度 ${fmtPercent(concentration)} · 日均 ${fmtVelocity(velocity)} · 占当前侧 OI ${fmtVelocityShare(velocityShare)}</small></div>`;
+      }
+
+      function renderFlow(expiry) {
+        const horizons = state.snapshot.flow?.horizons || {};
+        $('flow-table-body').innerHTML = ['1D', '3D', '5D'].map((horizonKey) => {
+          const horizon = horizons[horizonKey];
+          const flowExpiry = horizon?.expiries?.find((item) => item.maturityDate === expiry.maturityDate);
+          const baseline = horizon?.baselineDate || '不可计算';
+          return `<tr><td><strong>${horizonKey}</strong><br><span class="panel-note">基线 ${baseline}</span></td>
+            <td>${flowCell(flowExpiry?.call, expiry.call.totalOi, 'positive')}</td>
+            <td>${flowCell(flowExpiry?.call, expiry.call.totalOi, 'negative')}</td>
+            <td>${flowCell(flowExpiry?.put, expiry.put.totalOi, 'positive')}</td>
+            <td>${flowCell(flowExpiry?.put, expiry.put.totalOi, 'negative')}</td></tr>`;
+        }).join('');
+      }
+
+      function renderQuality() {
+        const quality = state.snapshot.quality || {};
+        const flow = state.snapshot.flow?.horizons || {};
+        const warnings = [...(quality.warnings || [])];
+        ['1D', '3D', '5D'].forEach((key) => {
+          (flow[key]?.quality?.warnings || []).forEach((warning) => warnings.push(`${key}：${warning}`));
+        });
+        $('quality-grid').innerHTML = [
+          ['原始合约行', quality.optionRows], ['标准合约', quality.standardRows], ['调整合约', quality.adjustedRows],
+          ['缺失 OI', quality.missingOiRows], ['历史共同日期', state.snapshot.history?.availableDateCount],
+        ].map(([label, value]) => `<div class="quality-item"><label>${label}</label><strong>${value ?? '—'}</strong></div>`).join('');
+        $('quality-warnings').innerHTML = warnings.length ? `<div class="warning-box"><strong>数据提示</strong><ul>${warnings.map((warning) => `<li>${warning}</li>`).join('')}</ul></div>` : '<div class="formula">本次快照没有额外数据质量警告。</div>';
+      }
+
+      function renderAll() {
+        const snapshot = state.snapshot;
+        if (!snapshot) return;
+        const expiry = snapshot.expiries[state.expiryIndex];
+        $('page-title').textContent = `${snapshot.underlyingCode} 历史期权墙`;
+        $('page-subtitle').textContent = `${snapshot.underlyingLabel} · EOD 历史快照 · 同日 OI / Flow 计算`;
+        $('data-date').textContent = snapshot.dataDate;
+        $('spot-price').textContent = Number(snapshot.spot).toFixed(3);
+        $('spot-field').textContent = snapshot.spotField || 'close_qfq';
+        renderDateSelect(snapshot);
+        renderExpiryTabs();
+        if (!expiry) {
+          $('wall-cards').innerHTML = '<div class="empty">当前日期没有可用期限</div>';
+          return;
+        }
+        $('expiry-note').textContent = `${expiry.expiryLabel} · ${expiry.maturityDate} · ${expiry.dteCalendar}D`;
+        renderWallCards(expiry);
+        renderBalance(expiry);
+        renderOiTable(expiry);
+        renderFlow(expiry);
+        renderQuality();
+      }
+
+      async function load(underlying, selectedDate = null) {
+        setStatus(`正在读取 ${underlying} 的历史共同交易日…`);
+        const url = new URL(endpoint, window.location.href);
+        url.searchParams.set('underlying', underlying);
+        if (selectedDate) url.searchParams.set('date', selectedDate);
+        try {
+          const response = await fetch(url, { headers: { Accept: 'application/json' } });
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+          state.snapshot = payload.snapshot;
+          state.expiryIndex = 0;
+          setStatus(`读取完成：${state.snapshot.underlyingLabel} · ${state.snapshot.dataDate} · ${state.snapshot.quality.source}`);
+          renderAll();
+        } catch (error) {
+          state.snapshot = null;
+          setStatus(`读取失败：${error.message}`, true);
+          $('expiry-tabs').innerHTML = `<div class="empty">${error.message}</div>`;
+          $('wall-cards').innerHTML = '<div class="empty">数据暂时不可用，请检查 5012 独立服务日志。</div>';
+        }
+      }
+
+      $('underlying-select').addEventListener('change', (event) => load(event.target.value));
+      $('date-select').addEventListener('change', (event) => load($('underlying-select').value, event.target.value));
+      $('reload').addEventListener('click', () => load($('underlying-select').value, $('date-select').value || null));
+      load(initialUnderlying);
+    })();
+  </script>
+</body>
+</html>

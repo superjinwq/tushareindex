@@ -1,0 +1,86 @@
+{# 卖方读盘：IV 看板下方、垂直价差铁律上方；切换标的不刷新 #}
+<aside class="opt-vol-guide" id="opt-vol-guide" aria-label="卖方读盘">
+    <div class="opt-vol-guide-inner">
+        <p class="opt-vol-guide-eyebrow">本页口径 · 先下月</p>
+        <h2 class="opt-vol-guide-title">卖方读盘</h2>
+
+        <div class="opt-vol-guide-grid">
+            <section class="opt-vol-guide-sec">
+                <h3>四量</h3>
+                <ul>
+                    <li><strong>IV</strong>：期权现在给未来波动开的价。右侧「最新」是近 ATM 代表 IV；T 型是逐档 Black-76。</li>
+                    <li><strong>HV</strong>：标的刚走完的已实现。窗口 <code>n=clip(round(DTE×252/365),5,120)</code>，收盘对数收益 ×√252。当月 DTE&lt;10 淡化，以下月为准。</li>
+                    <li><strong>溢</strong>：中轴 IV − HV（百分点）。正=报价高于刚实现；负=刚爆完、报价已往回修。负值不是自动买权。不是 T 表期权 Δ。</li>
+                    <li><strong>VRP</strong>：点右侧「最新」弹窗那一行。IV 减<strong>随后</strong> RV 的历史中位 / 均值 / 胜率。当日格子没有随后 RV。</li>
+                    <li><strong>斜</strong>：认沽最新 − 认购最新（pp）。中轴均值会抹平这一边。正=认沽更贵；<code>+0.5~+2.5</code> 常见溢价；<code>≥+2.5</code> 偏肥尾，卖 put 降档；负=认购更贵。</li>
+                </ul>
+            </section>
+
+            <section class="opt-vol-guide-sec">
+                <h3>交叉（IV Per × HV Per × 溢）</h3>
+                <p class="opt-vol-guide-note">下面的「IV Per」默认取 <strong>Per 1y</strong>（与 HV Per 同为窗口分位，口径可比）；Per C / Per A 用来确认当前处在哪个波动 regime。</p>
+                <ol>
+                    <li><strong>双高 + 溢≈0</strong>：regime 高，别因分位高就卖。</li>
+                    <li><strong>IV Per 高 + HV Per 低 + 溢&gt;0</strong>：真贵。50 / 300 更站得住。</li>
+                    <li><strong>IV Per 中低 + HV Per 很高 + 溢大负</strong>：刚爆完在修，不要因为溢很负去买波动。</li>
+                    <li><strong>双低 + 溢小幅正</strong>：50 的舒适收租区；588000 仓位不能按 50 套。</li>
+                </ol>
+                <p class="opt-vol-guide-note">IV 对回看 HV 粘、对随后 RV 松。用交叉定「贵不贵」，用弹窗 VRP 复盘，不开仓。</p>
+            </section>
+
+            <section class="opt-vol-guide-sec">
+                <h3>T 型三列分位 <span class="opt-vol-guide-chip">Per 1y / C / A</span></h3>
+                <ul>
+                    <li>三列都是<strong>中间秩百分位</strong>，只差取样窗口；一位小数 0–100 如 <code>72.4</code>。已<strong>取消 Rank</strong>（min–max 位置被单个极端日绑架，同一天常与分位背离）。</li>
+                    <li><strong>Per 1y</strong>=近 252 交易日。<strong>Per C</strong>=自配置锚点日起（波动率中枢跃升后的新常态；未配锚点的标的为 —）。<strong>Per A</strong>=全样本。</li>
+                    <li>比的都是<strong>同期限代表 IV</strong>，不是这张合约自己的历史。任一窗口样本不足 60 日为 —；锚点与样本量见单元格 title。</li>
+                    <li>只在 <strong>|Δ|∈[0.10, 0.90]</strong> 显示；仅极端翼部的反解噪声会隐藏。</li>
+                    <li>着色：≥70 偏贵（卖权环境）、50–70 中性偏贵、30–50 偏低、&lt;30 便宜。三列同一套阈值。</li>
+                    <li><strong>三列要一起读</strong>：A 高而 1y 低 = 拉长看仍在高波动段、但近一年已回落，不是便宜；1y 高而 C 低 = 只是近一年的高点，放到新常态里还不算贵。</li>
+                    <li>分位高只说明「相对自己历史贵」，还要对照右侧 溢 / HV Per / 弹窗 VRP，避免高波动段把「贵」读成可卖。</li>
+                    <li>右侧 IV 看板与本表<strong>同一套算法同一精度</strong>（此前 IVR 走 252 日窗、看板 Per 走全样本，同一天两处数字不一致，已统一）。</li>
+                    <li>义务仓优选里三列<strong>不标星</strong>：远月分位系统性偏高，四期限里的「最高」几乎恒为下季。☆ 只表示该档<strong>时年化最高</strong>。跨期限贵不贵请直接比三列数值。</li>
+                </ul>
+            </section>
+
+            <section class="opt-vol-guide-sec">
+                <h3>本页三条路径，别混</h3>
+                <ul>
+                    <li><strong>Sell Put</strong>（仅 588000 / 510500 / 159915）：系统信号 + 次月钟 + 合槽。这是卖方主路径，不是看分位高就手点。</li>
+                    <li><strong>垂直价差</strong>：借记方向单，吃方向 + 期限 + 微笑，<strong>不收 VRP</strong>。铁律在下方：方向、1 档、成本 0.3–0.4、止盈 2.0×、成本&gt;0.5 剔除。588000 方向错惩罚最重，只在强信号时做。</li>
+                    <li><strong>T 型手扫</strong>：先右侧下月定贵便宜，再在 |Δ| 0.10–0.90 且分位有数的档位里用权利金% / 时年化 / 折溢% / 有效价选腿。</li>
+                </ul>
+            </section>
+        </div>
+
+        <section class="opt-vol-guide-sec opt-vol-guide-sec--wide">
+            <h3>T 型卖方扫表</h3>
+            <ul class="opt-vol-guide-cols">
+                <li><strong>权利金%</strong>：Call=<code>C/(S−C)</code> 备兑静态；Put=<code>C/(K−C)</code> 净接货。越高越醒目，不等于越好卖。</li>
+                <li><strong>时年化</strong>：<code>(时值/K)×365/DTE</code>。时值≤0 为 —。深实值负时值不要当高收益卖。</li>
+                <li><strong>有效价</strong>：Put=<code>K−权利金</code>（接货）；Call=<code>K+权利金</code>（备兑到位）。这是被指派后的账。</li>
+                <li><strong>折溢%</strong>：正=卖方有利（青绿），负=不利。近零可忽略。</li>
+                <li><strong>Δ</strong>：Black-76 现货 Δ。实务卖权常瞄 |Δ| 0.20–0.35；三列分位的展示范围为 0.10–0.90。|Δ| 越高越容易被指派。</li>
+                <li><strong>最新</strong>：当日有成交=QMT 最新/量/仓；无成交=昨收、成交 0。灰字不是盘口中价。</li>
+                <li><strong>量 / 仓</strong>：已标 top3。≥1 万显示 <code>x.x万</code>（悬停仍是整数）。手扫至少避开空仓空量档。</li>
+                <li><strong>期限</strong>：T 型表上方。第一行是当月中轴 − 下月中轴（浅/中度/陡；|差|≤0.5pp 为平坦）和溢仍为正的期限。第二行数字是中性色，判词加粗，用法是色块（灰=不做，橙=收着做，蓝框=可以看）。认购/认沽近一年分位差 ≥8 且结论不同时分开写，卖认沽看「沽」。曲线和芯片同一道 ±1pp 才称溢为正或负。权利仓可看要溢≤−3 且 HV 分位&lt;50。</li>
+                <li><strong>1σ</strong>：各到期段头。平值跨式和上下两档宽跨齐全时用 0.6/0.3/0.1；否则用现价×平值 IV×√(自然日/365)。行权价列底边在带内，左右边界加左边条。</li>
+            </ul>
+        </section>
+
+        <section class="opt-vol-guide-sec opt-vol-guide-sec--wide">
+            <h3>标的怎么分</h3>
+            <p>中位数上五只宽基 IV 都略高于随后 20 日 RV（约 +2～+4pp）。均值更差：<strong>510050</strong> 唯一均值也稳正；<strong>510300</strong> 次之；<strong>510500 / 159915 / 588000</strong> 中位正、均值常负（左尾）。创业板 / 科创 溢大负时是刚爆完在修，不是该买波动。垂直价差里 588000 / 159915 止盈可放到 2.5×，那是方向单参数，不是裸卖许可。</p>
+        </section>
+
+        <section class="opt-vol-guide-sec opt-vol-guide-sec--wide opt-vol-guide-sec--todo">
+            <h3>建议补（未做）</h3>
+            <ol>
+                    <li><strong>买卖价 / 中间价</strong>：等行情源落地后再做；现用收盘反解，卖出会偏乐观。</li>
+                <li><strong>事件日历</strong>：长假、指数调整、期权到期扎堆。短 DTE 卖权最怕这个。</li>
+                <li><strong>合槽后净 Δ / 保证金</strong>：Sell Put 四账本叠加后的指派风险现在靠心算。</li>
+                <li>随后 RV 分位不要再塞进当日格子；弹窗已经够用。也不要再扩一套分位条。</li>
+            </ol>
+        </section>
+    </div>
+</aside>
