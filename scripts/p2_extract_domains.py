@@ -34,6 +34,8 @@ logger = get_logger(__name__)
 
 OPT_HEADER = '''"""期权 T 型报价板域。"""
 from __future__ import annotations
+# 用途: 留档
+# 保留至: 2026-10-20
 
 import json
 import os

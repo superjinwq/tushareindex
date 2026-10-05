@@ -85,3 +85,37 @@
 - **当前状态**：已根据对话日志与 __pycache__ 的存在，在仓库中重新恢复了 `vol_price_screener.py` 的完整筛选逻辑；**建议立刻将该文件及全项目纳入 Git 并完成首次提交与推送，避免再次发生同类问题。**
 
 （核查时间：依据当前仓库与 Git 状态生成。）
+
+---
+
+## 七、已执行的首次提交（2026-02）
+
+- 已对以下 5 个文件执行 **首次提交**（commit `5d0df79`）：
+  - `vol_price_screener.py`
+  - `rzye_industry_score_date.py`
+  - `validate_rzye_industry_scores.py`
+  - `vol_price_screener_筛选条件核对说明.md`
+  - `vol_price_screener_损坏原因核查.md`
+- 本仓库已配置**仅在本库生效**的 Git 用户：`git config user.name` / `user.email`（如需改为你的名字/邮箱，可执行 `git config user.name "你的名字"` 与 `git config user.email "你的邮箱"`）。
+
+**你接下来需要做的（推送备份）：**
+
+1. **添加远程仓库**（任选其一，把下面的地址换成你自己的仓库地址）：
+   ```bash
+   git remote add origin https://github.com/你的用户名/tushareindex.git
+   # 或 Gitee：git remote add origin https://gitee.com/你的用户名/tushareindex.git
+   ```
+
+2. **推送到远程**（首次推送并设置上游分支）：
+   ```bash
+   git push -u origin master
+   ```
+
+3. **之后每次重要修改后**建议执行：
+   ```bash
+   git add .
+   git commit -m "简短说明"
+   git push
+   ```
+
+若仓库中存在名为 `nul` 的文件或路径，可能导致 `git add .` 失败（Windows 保留名），可改用 `git add vol_price_screener.py 其他重要文件.py` 逐个添加后提交。

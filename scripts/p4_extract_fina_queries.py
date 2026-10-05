@@ -10,6 +10,8 @@ OUT = ROOT / 'rt_monitor' / 'services' / 'fina_arturn_queries.py'
 
 HEADER = '''"""财报 arturn / 固定资产序列查询（P4.2 自 monolith 迁出）。"""
 from __future__ import annotations
+# 用途: 留档
+# 保留至: 2026-10-20
 
 import os
 import re

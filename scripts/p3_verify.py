@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """P3 / 总验收：路由唯一性 + 关键 API smoke（无需常驻服务时用 test_client）。"""
 from __future__ import annotations
+# 用途: 留档
+# 保留至: 2026-10-20
 
 import json
 import sys

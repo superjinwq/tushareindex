@@ -1,12 +1,28 @@
 # STATE
 
 **Project:** tushareindex — shareholder reference sync  
-**Last updated:** 2026-05-03
+**Last updated:** 2026-09-28
 
 ## Quick tasks completed
 
 | ID / 目录 | 摘要 | 完成日 |
 |-----------|------|--------|
+| `quick/261002-grc-test-24-displayed-overseas-symbols-using` | 24个海外标的逐项验证：6个快照可读，18个OT返回ErrorId2；HTTP/原生DLL/Python均测试，3个香港指数观察到报价变化，延迟未证实 | 2026-10-02 |
+| `quick/261001-n1m-persist-dedicated-chrome-for-testing-rul` | 个性化与项目指令明确 OpenCLI/Python 使用独立 Chrome for Testing；原文及换行校验通过，全仓检查存在行情基线失败 | 2026-10-01 |
+| `quick/261001-ir3-tq-overseas-crude-connectivity-and-code-` | 独立TQ原油探针：CL00W候选无有效报价；SCL8.SHF国内原油主连缓存可读，实时更新未确认 | 2026-10-01 |
+| `quick/260928-gm8-159915-oi-opt-chunk-qmt-rpc` | OI压力时非关键 OPT_CHUNK 有界让行；保留串行批量与可回退开关 | 2026-09-28 |
+| `quick/20260909-tdx-idx-rt-idx-k` | TQ 写中证2000/北证50→rt_idx_k；盘中与监控放开四列/区间拼 rt | 2026-09-09 |
+| `quick/260903-opt-meta-live-gap` | 拉链新增立刻补 optMeta；直播窗窄口 8 张真正接上，T 型能加新行 | 2026-09-03 |
+| `quick/260903-heal-give-up` | 同一批 heal 3 轮无效改 poll-only，停止空退空订 | 2026-09-03 |
+| `quick/260903-a7y-revision-stop-tick` | 期权：启动校桥接 revision；stop 后核对 tick 句柄；`OPT_HEALTH dead_push` | 2026-09-03 |
+| `quick/260829-kt0-opt-t-board-a` | T 型同月标准/A：成交量、持仓量前三与平值分开标记 | 2026-08-29 |
+| `quick/20260824-opt-iv-skew` | IV 中轴「斜」=沽−购；页头 588000 警示标明垂直价差；`RT_MONITOR_STATIC_VER` 20260824-3 | 2026-08-24 |
+| `quick/20260824-opt-vol-guide` | opt-t-board IV 下、铁律上插入卖方读盘卡（IV/HV/Δ/VRP、IVR、三条路径）；`RT_MONITOR_STATIC_VER` 20260824-2 | 2026-08-24 |
+| `quick/20260824-opt-iv-hv-axis` | IV 看板中轴 HV/Δ/HV Per + 弹窗随后 RV/历史 VRP；当月 DTE&lt;10 弱化；`RT_MONITOR_STATIC_VER` 20260824-1 | 2026-08-24 |
+| `quick/20260815-sp-correct-open` | Sell Put 更正开仓：未平仓改张数/入场价并同步开仓流水；`RT_MONITOR_STATIC_VER` 20260815-2 | 2026-08-15 |
+| `quick/20260807-stockstat-health-check` | 盘中脚本：名册/分市场/compindex 健康检查+漏标自愈；口径 todo 北证50/创业板指 vs index_daily | 2026-08-07 |
+| `docs/plans/2026-08-07-cffex-index-opt-t-board` | opt-t-board 中金所股指期权 T型+启发式价差+IV八块；STATIC_VER 20260807-3 | 2026-08-07 |
+| `quick/20260727-sw-hlc-popup-align` | 申万收盘价六列弹窗统一申万行业+突破类型；`RT_MONITOR_STATIC_VER` 20260727-1 | 2026-07-27 |
 | `quick/20260503-niusan-history-by-scheme-id` | 牛散「+」历史/明细：API 按 `scheme_id` 关联人（非仅 config activeId）；前端主表 `niusanViewSchemeId` + 缓存键；`RT_MONITOR_STATIC_VER` 20260503-21 | 2026-05-03 |
 | `quick/20260503-rt-monitor-niusan-expand-btn-fix` | 牛散页「+」展开：`click` 委托内 target 归一化（Text 节点无 `closest`）；`RT_MONITOR_STATIC_VER` 20260503-20 | 2026-05-03 |
 | `quick/20260503-fina-stk-holdernumber-columns` | 财报页固定资产右侧「股东人数」hnchg+hn0–hn8（stk_holdernumber）；缓存 sb_act_7；RT_MONITOR_STATIC_VER 20260503-19 | 2026-05-03 |

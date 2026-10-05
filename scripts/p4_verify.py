@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """P4 验收：fina 页面 + 三条 API（test_client）。"""
 from __future__ import annotations
+# 用途: 留档
+# 保留至: 2026-10-20
 
 import sys
 from pathlib import Path

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """P4.1：从 monolith 删除已迁入 fina_arturn service 的处理函数与预热。"""
 from __future__ import annotations
+# 用途: 留档
+# 保留至: 2026-10-20
 
 from pathlib import Path
 

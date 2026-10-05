@@ -13,14 +13,14 @@
 
 ## 方案
 
-职责拆开：**桥接只变瘦（回调入队）**；**假活重建只放在脚本里**（脚本有交易日历，QMT 策略进程没有）。
+职责拆开：**桥接只变瘦（回调合并最新瘦字段）**；**假活重建只放在脚本里**（脚本有交易日历，QMT 策略进程没有）。
 
 不上 Redis。RPC 仍 ZMQ `127.0.0.1:15573`，全推 PUB `15574`。
 
 ```
 QMT「大QMT桥接」
   subscribe_whole_quote(7214)
-  on_push → 有界队列（满丢最旧）
+  on_push → 按代码合并最新瘦字段
   发送线程 → encode + ZMQ PUB :15574
 
 大QMT实时行情.py
@@ -44,7 +44,7 @@ QMT「大QMT桥接」
 
 | 文件 | 行为 |
 |---|---|
-| `quote_push_channel.py` | `ZmqQuotePushChannel.publish` 只入队；专线程 `send_multipart`。队列深度 **256**，满则丢最旧。发送异常只打日志，不抛回行情回调。 |
+| `quote_push_channel.py` | `publish` 按代码合并最新瘦字段；专线程 `send_multipart`。发送异常只打日志，不抛回行情回调。 |
 | `quote_subscription_manager.py` | `on_push` 仍只调 `publisher(topic, data)`，行情线程不做 encode。 |
 | `whole_quote_session.py` | 默认 `push_silence_replay_heartbeats=0`，关闭静默幂等 replay。 |
 | `xtquant_compat.py` | 大列表继续默认 `prime=False`；会话使用上述默认。 |
@@ -65,7 +65,7 @@ QMT「大QMT桥接」
 
 1. `unsubscribe_whole_quote` **必须成功**，否则本轮放弃再订，记 `RESUB_FAIL`。
 2. 再 `subscribe_whole_quote(..., prime=False)`，成功记 `RESUB_OK`。
-3. 连续 3 次 `RESUB_FAIL`：进入放弃态，每 60s 打 `RESUB_GIVE_UP`，直到收到增量或人工重启。
+3. 连续 3 次 `RESUB_FAIL`：进入放弃态，每 60s 打 `RESUB_GIVE_UP`；**冷却 60s 后自动清失败计数再试**（`RESUB_RETRY`），不需人工重启。窗口内若又收到增量，立即退出放弃态。
 
 ## 测试
 
@@ -83,3 +83,7 @@ QMT「大QMT桥接」
 ## 成功标准
 
 交易时段内脚本保持运行；假活后在 15s 量级自愈，不再出现「ping 已通、批次数钉死直到收盘」。不要求消灭 QMT 内核偶发数分钟卡死，只要求卡完后能重建订阅。
+
+## 已知未修（2026-08-24）
+
+全推发送队列溢流：**代码已改**（合并最新 + 瘦字段，已拷进 QMT），待重启「大QMT桥接」后下一交易日验收。记录见 [daqmt-publish-queue-overflow-20260824.md](../../solutions/performance-issues/daqmt-publish-queue-overflow-20260824.md)。

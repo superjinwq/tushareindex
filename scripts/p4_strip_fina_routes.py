@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """P4：去掉 monolith 财报域 @app.route，改由 fina_bp 注册。"""
 from __future__ import annotations
+# 用途: 留档
+# 保留至: 2026-10-20
 
 from pathlib import Path
 

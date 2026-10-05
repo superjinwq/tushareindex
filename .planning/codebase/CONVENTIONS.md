@@ -22,3 +22,8 @@
 ## Git / 规划
 
 - GSD 产物置于 `.planning/`；若 `commit_docs: true` 则纳入版本控制。
+
+## 本地数据回测验证（用户偏好）
+
+- 已落库历史（`opt_daily`/`etf_daily` 等）的条件回测默认 **逐日全扫描**（每个 ETF 交易日采样，`SAMPLE_FREQ=D`）；快速抽样需显式 `--freq W-MON`。
+- 实现：`opt_vertical_spread_backtest.py` 的 `iterSampleTradeDates`；精细止盈：`opt_vertical_spread_tp_fine.py`。
