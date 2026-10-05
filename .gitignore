@@ -1,1 +1,75 @@
+# 日志与轮转（根目录 *.log 及按日备份）
+*.log
+*.log.*
+# Python 缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+# 运行时锁/进度/缓存
+.rt_monitor_app.lock
+*_progress.json
+calculation_progress.json
+*.pkl
+scripts.db
+.planning/scratch-meta.json
+# 输出与临时目录
+output/
 out/
+_tmp_*/
+_tmp_*.json
+tmp_*.json
+*.out
+local_stock_data/
+breakout_signals/
+features02/
+# 模型产物
+*.pth
+*.h5
+*.keras
+# 密钥与本机配置
+jinwq.env
+*.env
+config.json
+cursor_settings.json
+# 个人清单（已有）
+fina_interest_marks.json
+fina_interest_marks.json.tmp
+opt_iv_perc_anchors.json
+opt_iv_perc_anchors.json.tmp
+niusan_holder_config.json
+# 冗余脚本归档（仅本机，可用 scripts/restore_archived_scripts.py 还原）
+.planning/scratch-archive/
+# 第三方 AI 工具镜像目录
+.mux/
+.pi/
+.mcpjam/
+.neovate/
+.openhands/
+.pochi/
+.vibe/
+.zencoder/
+.windsurf/
+.qwen/
+.qoder/
+.trae/
+.roo/
+.kode/
+.crush/
+.augment/
+.agent/
+.continue/
+.codebuddy/
+.cline/
+.commandcode/
+.junie/
+.kilocode/
+.kiro/
+.iflow/
+.factory/
+.adal/
+.goose/
+.codex/
+.cursor/
+.claude/
+.agents/
