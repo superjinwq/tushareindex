@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 
 from logger_config import get_logger
 
@@ -53,10 +54,12 @@ def runStartupHooks() -> None:
     _warmupStarted = True
 
     from rt_monitor.services.fina_arturn import warmupFinaArturnCacheAsync
+    from rt_monitor.services.niusan import warmupNiusanCacheAsync
+    from rt_monitor.services.sw_industry import warmupSwIndustryCacheAsync
     from rt_monitor.monolith import (
         _warmup_ma_signal_table_cache_async,
-        _warmup_sw_industry_cache_async,
         load_initial_cache,
+        warmupTopMovesCacheAsync,
     )
 
     load_initial_cache()
@@ -65,8 +68,20 @@ def runStartupHooks() -> None:
     except ImportError:
         logger.warning('opt_spread_board_select 不可用，opt-t-board 回测标注将退化')
     _warmup_ma_signal_table_cache_async()
+    warmupTopMovesCacheAsync()
     warmupFinaArturnCacheAsync()
-    _warmup_sw_industry_cache_async()
+    warmupSwIndustryCacheAsync()
+    warmupNiusanCacheAsync()
+    try:
+        from rt_monitor.services.opt_t_board import _warmOptTBoardCaches
+
+        threading.Thread(
+            target=_warmOptTBoardCaches,
+            daemon=True,
+            name='opt-t-board-boot-warm',
+        ).start()
+    except Exception:
+        logger.warning('opt-t-board 启动预热未启动', exc_info=True)
 
 
 def run_server() -> None:
@@ -107,6 +122,10 @@ def run_server() -> None:
         port=RT_MONITOR_LISTEN_PORT,
         debug=False,
         allow_unsafe_werkzeug=True,
+        # 注：flask_socketio.run 内部已固定 threaded=True，勿再传（会 TypeError）。
     )
 
-# 代码更新时间：2026-06-17 16:58
+# 代码更新时间：2026-06-18 06:24
+# 代码更新时间：2026-08-14 22:20 启动预热 opt-t-board 缓存
+# 代码更新时间：2026-08-27 11:50 启动预热五只 ETF T 型缓存
+# 代码更新时间：2026-09-07 17:00 启动 top_moves 后台自适应刷新

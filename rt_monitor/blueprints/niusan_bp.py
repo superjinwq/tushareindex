@@ -11,7 +11,7 @@ from rt_monitor.services.niusan import (
     _niusan_scheme_display_meta_by_id as schemeDisplayMetaById,
     _query_niusan_floatholder_detail as queryNiusanFloatholderDetail,
     _query_niusan_floatholder_history as queryNiusanFloatholderHistory,
-    _query_niusan_holdings_page_rows as queryNiusanHoldingsPageRows,
+    queryNiusanHoldingsCached,
     _render_rt_monitor_niusan_no_cache as renderNiusanPageNoCache,
 )
 
@@ -59,7 +59,7 @@ def apiNiusanHolderConfig():
 def apiNiusanFloatholderHistory():
     tsCode = str(request.args.get('ts_code') or '').strip()
     schemeId = str(request.args.get('scheme_id') or '').strip() or None
-    out = queryNiusanFloatholderHistory(tsCode, forSchemeId=schemeId)
+    out = queryNiusanFloatholderHistory(tsCode, for_scheme_id=schemeId)
     if not out.get('ok'):
         err = out.get('error') or ''
         if err in ('scheme_not_found', 'scheme_no_holders'):
@@ -74,7 +74,7 @@ def apiNiusanFloatholderHistory():
 def apiNiusanFloatholderDetail():
     tsCode = str(request.args.get('ts_code') or '').strip()
     schemeId = str(request.args.get('scheme_id') or '').strip() or None
-    out = queryNiusanFloatholderDetail(tsCode, forSchemeId=schemeId)
+    out = queryNiusanFloatholderDetail(tsCode, for_scheme_id=schemeId)
     if not out.get('ok'):
         err = out.get('error') or ''
         if err in ('scheme_not_found', 'scheme_no_holders'):
@@ -90,7 +90,7 @@ def apiNiusanSchemeHoldings():
     schemeId = str(request.args.get('scheme_id') or '').strip()
     if not schemeId:
         return jsonify({'ok': False, 'error': 'missing scheme_id'}), 400
-    payload = queryNiusanHoldingsPageRows(for_scheme_id=schemeId)
+    payload = queryNiusanHoldingsCached(schemeId)
     err = payload.get('error')
     if err == 'scheme_not_found':
         return jsonify({'ok': False, 'error': err}), 404
@@ -110,7 +110,9 @@ def apiNiusanSchemeHoldings():
             'report_end_date': redS,
             'scheme_name': snDisp,
             'related_join': rjDisp,
+            'scheme_summaries': payload.get('scheme_summaries') or [],
         }
     )
 
-# 代码更新时间：2026-06-17 16:14
+# 代码更新时间：2026-06-23 06:01
+# 代码更新时间：2026-08-06 22:39 持股 API 走 TTL 缓存并返回 scheme_summaries

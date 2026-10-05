@@ -229,7 +229,7 @@
             html += '</div>';
         }
         schemesEl.innerHTML = html;
-        bindCards();
+        ensureCardsBound();
     }
 
     function holderRowHtml(val) {
@@ -267,49 +267,78 @@
         return { activeId: activeId, schemes: schemes };
     }
 
-    function bindCards() {
-        schemesEl.querySelectorAll('.niusan-add-holder').forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                var list = btn.closest('.niusan-scheme-card').querySelector('.niusan-holder-list');
+    function eventElem(ev) {
+        var el = ev && ev.target;
+        if (el && el.nodeType !== 1) {
+            el = el.parentElement;
+        }
+        return (el && typeof el.closest === 'function') ? el : null;
+    }
+
+    function ensureCardsBound() {
+        if (!schemesEl || schemesEl.dataset.niusanCardsBound === '1') return;
+        schemesEl.dataset.niusanCardsBound = '1';
+        schemesEl.addEventListener('click', function (ev) {
+            var el = eventElem(ev);
+            if (!el) return;
+            var addBtn = el.closest('.niusan-add-holder');
+            if (addBtn && schemesEl.contains(addBtn)) {
+                ev.preventDefault();
+                var card = addBtn.closest('.niusan-scheme-card');
+                var list = card && card.querySelector('.niusan-holder-list');
+                if (!list) return;
                 var wrap = document.createElement('div');
                 wrap.innerHTML = holderRowHtml('');
-                list.appendChild(wrap.firstChild);
-            });
-        });
-        schemesEl.querySelectorAll('.niusan-remove-holder').forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                var row = btn.closest('.niusan-holder-row');
-                var list = btn.closest('.niusan-holder-list');
-                if (list.querySelectorAll('.niusan-holder-row').length <= 1) {
+                var row = wrap.firstChild;
+                if (row) {
+                    list.appendChild(row);
                     var inp = row.querySelector('.niusan-holder-input');
-                    if (inp) inp.value = '';
+                    if (inp) inp.focus();
+                }
+                return;
+            }
+            var rmBtn = el.closest('.niusan-remove-holder');
+            if (rmBtn && schemesEl.contains(rmBtn)) {
+                ev.preventDefault();
+                var rowRm = rmBtn.closest('.niusan-holder-row');
+                var listRm = rmBtn.closest('.niusan-holder-list');
+                if (!rowRm || !listRm) return;
+                if (listRm.querySelectorAll('.niusan-holder-row').length <= 1) {
+                    var inpClr = rowRm.querySelector('.niusan-holder-input');
+                    if (inpClr) inpClr.value = '';
                     return;
                 }
-                row.remove();
-            });
-        });
-        schemesEl.querySelectorAll('.niusan-del-scheme').forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                var card = btn.closest('.niusan-scheme-card');
-                var id = card.getAttribute('data-scheme-id');
-                if (!window.confirm('确定删除该方案？')) return;
-                state.schemes = state.schemes.filter(function (s) { return s.id !== id; });
+                rowRm.remove();
+                return;
+            }
+            var delBtn = el.closest('.niusan-del-scheme');
+            if (delBtn && schemesEl.contains(delBtn)) {
+                ev.preventDefault();
+                var cardDel = delBtn.closest('.niusan-scheme-card');
+                var id = cardDel ? cardDel.getAttribute('data-scheme-id') : '';
+                if (!id || !window.confirm('确定删除该方案？')) return;
+                var cur = collectFromDom();
+                state.schemes = cur.schemes.filter(function (s) { return s.id !== id; });
+                state.activeId = cur.activeId === id
+                    ? (state.schemes[0] ? state.schemes[0].id : '')
+                    : cur.activeId;
                 if (state.schemes.length === 0) {
-                    state.schemes.push({ id: uid(), schemeName: '', holders: [] });
+                    state.activeId = uid();
+                    state.schemes.push({ id: state.activeId, schemeName: '', holders: [] });
                 }
-                if (state.activeId === id) {
+                if (!state.schemes.some(function (s) { return s.id === state.activeId; })) {
                     state.activeId = state.schemes[0].id;
                 }
                 render();
-            });
+            }
         });
-        schemesEl.querySelectorAll('input[name="niusan-active"]').forEach(function (r) {
-            r.addEventListener('change', function () {
-                state.activeId = r.value;
-                schemesEl.querySelectorAll('.niusan-scheme-card').forEach(function (c) {
-                    var on = c.getAttribute('data-scheme-id') === state.activeId;
-                    c.classList.toggle('active', on);
-                });
+        schemesEl.addEventListener('change', function (ev) {
+            var t = ev.target;
+            if (!t || t.name !== 'niusan-active') return;
+            state.activeId = t.value;
+            schemesEl.querySelectorAll('.niusan-scheme-card').forEach(function (c) {
+                var on = c.getAttribute('data-scheme-id') === state.activeId;
+                c.classList.toggle('active', on);
             });
         });
     }

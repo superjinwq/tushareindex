@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from rt_monitor.core.config import RT_MONITOR_STATIC_VER
-from rt_monitor.monolith import (
-    _request_path_matches_no_store_json_api,
+from rt_monitor.monolith import _request_path_matches_no_store_json_api
+from rt_monitor.services.sw_industry import (
     api_sw_index_amt_pctile_series,
     api_sw_industry_limit_detail,
     api_sw_industry_stats,
@@ -17,4 +17,4 @@ __all__ = [
     'api_sw_industry_stats',
 ]
 
-# 代码更新时间：2026-06-17 19:56
+# 代码更新时间：2026-06-18 06:24

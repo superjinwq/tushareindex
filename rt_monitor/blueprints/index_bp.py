@@ -10,7 +10,7 @@ indexBp = Blueprint('index', __name__)
 
 @indexBp.route('/rt-monitor/index', strict_slashes=False, endpoint='rt_monitor_index')
 def rtMonitorIndex():
-    from rt_monitor.monolith import INDEX_MONITOR_CODES
+    from rt_monitor.services.sw_industry import INDEX_MONITOR_CODES
 
     resp = make_response(
         render_template(
@@ -33,8 +33,8 @@ def rtMonitorIndex():
 
 @indexBp.route('/api/index_industry_stats', methods=['GET'], strict_slashes=False)
 def apiIndexIndustryStats():
-    from rt_monitor.monolith import api_index_industry_stats
+    from rt_monitor.services.sw_industry import apiIndexIndustryStats as handler
 
-    return api_index_industry_stats()
+    return handler()
 
-# 代码更新时间：2026-06-17 15:17
+# 代码更新时间：2026-06-18 06:24

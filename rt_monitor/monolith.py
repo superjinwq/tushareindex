@@ -112,6 +112,7 @@ ETF_STK_MINS_MA_FAST_IDX = "idx_etf_stk_mins_ma_tft"
 ETF_RT_MIN_FAST_IDX = "idx_etf_rt_min_tft"
 ETF_BIAS_RT_UPDATED_IDX = "idx_etf_bias_rt_tfu"
 ETF_BIAS_RT_TRADE_IDX = "idx_etf_bias_rt_tft"
+TOP10_HOLDERS_TS_END_DATE_IDX = "idx_top10_holders_ts_end_date"
 
 
 def ensure_index_member_sw_ts_indate_tushare(conn, log) -> None:
@@ -208,6 +209,19 @@ def ensure_etf_popup_hot_indexes_tushare(conn, log) -> None:
         ETF_BIAS_RT_TRADE_IDX,
         f"CREATE INDEX `{ETF_BIAS_RT_TRADE_IDX}` "
         f"ON `{dbn}`.`etf_bias_realtime` (`ts_code`, `freq`, `trade_time`)",
+    )
+
+
+def ensure_top10_holders_ts_end_date_index_tushare(conn, log) -> None:
+    """财报表 top10 前三持股：按 ts_code 取 MAX(end_date) 时走 (ts_code, end_date) 索引。"""
+    dbn = (DB_CONFIG_TUSHARE.get("database") or "stock_tushare").strip() or "stock_tushare"
+    _ensure_tushare_index(
+        conn,
+        log,
+        "top10_holders",
+        TOP10_HOLDERS_TS_END_DATE_IDX,
+        f"CREATE INDEX `{TOP10_HOLDERS_TS_END_DATE_IDX}` "
+        f"ON `{dbn}`.`top10_holders` (`ts_code`, `end_date`)",
     )
 
 
@@ -371,64 +385,6 @@ _LIMIT_STATS_HLC_DETAIL_WHERE = {
 }
 # 历史归档明细表（按 trade_date + kind 取个股集合，供新高/低明细弹窗的历史模式）
 TABLE_LIMIT_STATS_ARCHIVE_DETAIL = "limit_stats_archive_detail"
-# 申万行业页区间涨跌幅/成交额比% 的基准：申万全 A（801003.SI）
-SW_STATS_SUMMARY_ALL_A_SW_TS = '801003.SI'
-# 成交额比% 分位的历史回看年数
-SW_AMT_RATIO_PCTILE_LOOKBACK_YEARS = 5
-# 新高/低分布（盘中标志位口径）：JSON 字段 → stockstat 标志列（涨跌家数不含 ST）
-_SW_STOCKSTAT_T0_FLAG_SQL: dict[str, str] = {
-    "high_250": "IFNULL(s.windcodes_high_250,0)=1",
-    "high_850": "IFNULL(s.windcodes_high_850,0)=1",
-    "h_high": "IFNULL(s.windcodes_h_high,0)=1",
-    "low_250": "IFNULL(s.windcodes_low_250,0)=1",
-    "low_850": "IFNULL(s.windcodes_low_850,0)=1",
-    "h_low": "IFNULL(s.windcodes_h_low,0)=1",
-}
-# 申万页「新高、新低分布」六列：JSON 字段名 → stockstat 标志键
-_SW_INDUSTRY_LIMITSTAT_T0_SPECS: tuple[tuple[str, str], ...] = (
-    ("sw_h250_t0", "high_250"),
-    ("sw_h850", "high_850"),
-    ("sw_h_his", "h_high"),
-    ("sw_l250", "low_250"),
-    ("sw_l850", "low_850"),
-    ("sw_l_his", "h_low"),
-)
-# 申万页「新高、新低分布（收盘价）」六列：JSON 字段名 → HL_C 收盘前复权 kind
-_SW_INDUSTRY_HLC_SPECS: tuple[tuple[str, str], ...] = (
-    ("sw_hlc_h250", "hlc_ch_250"),
-    ("sw_hlc_l250", "hlc_cl_250"),
-    ("sw_hlc_h850", "hlc_ch_850"),
-    ("sw_hlc_l850", "hlc_cl_850"),
-    ("sw_hlc_h_his", "hlc_ch_h"),
-    ("sw_hlc_l_his", "hlc_cl_h"),
-)
-# 申万页新高/低分布列 → 明细弹窗（与统计计数同源；archive_kind 供历史模式）
-_SW_LIMIT_DETAIL_COLUMN_META: dict[str, dict[str, str]] = {
-    "sw_h250_t0": {"title": "250日新高", "fetch": "stat", "flag_key": "high_250", "archive_kind": "cnt_h250"},
-    "sw_h850": {"title": "850日新高", "fetch": "stat", "flag_key": "high_850", "archive_kind": "cnt_h850"},
-    "sw_h_his": {"title": "历史新高", "fetch": "stat", "flag_key": "h_high", "archive_kind": "cnt_h_high"},
-    "sw_l250": {"title": "250日新低", "fetch": "stat", "flag_key": "low_250", "archive_kind": "cnt_l250"},
-    "sw_l850": {"title": "850日新低", "fetch": "stat", "flag_key": "low_850", "archive_kind": "cnt_l850"},
-    "sw_l_his": {"title": "历史新低", "fetch": "stat", "flag_key": "h_low", "archive_kind": "cnt_l_low"},
-    "sw_hlc_h250": {"title": "250日新高（收盘价）", "fetch": "hlc", "hlc_kind": "hlc_ch_250", "archive_kind": "hlc_ch_250"},
-    "sw_hlc_h850": {"title": "850日新高（收盘价）", "fetch": "hlc", "hlc_kind": "hlc_ch_850", "archive_kind": "hlc_ch_850"},
-    "sw_hlc_h_his": {"title": "历史新高（收盘价）", "fetch": "hlc", "hlc_kind": "hlc_ch_h", "archive_kind": "hlc_ch_h"},
-    "sw_hlc_l250": {"title": "250日新低（收盘价）", "fetch": "hlc", "hlc_kind": "hlc_cl_250", "archive_kind": "hlc_cl_250"},
-    "sw_hlc_l850": {"title": "850日新低（收盘价）", "fetch": "hlc", "hlc_kind": "hlc_cl_850", "archive_kind": "hlc_cl_850"},
-    "sw_hlc_l_his": {"title": "历史新低（收盘价）", "fetch": "hlc", "hlc_kind": "hlc_cl_h", "archive_kind": "hlc_cl_h"},
-}
-_sw_industry_limit_detail_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
-SW_INDUSTRY_LIMIT_DETAIL_CACHE_TTL = 60
-SW_INDUSTRY_LIMIT_DETAIL_CACHE_MAX = 512
-_sw_amt_pctile_series_cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
-SW_AMT_PCTILE_SERIES_CACHE_TTL = 300.0
-SW_AMT_PCTILE_SERIES_CACHE_MAX = 64
-# 申万页新高/低明细：主表刷新时预热的命中集合（明细点击秒开，避免重复 HL_C/stockstat 重型查询）
-_sw_limit_flagged_pool_cache: OrderedDict[tuple, tuple[float, dict[str, set[str]], dict[str, tuple[str, str]]]] = OrderedDict()
-SW_LIMIT_FLAGGED_POOL_TTL = 20
-SW_LIMIT_FLAGGED_POOL_MAX = 32
-_sw_stock_basic_meta_cache: dict[str, tuple[float, dict]] = {}
-SW_STOCK_BASIC_META_TTL = 86400
 # 新高/低、HL_C：rt_k 新鲜度见上文 _LIMIT_STATS_RT_K_FRESH_TRADE_DATE（与盘中实时统计.py 同步维护）
 _LIMIT_STATS_HIGHLOW_COUNT_SQL = (
     """
@@ -603,6 +559,85 @@ def _limit_stats_pct_diff_pp(a_cnt: int, b_cnt: int, base: int) -> Decimal:
         Decimal('0.01'), rounding=ROUND_HALF_UP
     )
     return (pa - pb).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+# stockstat HL_C 标志列后缀 → 面板键（盘中实时统计.py 每轮写入，与 _LIMIT_STATS_HLC_COUNT_SQL 同口径）
+_LIMIT_STATS_HLC_STOCKSTAT_SPECS: tuple[tuple[str, str], ...] = (
+    ('5', 'hlc_cccc_5'),
+    ('10', 'hlc_cccc_10'),
+    ('20', 'hlc_cccc_20'),
+    ('60', 'hlc_cccc_60'),
+    ('120', 'hlc_cccc_120'),
+    ('200', 'hlc_cccc_200'),
+    ('250', 'hlc_cccc_250'),
+    ('850', 'hlc_cccc_850'),
+    ('h', 'hlc_cccc_h'),
+)
+
+# 子查询偶发 null 时保留上次成功值，避免面板闪 --
+_LIMIT_STATS_PANEL_STICKY_KEYS: tuple[str, ...] = (
+    *_LIMIT_STATS_PANEL_HLC_KEYS,
+    'zt_t1',
+    'zt_t5',
+    'dt_t1',
+    'dt_t5',
+    'cnt_lb_zt',
+    'cnt_lb_dt',
+    'prev_zt_pct',
+    'prev_dt_pct',
+    'up_num_ma5_rt',
+    'up_num_ma5_rt_per',
+)
+
+
+def _read_limit_stats_hlc_from_stockstat(cursor) -> dict[str, str | None]:
+    """
+    HL_C 百分点差：读 stockstat.windcodes_hlc_valid/ch/cl_* 聚合（盘中实时统计预写）。
+    避免 _LIMIT_STATS_HLC_COUNT_SQL 重型 ma JOIN 超过 read_timeout=8s 拖死同连接，导致后续 limit_list_ths 等一并失败。
+    """
+    out: dict[str, str | None] = {k: None for k in _LIMIT_STATS_PANEL_HLC_KEYS}
+    sum_exprs: list[str] = []
+    for sfx, _ in _LIMIT_STATS_HLC_STOCKSTAT_SPECS:
+        sum_exprs.append(
+            f"SUM(CASE WHEN IFNULL(windcodes_hlc_valid_{sfx},0)=1 THEN 1 ELSE 0 END)"
+        )
+        sum_exprs.append(
+            f"SUM(CASE WHEN IFNULL(windcodes_hlc_ch_{sfx},0)=1 THEN 1 ELSE 0 END)"
+        )
+        sum_exprs.append(
+            f"SUM(CASE WHEN IFNULL(windcodes_hlc_cl_{sfx},0)=1 THEN 1 ELSE 0 END)"
+        )
+    sql = (
+        "SELECT "
+        + ", ".join(sum_exprs)
+        + " FROM stock_wind.stockstat WHERE 1=1"
+        + _LIMIT_STATS_SQL_NOT_ST_STOCKSTAT
+    )
+    cursor.execute(sql)
+    row = cursor.fetchone()
+    if not row or len(row) < len(_LIMIT_STATS_HLC_STOCKSTAT_SPECS) * 3:
+        return out
+    idx = 0
+    for sfx, key in _LIMIT_STATS_HLC_STOCKSTAT_SPECS:
+        base_cnt = int(row[idx] or 0)
+        ch_cnt = int(row[idx + 1] or 0)
+        cl_cnt = int(row[idx + 2] or 0)
+        idx += 3
+        out[key] = format(float(_limit_stats_pct_diff_pp(ch_cnt, cl_cnt, base_cnt)), '.2f')
+    return out
+
+
+def _merge_limit_stats_panel(prev: dict | None, new: dict) -> dict:
+    """新面板中值为 null 的粘性字段沿用上次成功快照。"""
+    if not prev or not prev.get('ok'):
+        return new
+    if not new.get('ok'):
+        return prev
+    merged = dict(new)
+    for key in _LIMIT_STATS_PANEL_STICKY_KEYS:
+        if merged.get(key) is None and prev.get(key) is not None:
+            merged[key] = prev[key]
+    return merged
 
 
 def _build_limit_stats_hlc_count_sql() -> str:
@@ -851,6 +886,9 @@ def _read_up_num_ma5_rt_percentile(conn, up_num_ma5_rt_str: str | None) -> str |
 
 
 AMOUNT_TOP5_PCTILE_LOOKBACK_YEARS = 5
+# Top5% 弹窗：start_date 模式全量上限（2005 起约 5200 交易日）；无 start_date 时与超跌弹窗 tail limit 一致
+AMOUNT_TOP5_PCT_MODAL_SERIES_CAP = 6000
+AMOUNT_TOP5_PCT_MODAL_LIMIT_TAIL = 1300
 
 
 def _subtract_years_safe(d: date, years: int) -> date:
@@ -996,6 +1034,93 @@ def _compute_amount_top5_pct_sigma2_bounds(conn_tushare, conn_wind) -> tuple[flo
     if std_v <= 0:
         return None, None
     return round(mean_v - 2 * std_v, 2), round(mean_v + 2 * std_v, 2)
+
+
+def _parse_amount_top5_series_start_date(raw: str | None) -> date | None:
+    """解析 amount_top5_pct_series 的 start_date（YYYY-MM-DD）。"""
+    s = (raw or '').strip()
+    if not s:
+        return None
+    try:
+        dt = pd.to_datetime(s, errors='coerce')
+        if pd.isna(dt):
+            return None
+        return dt.date()
+    except Exception:
+        return None
+
+
+def _compute_amount_top5_pct_rolling_sigma2_series(
+    trade_dates: list[date],
+    values: list[float | None],
+) -> tuple[list[float | None], list[float | None]]:
+    """逐日滚动五年 mean±2σ（锚定日 t 不参与样本）；初段无窗口时用首条有效 2σ 水平回填。
+
+    双指针 + 滑动和/平方和，O(n)；旧实现逐日重扫样本在 5000+ 交易日上要数秒，
+    会超过首页弹窗 12s abort。
+    """
+    n = len(trade_dates)
+    low_out: list[float | None] = [None] * n
+    high_out: list[float | None] = [None] * n
+    if n == 0:
+        return low_out, high_out
+    span_days = AMOUNT_TOP5_PCTILE_LOOKBACK_YEARS * 366 + 30
+    left = 0
+    sumX = 0.0
+    sumX2 = 0.0
+    cnt = 0
+    first_low: float | None = None
+    first_high: float | None = None
+
+    for i in range(n):
+        if i > 0:
+            tdPrev = trade_dates[i - 1]
+            vPrev = values[i - 1] if i - 1 < len(values) else None
+            if tdPrev is not None and vPrev is not None:
+                fv = float(vPrev)
+                sumX += fv
+                sumX2 += fv * fv
+                cnt += 1
+        td_i = trade_dates[i]
+        if td_i is None:
+            continue
+        lo_bound = td_i - timedelta(days=span_days)
+        while left < i:
+            tdL = trade_dates[left]
+            vL = values[left] if left < len(values) else None
+            if tdL is None or vL is None:
+                left += 1
+                continue
+            if tdL < lo_bound:
+                fv = float(vL)
+                sumX -= fv
+                sumX2 -= fv * fv
+                cnt -= 1
+                left += 1
+                continue
+            break
+        if cnt < 2:
+            continue
+        mean_v = sumX / cnt
+        varPop = sumX2 / cnt - mean_v * mean_v
+        if varPop < 0.0:
+            varPop = 0.0
+        std_v = varPop ** 0.5
+        if std_v <= 0:
+            continue
+        low_v = round(mean_v - 2 * std_v, 2)
+        high_v = round(mean_v + 2 * std_v, 2)
+        low_out[i] = low_v
+        high_out[i] = high_v
+        if first_low is None:
+            first_low = low_v
+            first_high = high_v
+    if first_low is not None and first_high is not None:
+        for i in range(n):
+            if low_out[i] is None:
+                low_out[i] = first_low
+                high_out[i] = first_high
+    return low_out, high_out
 
 
 # 一字涨/涨停/一字跌/跌停：stockstat 列名
@@ -1167,6 +1292,8 @@ _JSON_API_NO_STORE_SUFFIXES: tuple[str, ...] = (
     '/api/sw_index_amt_pctile_series',
     '/api/index_industry_stats',
     '/api/opt-t-board',
+    '/api/opt-iv-board',
+    '/api/opt-sp-plan',
 )
 
 
@@ -1194,7 +1321,12 @@ def _no_cache_limit_stats_json_api(resp):
     if _request_path_matches_no_store_json_api(path):
         resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         resp.headers['Pragma'] = 'no-cache'
-    return resp
+    from rt_monitor.core.response_compress import maybeGzipFlaskResponse
+
+    try:
+        return maybeGzipFlaskResponse(resp, request)
+    except RuntimeError:
+        return resp
 
 
 @app.context_processor
@@ -1271,14 +1403,22 @@ etf_ma_signal_cache = None
 etf_ma_signal_last_read_ts = 0
 ETF_MA_SIGNAL_CACHE_TTL = 12  # 放宽 TTL，避免每轮轮询都触发重查询导致首载和盘中抖动
 ETF_MA_SIGNAL_REFRESH_MIN_GAP = 2.0
+ETF_MA_SIGNAL_PROCESS_ISOLATION = os.getenv(
+    "RT_MONITOR_MA_SIGNAL_PROCESS_ISOLATION", "1"
+) not in ("0", "false", "False")
+ETF_MA_SIGNAL_PROCESS_TIMEOUT_SEC = max(
+    30.0, float(os.getenv("RT_MONITOR_MA_SIGNAL_PROCESS_TIMEOUT_SEC", "120"))
+)
 etf_ma_signal_refreshing = False
 etf_ma_signal_refresh_started_ts = 0.0
+_ma_signal_process_executor = None
+_ma_signal_process_executor_lock = threading.Lock()
 etf_bias_cache = None
 etf_bias_last_read_ts = 0
 ETF_BIAS_CACHE_TTL = 3  # BIAS 表查询较重，短 TTL 缓存降低数据库压力
 limit_stats_cache = None
 limit_stats_last_read_ts = 0
-LIMIT_STATS_CACHE_TTL = 3  # limit_stats 含重 GROUP BY 查询，短 TTL 缓存降低压力
+LIMIT_STATS_CACHE_TTL = 1  # 与首页 1s 轮询对齐；实测重算约 0.2～0.3s，1s 节拍有余量
 _cache_lock = threading.Lock()
 # BIAS 弹窗序列 /api/etf_bias_series：同参数短 TTL 命中则跳过 DB + 百分位（减轻重复打开与 rolling 热路径）
 ETF_BIAS_SERIES_CACHE_TTL = 4.0
@@ -1290,33 +1430,28 @@ _etf_mcd_series_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
 LIMIT_STATS_DETAIL_CACHE_TTL = 3.0
 LIMIT_STATS_DETAIL_CACHE_MAX = 96
 _limit_stats_detail_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
-TOP_MOVES_CACHE_TTL = 3.0
+# 首页 Top30：HTTP 只读内存；后台按查询耗时在 2～8s 自适应刷一份
+TOP_MOVES_HOME_LIMIT = 30
+TOP_MOVES_REFRESH_MIN_SEC = 2.0
+TOP_MOVES_REFRESH_MAX_SEC = 8.0
+TOP_MOVES_CACHE_TTL = TOP_MOVES_REFRESH_MIN_SEC
 TOP_MOVES_CACHE_MAX = 32
 _top_moves_cache: OrderedDict[int, tuple[float, dict]] = OrderedDict()
+_topMovesLastOk: dict[int, dict] = {}
+_topMovesInflight: dict[int, threading.Event] = {}
+_topMovesInflightLock = threading.Lock()
+_topMovesRefreshStarted = False
+_topMovesLastHttpMono = 0.0
+TOP_MOVES_IDLE_PAUSE_SEC = 15.0
+TOP_MOVES_FACTOR_TTL = 120.0
+_topMovesFactorByCode: dict = {}
+_topMovesFactorExp = 0.0
 MA_SIGNAL_SERIES_CACHE_TTL = 5.0
 MA_SIGNAL_SERIES_CACHE_MAX = 96
 _ma_signal_series_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
-# 申万行业页：财报/聚合重算成本高，进程内长期有效（重启失效）；缓存命中时仍刷新实时层（区间涨跌幅/成交额比%/新高低/融资余额）
-SW_INDUSTRY_STATS_CACHE_TTL = float('inf')
-SW_INDUSTRY_STATS_CACHE_MAX = 50
-# 响应 JSON 的 cache_ttl_sec：不可为 inf；0 表示进程内缓存、与 fina 策略一致
-SW_INDUSTRY_STATS_CACHE_TTL_API_SEC = 0
-_sw_industry_stats_cache: OrderedDict[str, tuple[float, dict, dict, str]] = OrderedDict()
-_index_industry_stats_cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
-INDEX_MONITOR_CODES = [
-    ("000510.SH", "A500"),
-    ("000300.SH", "沪深300"),
-    ("000905.SH", "中证500"),
-    ("000852.SH", "中证1000"),
-    ("932000.CSI", "中证2000"),
-    ("899050.BJ", "北证50"),
-    ("000016.SH", "上证50"),
-    ("000680.SH", "科创综指"),
-    ("000688.SH", "科创50"),
-    ("399006.SZ", "创业板指"),
-    ("399102.SZ", "创业板综"),
-]
 SLOW_API_WARN_SECONDS = 0.45
+SLOW_API_WARN_COOLDOWN_SEC = 20.0
+_slowApiLastWarnAt: dict[str, float] = {}
 
 
 def _small_ttl_cache_get(cache_obj: OrderedDict, cache_key, now_ts: float):
@@ -1336,41 +1471,18 @@ def _small_ttl_cache_put(cache_obj: OrderedDict, cache_key, payload: dict, ttl: 
         cache_obj.move_to_end(cache_key)
 
 
-def _sw_industry_stats_cache_get(
-    cache_key: str, now_ts: float
-) -> tuple[dict | None, dict[str, tuple[str, str]] | None, str | None]:
-    with _cache_lock:
-        hit = _sw_industry_stats_cache.get(cache_key)
-        if hit is not None and now_ts < hit[0]:
-            _sw_industry_stats_cache.move_to_end(cache_key)
-            return hit[1], hit[2], hit[3]
-    return None, None, None
-
-
-def _sw_industry_stats_cache_put(
-    cache_key: str,
-    payload: dict,
-    ts_to_ind: dict[str, tuple[str, str]] | None,
-    level: str,
-    ttl: float,
-    max_items: int,
-) -> None:
-    with _cache_lock:
-        while len(_sw_industry_stats_cache) >= max_items:
-            _sw_industry_stats_cache.popitem(last=False)
-        _sw_industry_stats_cache[cache_key] = (
-            time.time() + ttl,
-            payload,
-            ts_to_ind or {},
-            level,
-        )
-        _sw_industry_stats_cache.move_to_end(cache_key)
 
 
 def _log_slow_api(api_name: str, started_at: float, extra: str = ''):
     elapsed = time.perf_counter() - started_at
-    if elapsed >= SLOW_API_WARN_SECONDS:
-        logger.warning("slow_api %s elapsed=%.3fs %s", api_name, elapsed, extra)
+    if elapsed < SLOW_API_WARN_SECONDS:
+        return
+    nowMono = time.monotonic()
+    last = _slowApiLastWarnAt.get(api_name, 0.0)
+    if nowMono - last < SLOW_API_WARN_COOLDOWN_SEC:
+        return
+    _slowApiLastWarnAt[api_name] = nowMono
+    logger.warning("slow_api %s elapsed=%.3fs %s", api_name, elapsed, extra)
 
 
 def _etf_mcd_series_cache_get(cache_key: tuple):
@@ -2398,8 +2510,270 @@ IDX_PCT_CATEGORY_TO_TS = {
     '创业板指': '399006.SZ',
     '创业板综': '399102.SZ',
 }
-# 中证2000、北证50 在 rt_idx_k 无当日行情：区间涨跌幅不拼 rt_idx_k，仅用 index_daily 已落地收盘
-IDX_PCT_NO_RT_SPLICE_CATEGORIES = frozenset({'中证2000', '北证50'})
+# 区间涨跌幅默认拼 rt_idx_k；空集=全部可拼（中证2000/北证50 由 tdx_opt_live 写入）
+IDX_PCT_NO_RT_SPLICE_CATEGORIES = frozenset()
+
+# Gap 全历史分位样本：按自然日缓存，盘中跳空样本不变，避免 rt_median 每 5 秒重扫 index_daily
+_idx_gap_hist_cache: dict[str, tuple[float, ...]] = {}
+_idx_gap_hist_day = ''
+_idx_gap_hist_lock = threading.Lock()
+
+
+def _idx_gap_percentile(sample, gap) -> int | None:
+    """经验分位 0–100：100 ×（样本中严格小于 gap 的个数）/ n，四舍五入到整数。
+    与成交额 Top5% Per 一样用严格小于；样本不含今日。"""
+    if gap is None or not sample:
+        return None
+    g = _to_float_or_none(gap)
+    if g is None:
+        return None
+    lt = sum(1 for v in sample if v < g)
+    raw = Decimal(lt) / Decimal(len(sample)) * Decimal(100)
+    return int(raw.quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+
+
+def _load_idx_gap_history(conn, ts_codes: list[str]) -> dict[str, tuple[float, ...]]:
+    """各指数 index_daily 全历史跳空%：(open-pre_close)/pre_close×100，不含 CURDATE()。"""
+    uniq = sorted({c for c in ts_codes if c})
+    if not uniq:
+        return {}
+    placeholders = ','.join(['%s'] * len(uniq))
+    sql = (
+        'SELECT ts_code, (open - pre_close) / pre_close * 100 AS gap_pct '
+        'FROM stock_tushare.index_daily '
+        f'WHERE ts_code IN ({placeholders}) '
+        'AND open IS NOT NULL AND pre_close IS NOT NULL AND pre_close <> 0 '
+        'AND trade_date < CURDATE()'
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, uniq)
+            raw = cur.fetchall() or []
+    except Exception as e:
+        logger.warning('涨跌幅表 Gap 全历史分位样本读取失败: %s', e)
+        return {}
+    buckets: dict[str, list[float]] = {c: [] for c in uniq}
+    for row in raw:
+        if not row or len(row) < 2:
+            continue
+        av = _to_float_or_none(row[1])
+        if av is None:
+            continue
+        buckets.setdefault(str(row[0]), []).append(av)
+    return {k: tuple(v) for k, v in buckets.items() if v}
+
+
+def _ensure_idx_gap_history(conn, ts_codes: list[str]) -> dict[str, tuple[float, ...]]:
+    """当日已加载且覆盖请求代码时直接返回内存样本。"""
+    global _idx_gap_hist_day
+    today = date.today().isoformat()
+    uniq = [c for c in ts_codes if c]
+    with _idx_gap_hist_lock:
+        cached = (
+            _idx_gap_hist_day == today
+            and _idx_gap_hist_cache
+            and all(c in _idx_gap_hist_cache for c in uniq)
+        )
+        if cached:
+            return dict(_idx_gap_hist_cache)
+    loaded = _load_idx_gap_history(conn, uniq)
+    if not loaded:
+        with _idx_gap_hist_lock:
+            return dict(_idx_gap_hist_cache)
+    with _idx_gap_hist_lock:
+        _idx_gap_hist_cache.update(loaded)
+        _idx_gap_hist_day = today
+        return dict(_idx_gap_hist_cache)
+
+
+# Pct / Intra / Gap / Amp 全历史样本，按自然日缓存。键为 pct、intra、gap、amp。
+_IDX_METRIC_SAMPLE_KEYS = ('pct', 'intra', 'gap', 'amp')
+_idx_metric_hist_cache: dict[str, dict[str, tuple[float, ...]]] = {}
+_idx_metric_hist_day = ''
+_idx_metric_hist_lock = threading.Lock()
+
+
+def _load_idx_metric_history(conn, ts_codes: list[str]) -> dict[str, dict[str, tuple[float, ...]]]:
+    """各指数全历史四条序列，不含 CURDATE()。
+    pct 用 pct_chg（已是百分数）；intra=(close-open)/open×100；
+    gap=(open-pre_close)/pre_close×100；amp=(high-low)/pre_close×100。
+    """
+    uniq = sorted({c for c in ts_codes if c})
+    if not uniq:
+        return {}
+    placeholders = ','.join(['%s'] * len(uniq))
+    sql = (
+        'SELECT ts_code, pct_chg, '
+        'CASE WHEN open IS NOT NULL AND open <> 0 AND close IS NOT NULL '
+        'THEN (close - open) / open * 100 END, '
+        'CASE WHEN open IS NOT NULL AND pre_close IS NOT NULL AND pre_close <> 0 '
+        'THEN (open - pre_close) / pre_close * 100 END, '
+        'CASE WHEN high IS NOT NULL AND low IS NOT NULL AND pre_close IS NOT NULL AND pre_close <> 0 '
+        'THEN (high - low) / pre_close * 100 END '
+        'FROM stock_tushare.index_daily '
+        f'WHERE ts_code IN ({placeholders}) AND trade_date < CURDATE()'
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, uniq)
+            raw = cur.fetchall() or []
+    except Exception as e:
+        logger.warning('涨跌幅表全历史分位样本读取失败: %s', e)
+        return {}
+    buckets: dict[str, dict[str, list[float]]] = {
+        c: {k: [] for k in _IDX_METRIC_SAMPLE_KEYS} for c in uniq
+    }
+    for row in raw:
+        if not row or len(row) < 5:
+            continue
+        ts = str(row[0])
+        slot = buckets.setdefault(ts, {k: [] for k in _IDX_METRIC_SAMPLE_KEYS})
+        for idx, key in enumerate(_IDX_METRIC_SAMPLE_KEYS, start=1):
+            av = _to_float_or_none(row[idx])
+            if av is not None:
+                slot[key].append(av)
+    out: dict[str, dict[str, tuple[float, ...]]] = {}
+    for ts, slot in buckets.items():
+        packed = {k: tuple(v) for k, v in slot.items() if v}
+        if packed:
+            out[ts] = packed
+    return out
+
+
+def _ensure_idx_metric_history(conn, ts_codes: list[str]) -> dict[str, dict[str, tuple[float, ...]]]:
+    """当日已加载且覆盖请求代码时直接返回内存样本。"""
+    global _idx_metric_hist_day
+    today = date.today().isoformat()
+    uniq = [c for c in ts_codes if c]
+    with _idx_metric_hist_lock:
+        cached = (
+            _idx_metric_hist_day == today
+            and _idx_metric_hist_cache
+            and all(c in _idx_metric_hist_cache for c in uniq)
+        )
+        if cached:
+            return dict(_idx_metric_hist_cache)
+    loaded = _load_idx_metric_history(conn, uniq)
+    if not loaded:
+        with _idx_metric_hist_lock:
+            return dict(_idx_metric_hist_cache)
+    with _idx_metric_hist_lock:
+        _idx_metric_hist_cache.update(loaded)
+        _idx_metric_hist_day = today
+        return dict(_idx_metric_hist_cache)
+
+
+# ETF Ma/Ema 表：AMT/Pct/Intra/Gap/Amp 全历史样本。AMT 为 etf_daily.amount（千元）÷1e5 的亿元。
+_ETF_METRIC_SAMPLE_KEYS = ('amt', 'pct', 'intra', 'gap', 'amp')
+_etf_metric_hist_cache: dict[str, dict[str, tuple[float, ...]]] = {}
+_etf_metric_hist_day = ''
+_etf_metric_hist_lock = threading.Lock()
+
+
+def _load_etf_metric_history(conn, ts_codes: list[str]) -> dict[str, dict[str, tuple[float, ...]]]:
+    """各 ETF etf_daily 全历史五条序列，不含 CURDATE()。"""
+    uniq = sorted({c for c in ts_codes if c})
+    if not uniq:
+        return {}
+    placeholders = ','.join(['%s'] * len(uniq))
+    sql = (
+        'SELECT ts_code, '
+        'CASE WHEN amount IS NOT NULL THEN amount / 100000 END, '
+        'pct_chg, '
+        'CASE WHEN open IS NOT NULL AND open <> 0 AND close IS NOT NULL '
+        'THEN (close - open) / open * 100 END, '
+        'CASE WHEN open IS NOT NULL AND pre_close IS NOT NULL AND pre_close <> 0 '
+        'THEN (open - pre_close) / pre_close * 100 END, '
+        'CASE WHEN high IS NOT NULL AND low IS NOT NULL AND pre_close IS NOT NULL AND pre_close <> 0 '
+        'THEN (high - low) / pre_close * 100 END '
+        'FROM stock_tushare.etf_daily '
+        f'WHERE ts_code IN ({placeholders}) AND trade_date < CURDATE()'
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, uniq)
+            raw = cur.fetchall() or []
+    except Exception as e:
+        logger.warning('MA 信号表全历史分位样本读取失败: %s', e)
+        return {}
+    buckets: dict[str, dict[str, list[float]]] = {
+        c: {k: [] for k in _ETF_METRIC_SAMPLE_KEYS} for c in uniq
+    }
+    for row in raw:
+        if not row or len(row) < 6:
+            continue
+        ts = str(row[0])
+        slot = buckets.setdefault(ts, {k: [] for k in _ETF_METRIC_SAMPLE_KEYS})
+        for idx, key in enumerate(_ETF_METRIC_SAMPLE_KEYS, start=1):
+            av = _to_float_or_none(row[idx])
+            if av is not None:
+                slot[key].append(av)
+    out: dict[str, dict[str, tuple[float, ...]]] = {}
+    for ts, slot in buckets.items():
+        packed = {k: tuple(v) for k, v in slot.items() if v}
+        if packed:
+            out[ts] = packed
+    return out
+
+
+def _ensure_etf_metric_history(conn, ts_codes: list[str]) -> dict[str, dict[str, tuple[float, ...]]]:
+    """当日已加载且覆盖请求代码时直接返回内存样本。"""
+    global _etf_metric_hist_day
+    today = date.today().isoformat()
+    uniq = [c for c in ts_codes if c]
+    with _etf_metric_hist_lock:
+        cached = (
+            _etf_metric_hist_day == today
+            and _etf_metric_hist_cache
+            and all(c in _etf_metric_hist_cache for c in uniq)
+        )
+        if cached:
+            return dict(_etf_metric_hist_cache)
+    loaded = _load_etf_metric_history(conn, uniq)
+    if not loaded:
+        with _etf_metric_hist_lock:
+            return dict(_etf_metric_hist_cache)
+    with _etf_metric_hist_lock:
+        _etf_metric_hist_cache.update(loaded)
+        _etf_metric_hist_day = today
+        return dict(_etf_metric_hist_cache)
+
+
+def _attach_etf_ma_metric_percentiles(rows: list) -> list:
+    """给 MA 信号行补 etf_amount_per / etf_pct_per / etf_intra_per / etf_gap_per / etf_amp_per。"""
+    codes = [str(r.get('ts_code') or '') for r in rows if r and r.get('ts_code')]
+    if not codes:
+        return rows
+    conn = pymysql.connect(**DB_CONFIG_TUSHARE)
+    try:
+        hist = _ensure_etf_metric_history(conn, codes)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    live_keys = (
+        ('amt', 'etf_amount_yi', 'etf_amount_per'),
+        ('pct', 'etf_pct', 'etf_pct_per'),
+        ('intra', 'etf_intra', 'etf_intra_per'),
+        ('gap', 'etf_gap', 'etf_gap_per'),
+        ('amp', 'etf_amp', 'etf_amp_per'),
+    )
+    for row in rows:
+        if not row:
+            continue
+        samples = hist.get(str(row.get('ts_code') or '')) or {}
+        for sample_key, live_key, per_key in live_keys:
+            row[per_key] = _idx_gap_percentile(samples.get(sample_key) or (), row.get(live_key))
+    return rows
+
+
+def _safe_attach_etf_ma_metric_percentiles(rows: list) -> list:
+    try:
+        return _attach_etf_ma_metric_percentiles(rows)
+    except Exception as e:
+        logger.warning('MA 信号表全历史分位失败: %s', e)
+        return rows
 
 MEDIAN_TABLE_SPEC = [
     (None, None, '全部A股'),
@@ -2423,305 +2797,21 @@ AMOUNT_CATEGORY_TO_INDEX_TS = {spec[2]: spec[0] for spec in MEDIAN_TABLE_SPEC if
 AMOUNT_ALL_A_CATEGORY = '全部A股'
 
 
-def _marketinfo_max_amount_last_n_trade_dates(conn, n: int = 60):
-    """
-    从 stock_tushare.marketinfo 取最近 n 个交易日（trade_date 倒序 LIMIT n）内
-    amount（亿，与 compute_marketinfo 入库口径一致）最大的一行；并列取较新 trade_date。
-    返回整数亿（与 index_daily 分支一致）、日期字符串 YYYY-MM-DD。
-    """
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT trade_date, amount
-                FROM stock_tushare.marketinfo
-                WHERE amount IS NOT NULL
-                ORDER BY trade_date DESC
-                LIMIT %s
-                """,
-                (int(n),),
-            )
-            rows = cur.fetchall() or []
-    except Exception as e:
-        logger.warning("marketinfo MAX T-60 读取失败: %s", e)
-        return None, None
-    if not rows:
-        return None, None
-    pairs = []
-    for trade_date, amount in rows:
-        av = _to_float_or_none(amount)
-        if av is None:
-            continue
-        pairs.append((trade_date, av))
-    if not pairs:
-        return None, None
-    max_amt = max(p[1] for p in pairs)
-    best_dates = [p[0] for p in pairs if p[1] == max_amt]
-    best_date = max(best_dates) if best_dates else None
-    if best_date is None:
-        return None, None
-    yi = int(round(float(max_amt)))
-    ds = str(best_date)[:10] if hasattr(best_date, 'year') else str(best_date)[:10]
-    return yi, ds
-
-
-def _marketinfo_min_amount_last_n_trade_dates(conn, n: int = 60):
-    """
-    从 stock_tushare.marketinfo 取最近 n 个交易日内 amount（亿）最小的一行；并列取较新 trade_date。
-    返回整数亿、日期字符串 YYYY-MM-DD。
-    """
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT trade_date, amount
-                FROM stock_tushare.marketinfo
-                WHERE amount IS NOT NULL
-                ORDER BY trade_date DESC
-                LIMIT %s
-                """,
-                (int(n),),
-            )
-            rows = cur.fetchall() or []
-    except Exception as e:
-        logger.warning("marketinfo MIN T-60 读取失败: %s", e)
-        return None, None
-    pairs = []
-    for trade_date, amount in rows:
-        av = _to_float_or_none(amount)
-        if av is not None:
-            pairs.append((trade_date, av))
-    if not pairs:
-        return None, None
-    min_amt = min(p[1] for p in pairs)
-    best_dates = [p[0] for p in pairs if p[1] == min_amt]
-    best_date = max(best_dates) if best_dates else None
-    if best_date is None:
-        return None, None
-    yi = int(round(float(min_amt)))
-    ds = str(best_date)[:10] if hasattr(best_date, 'year') else str(best_date)[:10]
-    return yi, ds
-
-
-def _index_daily_max_amount_last_n_trade_dates(conn, ts_code: str, n: int = 60):
-    """
-    从 stock_tushare.index_daily 取该 ts_code 最近 n 个交易日（trade_date 倒序 LIMIT n）内
-    amount（千元）最大的记录；并列时取较新的 trade_date。
-    返回整数亿（与 index_stat 成交额列展示一致）、日期字符串 YYYY-MM-DD。
-    """
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT trade_date, amount
-                FROM stock_tushare.index_daily
-                WHERE ts_code = %s AND amount IS NOT NULL
-                ORDER BY trade_date DESC
-                LIMIT %s
-                """,
-                (ts_code, int(n)),
-            )
-            rows = cur.fetchall() or []
-    except Exception as e:
-        logger.warning("index_daily MAX T-60 读取失败 ts_code=%s: %s", ts_code, e)
-        return None, None
-    if not rows:
-        return None, None
-    pairs = []
-    for trade_date, amount in rows:
-        av = _to_float_or_none(amount)
-        if av is None:
-            continue
-        pairs.append((trade_date, av))
-    if not pairs:
-        return None, None
-    max_amt = max(p[1] for p in pairs)
-    best_dates = [p[0] for p in pairs if p[1] == max_amt]
-    best_date = max(best_dates) if best_dates else None
-    if best_date is None:
-        return None, None
-    yi = int(round(max_amt / 1e5))
-    ds = str(best_date)[:10] if hasattr(best_date, 'year') else str(best_date)[:10]
-    return yi, ds
-
-
-def _index_daily_min_amount_last_n_trade_dates(conn, ts_code: str, n: int = 60):
-    """
-    从 stock_tushare.index_daily 取该 ts_code 最近 n 个交易日内 amount（千元）最小的一行。
-    返回整数亿、日期字符串 YYYY-MM-DD。
-    """
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT trade_date, amount
-                FROM stock_tushare.index_daily
-                WHERE ts_code = %s AND amount IS NOT NULL
-                ORDER BY trade_date DESC
-                LIMIT %s
-                """,
-                (ts_code, int(n)),
-            )
-            rows = cur.fetchall() or []
-    except Exception as e:
-        logger.warning("index_daily MIN T-60 读取失败 ts_code=%s: %s", ts_code, e)
-        return None, None
-    pairs = []
-    for trade_date, amount in rows:
-        av = _to_float_or_none(amount)
-        if av is not None:
-            pairs.append((trade_date, av))
-    if not pairs:
-        return None, None
-    min_amt = min(p[1] for p in pairs)
-    best_dates = [p[0] for p in pairs if p[1] == min_amt]
-    best_date = max(best_dates) if best_dates else None
-    if best_date is None:
-        return None, None
-    yi = int(round(min_amt / 1e5))
-    ds = str(best_date)[:10] if hasattr(best_date, 'year') else str(best_date)[:10]
-    return yi, ds
-
-
-def _batch_index_daily_peak_amount_last_n_trade_dates(
-    conn, ts_codes: list[str], n: int = 60
-) -> dict[str, tuple[int | None, str | None]]:
-    """多指数一次查：各 ts_code 在最近 n 个交易日内 index_daily.amount（千元）最大的一日；并列取较新 trade_date。
-    返回 {ts_code: (亿元整数, 'YYYY-MM-DD')}；失败返回 {}，由调用方逐行回退。
-    依赖 MySQL 8+ 窗口函数（与仓库 MySQL 8.4 一致）。"""
-    uniq = sorted({c for c in ts_codes if c})
-    if not uniq:
-        return {}
-    placeholders = ",".join(["%s"] * len(uniq))
-    sql = (
-        "WITH ranked AS ("
-        " SELECT ts_code, trade_date, amount,"
-        " ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) AS rn"
-        " FROM stock_tushare.index_daily"
-        f" WHERE ts_code IN ({placeholders}) AND amount IS NOT NULL"
-        ") SELECT ts_code, trade_date, amount FROM ranked WHERE rn <= %s"
-    )
-    params = list(uniq) + [int(n)]
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            raw = cur.fetchall() or []
-    except Exception as e:
-        logger.warning("batch index_daily MAX T-60 失败（将回退逐行查询）: %s", e)
-        return {}
-    by_ts: dict[str, list[tuple]] = {}
-    for row in raw:
-        if not row or len(row) < 3:
-            continue
-        ts_code, trade_date, amount = row[0], row[1], row[2]
-        by_ts.setdefault(ts_code, []).append((trade_date, amount))
-    out: dict[str, tuple[int | None, str | None]] = {}
-    for ts_code in uniq:
-        rows = by_ts.get(ts_code) or []
-        pairs = []
-        for trade_date, amount in rows:
-            av = _to_float_or_none(amount)
-            if av is not None:
-                pairs.append((trade_date, av))
-        if not pairs:
-            out[ts_code] = (None, None)
-            continue
-        max_amt = max(p[1] for p in pairs)
-        best_dates = [p[0] for p in pairs if p[1] == max_amt]
-        best_date = max(best_dates) if best_dates else None
-        if best_date is None:
-            out[ts_code] = (None, None)
-        else:
-            yi = int(round(max_amt / 1e5))
-            ds = str(best_date)[:10] if hasattr(best_date, "year") else str(best_date)[:10]
-            out[ts_code] = (yi, ds)
-    return out
-
-
-def _batch_index_daily_valley_amount_last_n_trade_dates(
-    conn, ts_codes: list[str], n: int = 60
-) -> dict[str, tuple[int | None, str | None]]:
-    """多指数一次查：各 ts_code 最近 n 个交易日内 index_daily.amount（千元）最小的一日；并列取较新 trade_date。"""
-    uniq = sorted({c for c in ts_codes if c})
-    if not uniq:
-        return {}
-    placeholders = ",".join(["%s"] * len(uniq))
-    sql = (
-        "WITH ranked AS ("
-        " SELECT ts_code, trade_date, amount,"
-        " ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) AS rn"
-        " FROM stock_tushare.index_daily"
-        f" WHERE ts_code IN ({placeholders}) AND amount IS NOT NULL"
-        ") SELECT ts_code, trade_date, amount FROM ranked WHERE rn <= %s"
-    )
-    params = list(uniq) + [int(n)]
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            raw = cur.fetchall() or []
-    except Exception as e:
-        logger.warning("batch index_daily MIN T-60 失败（将回退逐行查询）: %s", e)
-        return {}
-    by_ts: dict[str, list[tuple]] = {}
-    for row in raw:
-        if not row or len(row) < 3:
-            continue
-        ts_code, trade_date, amount = row[0], row[1], row[2]
-        by_ts.setdefault(ts_code, []).append((trade_date, amount))
-    out: dict[str, tuple[int | None, str | None]] = {}
-    for ts_code in uniq:
-        rows = by_ts.get(ts_code) or []
-        pairs = []
-        for trade_date, amount in rows:
-            av = _to_float_or_none(amount)
-            if av is not None:
-                pairs.append((trade_date, av))
-        if not pairs:
-            out[ts_code] = (None, None)
-            continue
-        min_amt = min(p[1] for p in pairs)
-        best_dates = [p[0] for p in pairs if p[1] == min_amt]
-        best_date = max(best_dates) if best_dates else None
-        if best_date is None:
-            out[ts_code] = (None, None)
-        else:
-            yi = int(round(min_amt / 1e5))
-            ds = str(best_date)[:10] if hasattr(best_date, "year") else str(best_date)[:10]
-            out[ts_code] = (yi, ds)
-    return out
-
-
-def _index_daily_mean_amount_last_n_trade_dates(conn, ts_code: str, n: int = 20):
-    """
-    从 stock_tushare.index_daily 取该 ts_code 最近 n 个交易日（trade_date 倒序 LIMIT n）的
-    amount（千元）算术均值，转为亿元（与 MAX T-60 同单位换算：amount/1e5）。
-    """
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT amount
-                FROM stock_tushare.index_daily
-                WHERE ts_code = %s AND amount IS NOT NULL
-                ORDER BY trade_date DESC
-                LIMIT %s
-                """,
-                (ts_code, int(n)),
-            )
-            rows = cur.fetchall() or []
-    except Exception as e:
-        logger.warning("index_daily Ma(n) 均值读取失败 ts_code=%s n=%s: %s", ts_code, n, e)
-        return None
-    vals = []
-    for row in rows:
-        amount = row[0] if row else None
-        av = _to_float_or_none(amount)
-        if av is not None:
-            vals.append(av)
-    if not vals:
-        return None
-    mean_yi = (sum(vals) / len(vals)) / 1e5
-    return round(mean_yi, 2)
+# --- 成交额历史极值/均值：services/amount_extremes（P5.1）---
+from rt_monitor.services.amount_extremes import (  # noqa: E402
+    _marketinfo_max_amount_last_n_trade_dates,
+    _marketinfo_min_amount_last_n_trade_dates,
+    _index_daily_max_amount_last_n_trade_dates,
+    _index_daily_min_amount_last_n_trade_dates,
+    _batch_index_daily_peak_amount_last_n_trade_dates,
+    _batch_index_daily_valley_amount_last_n_trade_dates,
+    _amount_extreme_to_yi_date,
+    _marketinfo_max_amount_all,
+    _index_daily_max_amount_all,
+    _batch_index_daily_max_amount_all,
+    _blank_amount_extreme_fields,
+    _index_daily_mean_amount_last_n_trade_dates,
+)
 
 
 # ---------- index_stat 只读（写表由盘中实时统计负责） ----------
@@ -2852,6 +2942,7 @@ def load_initial_cache():
         try:
             ensure_index_member_sw_ts_indate_tushare(_ct, logger)
             ensure_etf_popup_hot_indexes_tushare(_ct, logger)
+            ensure_top10_holders_ts_end_date_index_tushare(_ct, logger)
         finally:
             _ct.close()
     except Exception as e:
@@ -2885,6 +2976,8 @@ def _build_ma_signal_fallback_rows() -> list:
                 'etf_gap': q.get('etf_gap'),
                 'etf_intra': q.get('etf_intra'),
                 'etf_amp': q.get('etf_amp'),
+                'etf_rt_date': q.get('etf_rt_date'),
+                'etf_observed_at': q.get('etf_observed_at'),
                 'range_pct_t1': None,
                 'range_pct_t5': None,
                 'range_pct_t20': None,
@@ -2895,13 +2988,45 @@ def _build_ma_signal_fallback_rows() -> list:
     return out
 
 
+def _get_ma_signal_process_executor():
+    """懒启动单 worker 进程，隔离 Flask 常驻进程的 GIL/后台线程争用。"""
+    global _ma_signal_process_executor
+    with _ma_signal_process_executor_lock:
+        if _ma_signal_process_executor is None:
+            _ma_signal_process_executor = concurrent.futures.ProcessPoolExecutor(
+                max_workers=1
+            )
+        return _ma_signal_process_executor
+
+
+def _shutdown_ma_signal_process_executor() -> None:
+    global _ma_signal_process_executor
+    with _ma_signal_process_executor_lock:
+        executor = _ma_signal_process_executor
+        _ma_signal_process_executor = None
+    if executor is not None:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+atexit.register(_shutdown_ma_signal_process_executor)
+
+
+def _read_ma_signal_rows_for_refresh(executor=None) -> list:
+    """保持原 builder 口径，只替换执行边界；环境开关可立即回退原线程路径。"""
+    if executor is None and not ETF_MA_SIGNAL_PROCESS_ISOLATION:
+        return read_etf_ma_signal_table_rows()
+    pool = executor or _get_ma_signal_process_executor()
+    future = pool.submit(read_etf_ma_signal_table_rows)
+    return future.result(timeout=ETF_MA_SIGNAL_PROCESS_TIMEOUT_SEC)
+
+
 def _kickoff_ma_signal_table_refresh_async(force: bool = False) -> bool:
     """异步刷新 MA 信号缓存；并发/高频触发下仅允许一个刷新任务在跑。"""
     def _job():
         global etf_ma_signal_cache, etf_ma_signal_last_read_ts, etf_ma_signal_refreshing
         t0 = time.perf_counter()
         try:
-            rows = read_etf_ma_signal_table_rows()
+            rows = _read_ma_signal_rows_for_refresh()
             if rows:
                 with _cache_lock:
                     etf_ma_signal_cache = rows
@@ -2947,50 +3072,11 @@ def _warmup_ma_signal_table_cache_async():
     _kickoff_ma_signal_table_refresh_async(force=True)
 
 
-def _warmup_sw_industry_cache_async():
-    """启动时后台预热申万页默认一级行业视图（cache_key 与 `GET /api/sw_industry_stats?level=l1` 一致：`l1||||x12`）。
-
-    经 Flask test_client 走真实路由，结果写入 `_sw_industry_stats_cache`（与手动开页相同）。daemon 线程，失败仅打日志。
-    """
-    import threading
-
-    def _worker():
-        try:
-            import time as _t
-
-            _t.sleep(1.0)  # 与财报预热对齐，避免与启动峰值叠在同一瞬间
-            ck = 'l1||||x12'
-            now_ts = time.time()
-            if _sw_industry_stats_cache_get(ck, now_ts)[0] is not None:
-                logger.debug('申万行业预热跳过：默认 L1 已在缓存')
-                return
-            with app.app_context():
-                with app.test_client() as tc:
-                    rv = tc.get('/api/sw_industry_stats?level=l1')
-            if rv.status_code != 200:
-                logger.warning(
-                    '申万行业预热 HTTP status=%s（忽略不影响启动）',
-                    getattr(rv, 'status_code', '?'),
-                )
-                return
-            try:
-                data = rv.get_json(silent=True) or {}
-                nrows = len(data.get('rows') or [])
-            except Exception:
-                nrows = -1
-            logger.info('申万行业统计缓存已预热：默认 L1（l1|||x8） rows=%s', nrows)
-        except Exception as e:
-            logger.warning('申万行业预热失败（忽略不影响启动）: %s', e)
-
-    t = threading.Thread(target=_worker, daemon=True, name='warmup-sw-industry')
-    t.start()
-
-
 def read_limit_stats_panel():
     """
     涨跌家数统计面板：读 stock_wind.stockstat、rt_k、stock_tushare.limit_list_ths。
     up_num_ma5_rt / up_num_ma5_rt_per：近 5 日上涨占比及该值在 marketinfo.up_num_ma5 近 500 日历史中的百分位（不含当日、严格小于）。
-    新高/低十八项、HL_C：直连 rt_k + stk_factor_ma（新鲜度条件与盘中实时统计.py 内联 SQL 同口径），不依赖 stockstat.windcodes_high_* 是否已写入。
+    新高/低十八项、HL_C：新高读 stockstat.windcodes_high_*；HL_C 读 stockstat.windcodes_hlc_valid/ch/cl_*（盘中实时统计预写，避免 ma JOIN 读超时）。
     pct_gt* / pct_lt*：仅 COUNT stockstat.pctchange，依赖盘中脚本对 stockstat 的更新；与直连 rt_k 的 HL 计数口径独立。
     涨跌停与连板等：stockstat 标志列或 limit_list_ths；剔除 ST/*ST/S*ST：stockstat 用 sec_name，同花顺池用 name。
     """
@@ -3168,36 +3254,7 @@ def read_limit_stats_panel():
                 for _i, _k in enumerate(_LIMIT_STATS_PANEL_HL_KEYS):
                     base[_k] = int(_hl_row[_i] or 0)
 
-            # HL_C：收盘前复权相对 ma.high_N/low_N 的 CH/CL/base 百分点差（与 marketinfo HL{N}_CCCC 形式一致）
-            _hlc_period_nums = (5, 10, 20, 60, 120, 200, 250, 850)
-            try:
-                cursor.execute(_LIMIT_STATS_HLC_COUNT_SQL)
-                hlc_row = cursor.fetchone()
-                if hlc_row and len(hlc_row) >= 27:
-                    _idx = 0
-                    for _n in _hlc_period_nums:
-                        _b = int(hlc_row[_idx] or 0)
-                        _ch = int(hlc_row[_idx + 1] or 0)
-                        _cl = int(hlc_row[_idx + 2] or 0)
-                        _idx += 3
-                        base[f'hlc_cccc_{_n}'] = format(
-                            float(_limit_stats_pct_diff_pp(_ch, _cl, _b)), '.2f'
-                        )
-                    _b = int(hlc_row[_idx] or 0)
-                    _ch = int(hlc_row[_idx + 1] or 0)
-                    _cl = int(hlc_row[_idx + 2] or 0)
-                    base['hlc_cccc_h'] = format(
-                        float(_limit_stats_pct_diff_pp(_ch, _cl, _b)), '.2f'
-                    )
-                else:
-                    for _k in _LIMIT_STATS_PANEL_HLC_KEYS:
-                        base[_k] = None
-            except Exception as e_hlc:
-                logger.warning('limit_stats: HL_C 百分点差查询失败: %s', e_hlc)
-                for _k in _LIMIT_STATS_PANEL_HLC_KEYS:
-                    base[_k] = None
-
-            # limit_list_ths：同连接跨库（需同一 MySQL 实例）
+            # limit_list_ths：须在 HL_C 之前（历史上重型 HL_C JOIN 超时会拖死同连接；现改读 stockstat 仍保持顺序稳妥）
             try:
                 cursor.execute(
                     "SELECT MAX(trade_date) AS md FROM stock_tushare.limit_list_ths WHERE limit_type IN ('涨停池','跌停池')"
@@ -3310,6 +3367,14 @@ def read_limit_stats_panel():
                 base['cnt_lb_dt'] = None
                 base['prev_zt_pct'] = None
                 base['prev_dt_pct'] = None
+
+            # HL_C：读 stockstat 预写标志列（与盘中实时统计同源），避免 ma JOIN 超 8s 读超时
+            try:
+                base.update(_read_limit_stats_hlc_from_stockstat(cursor))
+            except Exception as e_hlc:
+                logger.warning('limit_stats: HL_C stockstat 聚合失败: %s', e_hlc)
+                for _k in _LIMIT_STATS_PANEL_HLC_KEYS:
+                    base[_k] = None
 
         # 涨停T-5均 / 跌停T-5均：一条聚合 SQL 取最近 5 日涨停/跌停计数均值（原 10 次 COUNT → 1 次）
         try:
@@ -3583,3353 +3648,10 @@ def rt_monitor():
     return _render_rt_monitor_no_cache()
 
 
-# ===================== 申万行业页实时/行情层 helper（还原自历史会话最终版） =====================
-def _sw_normalize_trade_date_td(td: Any) -> date | None:
-    if td is None:
-        return None
-    if isinstance(td, datetime):
-        return td.date()
-    if isinstance(td, date):
-        return td
-    return None
-
-
-def _sw_empirical_pct_leq(sorted_hist: list[float], r: float) -> float | None:
-    """经验分位：100 * (#{x<=r} / n)，sorted_hist 升序。"""
-    if not sorted_hist:
-        return None
-    import bisect
-    n = len(sorted_hist)
-    hi = bisect.bisect_right(sorted_hist, r + 1e-12)
-    return round(100.0 * float(hi) / float(n), 2)
-
-
-def _sw_empirical_pct_leq_values(vals: list[float], r: float) -> float | None:
-    """经验分位（无需预排序，适合滑动窗口）。"""
-    if not vals:
-        return None
-    hi = sum(1 for x in vals if x <= r + 1e-12)
-    return round(100.0 * float(hi) / float(len(vals)), 2)
-
-
-def _normalize_sw_industry_index_ts_code(group_code: str) -> str | None:
-    """index_member 的 l1/l2 行业代码多为无后缀；index_sw_daily / rt_sw_k 使用 *.SI。"""
-    s = str(group_code or "").strip().upper()
-    if not s:
-        return None
-    if s.endswith(".SI"):
-        return s
-    if "." in s:
-        return s
-    return f"{s}.SI"
-
-
-def _fetch_rt_sw_k_quotes(ts_codes: list[str], conn) -> dict[str, dict]:
-    """申万行业 rt_sw_k：close、trade_time、pct_change、amount(元)，区间期末与成交额比 T 列共用。"""
-    out: dict[str, dict] = {}
-    if not ts_codes or conn is None:
-        return out
-    uniq = list(dict.fromkeys(str(c or "").strip().upper() for c in ts_codes if c))
-    if not uniq:
-        return out
-    chunk = 400
-    try:
-        for i in range(0, len(uniq), chunk):
-            part = uniq[i : i + chunk]
-            ph = ",".join(["%s"] * len(part))
-            sql = (
-                "SELECT ts_code, close, trade_time, pct_change, amount "
-                f"FROM stock_tushare.rt_sw_k WHERE ts_code IN ({ph})"
-            )
-            with conn.cursor() as cur:
-                cur.execute(sql, tuple(part))
-                for row in cur.fetchall() or []:
-                    tc = str(row[0] or "").strip().upper()
-                    if not tc:
-                        continue
-                    cl_raw, tt_raw, pc_raw, amt_raw = row[1], row[2], row[3], row[4]
-                    cl_f: float | None = None
-                    try:
-                        if cl_raw is not None:
-                            cl_f = float(cl_raw)
-                            if cl_f <= 0:
-                                cl_f = None
-                    except (TypeError, ValueError):
-                        cl_f = None
-                    rt_d = _parse_rt_idx_trade_time_to_date(tt_raw)
-                    pc_f: float | None = None
-                    try:
-                        if pc_raw is not None:
-                            pc_f = float(pc_raw)
-                    except (TypeError, ValueError):
-                        pc_f = None
-                    amt_yuan: float | None = None
-                    try:
-                        if amt_raw is not None:
-                            ay = float(amt_raw)
-                            if ay > 0:
-                                amt_yuan = ay
-                    except (TypeError, ValueError):
-                        amt_yuan = None
-                    out[tc] = {
-                        "etf_last": round(cl_f, 4) if cl_f is not None else None,
-                        "etf_rt_date": rt_d,
-                        "pct_change": pc_f,
-                        "amount_yuan": amt_yuan,
-                    }
-    except Exception as e:
-        logger.warning("申万行业统计：读取 rt_sw_k 失败: %s", e)
-    return out
-
-
-def _sw_index_sw_daily_ed_and_prior_dates(
-    conn, ts_code: str, rt_quote: dict | None
-) -> tuple[date | None, list[date]]:
-    """与区间涨跌幅 Wind 锚定一致：期末 trade_date（可来自 rt_sw_k 解析日）及严格早于该日的交易日降序链。"""
-    tc = str(ts_code or "").strip().upper()
-    if not tc or conn is None:
-        return None, []
-    idx_sw = "stock_tushare.index_sw_daily"
-    sql = (
-        f"SELECT d.trade_date, d.pct_change AS pct_chg, "
-        f"(d.close - IFNULL(d.`change`, 0)) AS pre_close, d.close, d.close AS cq "
-        f"FROM {idx_sw} AS d "
-        "WHERE d.ts_code = %s AND d.close IS NOT NULL AND d.close > 0 "
-        "ORDER BY d.trade_date DESC LIMIT %s"
-    )
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, (tc, 125))
-            rows = cur.fetchall()
-    except Exception as e:
-        logger.warning("申万行业统计：ed/prior 日线读取失败 %s: %s", tc, e)
-        return None, []
-    if not rows:
-        return None, []
-
-    def _cq_at(i: int):
-        if i < 0 or i >= len(rows):
-            return None
-        v = rows[i][4]
-        try:
-            f = float(v) if v is not None else None
-            return f if f is not None and f > 0 else None
-        except (TypeError, ValueError):
-            return None
-
-    q = rt_quote or {}
-    rt_last = q.get("etf_last")
-    rt_d = q.get("etf_rt_date")
-    end_close: float | None = None
-    end_trade_date: date | None = None
-    try:
-        if rt_last is not None and rt_d is not None:
-            end_close = float(rt_last)
-            if isinstance(rt_d, datetime):
-                end_trade_date = rt_d.date()
-            elif isinstance(rt_d, date):
-                end_trade_date = rt_d
-    except (TypeError, ValueError):
-        end_close = None
-        end_trade_date = None
-    if end_close is None or end_trade_date is None:
-        try:
-            td0 = rows[0][0]
-            c0 = _cq_at(0)
-            if td0 is not None and c0 is not None:
-                end_trade_date = _sw_normalize_trade_date_td(td0)
-                end_close = float(c0)
-        except (TypeError, ValueError, Exception) as e:
-            logger.debug("申万行业统计：ed 回退日线 %s: %s", tc, e)
-    if end_trade_date is None:
-        return None, []
-    prior_dates: list[date] = []
-    lim_prior = 130
-    prior_sql = (
-        f"SELECT d.trade_date FROM {idx_sw} AS d "
-        "WHERE d.ts_code = %s AND d.trade_date < %s "
-        "ORDER BY d.trade_date DESC LIMIT %s"
-    )
-    try:
-        with conn.cursor() as cur:
-            cur.execute(prior_sql, (tc, end_trade_date, lim_prior))
-            for r in cur.fetchall() or []:
-                dd = _sw_normalize_trade_date_td(r[0])
-                if dd:
-                    prior_dates.append(dd)
-    except Exception as e:
-        logger.warning("申万行业统计：prior trade_date 读取失败 %s: %s", tc, e)
-    return end_trade_date, prior_dates
-
-
-def _read_index_sw_daily_interval_range_pct(
-    conn,
-    ts_code: str,
-    rt_quote: dict | None,
-) -> dict:
-    """申万行业指数：index_sw_daily 历史收盘 + rt_sw_k 期末，Wind 式 T-1/T-5/T-20/T-60/T-120（同 MA/指数涨跌幅表）。"""
-    empty = {
-        "range_pct_t1": None,
-        "range_pct_t5": None,
-        "range_pct_t20": None,
-        "range_pct_t60": None,
-        "range_pct_t120": None,
-    }
-    idx_sw = "stock_tushare.index_sw_daily"
-    sql = (
-        f"SELECT trade_date, pct_change AS pct_chg, "
-        f"(close - IFNULL(`change`, 0)) AS pre_close, close, close AS cq "
-        f"FROM {idx_sw} "
-        "WHERE ts_code = %s AND close IS NOT NULL AND close > 0 "
-        "ORDER BY trade_date DESC LIMIT %s"
-    )
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, (ts_code, 125))
-            rows = cur.fetchall()
-    except Exception as e:
-        logger.warning("申万行业统计：index_sw_daily 区间读取失败 %s: %s", ts_code, e)
-        return empty
-    if not rows:
-        return empty
-
-    def _cq_at(i: int):
-        if i < 0 or i >= len(rows):
-            return None
-        v = rows[i][4]
-        try:
-            f = float(v) if v is not None else None
-            return f if f is not None and f > 0 else None
-        except (TypeError, ValueError):
-            return None
-
-    def _pct_ratio(off: int) -> float | None:
-        c0 = _cq_at(0)
-        ck = _cq_at(off)
-        if c0 is None or ck is None or ck == 0:
-            return None
-        return round((c0 / ck - 1.0) * 100.0, 2)
-
-    out = dict(empty)
-    if len(rows) >= 2:
-        out["range_pct_t1"] = _pct_ratio(1)
-    else:
-        pc, pre, cl = rows[0][1], rows[0][2], rows[0][3]
-        if pc is not None:
-            try:
-                out["range_pct_t1"] = round(float(pc), 2)
-            except (TypeError, ValueError):
-                pass
-        if out["range_pct_t1"] is None and pre is not None and cl is not None:
-            try:
-                pf, cf = float(pre), float(cl)
-                if pf != 0:
-                    out["range_pct_t1"] = round((cf - pf) / pf * 100.0, 2)
-            except (TypeError, ValueError):
-                pass
-
-    q = rt_quote or {}
-    rt_last = q.get("etf_last")
-    rt_d = q.get("etf_rt_date")
-    end_close: float | None = None
-    end_trade_date: date | None = None
-    try:
-        if rt_last is not None and rt_d is not None:
-            end_close = float(rt_last)
-            if isinstance(rt_d, datetime):
-                end_trade_date = rt_d.date()
-            elif isinstance(rt_d, date):
-                end_trade_date = rt_d
-    except (TypeError, ValueError):
-        end_close = None
-        end_trade_date = None
-    if end_close is None or end_trade_date is None:
-        try:
-            td = rows[0][0]
-            c0 = _cq_at(0)
-            if td is not None and c0 is not None:
-                if isinstance(td, datetime):
-                    end_trade_date = td.date()
-                elif isinstance(td, date):
-                    end_trade_date = td
-                end_close = float(c0)
-        except (TypeError, ValueError, Exception) as e:
-            logger.debug("申万行业统计：区间期末回退日线 %s: %s", ts_code, e)
-
-    if end_close is not None and end_trade_date is not None:
-        lim_prior = 130
-        prior_sql = (
-            f"SELECT trade_date, close AS cq FROM {idx_sw} "
-            "WHERE ts_code = %s AND trade_date < %s "
-            "AND close IS NOT NULL AND close > 0 "
-            "ORDER BY trade_date DESC LIMIT %s"
-        )
-        try:
-            with conn.cursor() as cur:
-                cur.execute(prior_sql, (ts_code, end_trade_date, lim_prior))
-                prior_rows = cur.fetchall() or []
-        except Exception as e:
-            logger.warning("申万行业统计：index_sw_daily Wind 基期读取失败 %s: %s", ts_code, e)
-            prior_rows = []
-        out["range_pct_t5"] = _wind_pct_from_prior_desc_rows(prior_rows, 5, end_close)
-        out["range_pct_t20"] = _wind_pct_from_prior_desc_rows(prior_rows, 20, end_close)
-        out["range_pct_t60"] = _wind_pct_from_prior_desc_rows(prior_rows, 60, end_close)
-        out["range_pct_t120"] = _wind_pct_from_prior_desc_rows(prior_rows, 120, end_close)
-    return out
-
-
-def _load_index_sw_daily_amount_by_date(
-    conn, ts_code: str, min_trade_date: date
-) -> dict[date, float]:
-    """index_sw_daily.amount（万元）按交易日索引，供成交额比%分位。"""
-    out: dict[date, float] = {}
-    tc = str(ts_code or "").strip().upper()
-    if not tc or conn is None:
-        return out
-    idx_sw = "stock_tushare.index_sw_daily"
-    sql = (
-        f"SELECT d.trade_date, d.amount FROM {idx_sw} AS d "
-        "WHERE d.ts_code = %s AND d.trade_date >= %s "
-        "AND d.amount IS NOT NULL AND d.amount > 0 "
-        "ORDER BY d.trade_date ASC"
-    )
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, (tc, min_trade_date))
-            for r in cur.fetchall() or []:
-                dd = _sw_normalize_trade_date_td(r[0])
-                if dd is None or r[1] is None:
-                    continue
-                try:
-                    af = float(r[1])
-                    if af > 0:
-                        out[dd] = af
-                except (TypeError, ValueError):
-                    continue
-    except Exception as e:
-        logger.warning("申万 index_sw_daily amount 读取失败 %s: %s", tc, e)
-    return out
-
-
-def _load_index_sw_daily_close_amount_maps(
-    conn, ts_code: str, min_trade_date: date
-) -> tuple[dict[date, float], dict[date, float]]:
-    """index_sw_daily：按交易日索引 close、amount（万元）；仅 close>0 且 amount>0。"""
-    closeBy: dict[date, float] = {}
-    amtBy: dict[date, float] = {}
-    tc = str(ts_code or '').strip().upper()
-    if not tc or conn is None:
-        return closeBy, amtBy
-    idxSw = 'stock_tushare.index_sw_daily'
-    sql = (
-        f'SELECT d.trade_date, d.close, d.amount FROM {idxSw} AS d '
-        'WHERE d.ts_code = %s AND d.trade_date >= %s '
-        'AND d.close IS NOT NULL AND d.close > 0 '
-        'AND d.amount IS NOT NULL AND d.amount > 0 '
-        'ORDER BY d.trade_date ASC'
-    )
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, (tc, min_trade_date))
-            for r in cur.fetchall() or []:
-                dd = _sw_normalize_trade_date_td(r[0])
-                if dd is None:
-                    continue
-                try:
-                    cf = float(r[1])
-                    af = float(r[2])
-                except (TypeError, ValueError):
-                    continue
-                if cf > 0 and af > 0:
-                    closeBy[dd] = cf
-                    amtBy[dd] = af
-    except Exception as e:
-        logger.warning('申万 index_sw_daily close+amount 读取失败 %s: %s', tc, e)
-    return closeBy, amtBy
-
-
-def _compute_sw_index_close_amt_pctile_series(
-    conn, row_ts: str, years: int
-) -> dict[str, Any]:
-    """近 years 年：逐交易日 close + 成交额比%分位（与 Amt%(当日) 一致）。"""
-    rowU = str(row_ts or '').strip().upper()
-    benchU = str(SW_STATS_SUMMARY_ALL_A_SW_TS or '801003.SI').strip().upper()
-    y = max(1, min(5, int(years)))
-    empty: dict[str, Any] = {
-        'success': True,
-        'ts_code': rowU,
-        'bench_ts': benchU,
-        'years': y,
-        'trade_date': [],
-        'close': [],
-        'amt_pctile': [],
-        'error': None,
-    }
-    if not rowU or not benchU or rowU == benchU or conn is None:
-        empty['success'] = False
-        empty['error'] = '无效或与基准相同的 ts_code'
-        return empty
-    minD = date.today() - timedelta(days=int(y * 366) + 45)
-    loPad = int(SW_AMT_RATIO_PCTILE_LOOKBACK_YEARS * 366 + 45)
-    rowClose, rowAmt = _load_index_sw_daily_close_amount_maps(conn, rowU, minD)
-    _, benchAmt = _load_index_sw_daily_close_amount_maps(conn, benchU, minD)
-    dates = sorted(set(rowAmt.keys()) & set(benchAmt.keys()))
-    if len(dates) < 2:
-        empty['success'] = False
-        empty['error'] = '有效交易日不足'
-        return empty
-    tradeOut: list[str] = []
-    closeOut: list[float | None] = []
-    pctOut: list[float | None] = []
-    import bisect
-
-    dailyRatio: list[float | None] = []
-    for d in dates:
-        rA = rowAmt.get(d)
-        bA = benchAmt.get(d)
-        rD: float | None = None
-        if rA is not None and bA is not None:
-            try:
-                rf = float(rA)
-                bf = float(bA)
-            except (TypeError, ValueError):
-                rf = bf = 0.0
-            if bf > 0 and rf > 0:
-                rD = 100.0 * rf / bf
-        dailyRatio.append(rD)
-
-    for i, d in enumerate(dates):
-        tradeOut.append(d.isoformat())
-        closeOut.append(round(float(rowClose.get(d) or 0.0), 4) if rowClose.get(d) else None)
-        if i == 0:
-            pctOut.append(None)
-            continue
-        rD = dailyRatio[i]
-        if rD is None:
-            pctOut.append(None)
-            continue
-        dHi = dates[i - 1]
-        lo0 = dHi - timedelta(days=loPad)
-        start = bisect.bisect_left(dates, lo0)
-        histRaw = [dailyRatio[j] for j in range(start, i) if dailyRatio[j] is not None]
-        pctOut.append(_sw_empirical_pct_leq_values(histRaw, rD))
-    try:
-        if tradeOut:
-            rtMap = _fetch_rt_sw_k_quotes([rowU, benchU], conn)
-            rq = rtMap.get(rowU) or {}
-            bq = rtMap.get(benchU) or {}
-            edRt, priorRt = _sw_index_sw_daily_ed_and_prior_dates(conn, rowU, rq)
-            if priorRt and rq.get('etf_last') is not None and rq.get('etf_rt_date') is not None:
-                dHistHi0 = priorRt[0]
-                lo0r = dHistHi0 - timedelta(days=loPad)
-                histRt: list[float] = []
-                for d, rv in rowAmt.items():
-                    if d < lo0r or d > dHistHi0:
-                        continue
-                    bv = benchAmt.get(d)
-                    if bv is None or rv is None:
-                        continue
-                    try:
-                        bfv = float(bv)
-                        rfv = float(rv)
-                    except (TypeError, ValueError):
-                        continue
-                    if bfv <= 0 or rfv <= 0:
-                        continue
-                    histRt.append(100.0 * rfv / bfv)
-                histRt.sort()
-                rT0: float | None = None
-                try:
-                    ry = rq.get('amount_yuan')
-                    by = bq.get('amount_yuan')
-                    if ry is not None and by is not None:
-                        fy = float(ry)
-                        fb = float(by)
-                        if fy > 0 and fb > 0:
-                            rT0 = 100.0 * (fy / 10000.0) / (fb / 10000.0)
-                except (TypeError, ValueError):
-                    rT0 = None
-                if rT0 is None and edRt is not None:
-                    bAmt = benchAmt.get(edRt)
-                    rAmt = rowAmt.get(edRt)
-                    if bAmt is not None and rAmt is not None:
-                        try:
-                            bf = float(bAmt)
-                            rf = float(rAmt)
-                            if bf > 0 and rf > 0:
-                                rT0 = 100.0 * rf / bf
-                        except (TypeError, ValueError):
-                            pass
-                pctRt = (
-                    _sw_empirical_pct_leq(histRt, rT0)
-                    if (histRt and rT0 is not None)
-                    else None
-                )
-                rtDRaw = rq.get('etf_rt_date')
-                if isinstance(rtDRaw, datetime):
-                    rtD = rtDRaw.date()
-                elif isinstance(rtDRaw, date):
-                    rtD = rtDRaw
-                else:
-                    rtD = None
-                if rtD is not None:
-                    try:
-                        clRt = float(rq['etf_last'])
-                    except (TypeError, ValueError, KeyError):
-                        clRt = None
-                    if clRt is not None and clRt > 0:
-                        try:
-                            lastD = date.fromisoformat(str(tradeOut[-1])[:10])
-                        except ValueError:
-                            lastD = None
-                        clCell = round(float(clRt), 4)
-                        if lastD is None or rtD > lastD:
-                            tradeOut.append(rtD.isoformat())
-                            closeOut.append(clCell)
-                            pctOut.append(pctRt)
-                        elif rtD == lastD:
-                            closeOut[-1] = clCell
-                            if pctRt is not None:
-                                pctOut[-1] = pctRt
-    except Exception as eRt:
-        logger.debug('sw_index_amt_pctile_series 拼接 rt 末点失败: %s', eRt)
-    return {
-        'success': True,
-        'ts_code': rowU,
-        'bench_ts': benchU,
-        'years': y,
-        'trade_date': tradeOut,
-        'close': closeOut,
-        'amt_pctile': pctOut,
-        'error': None,
-    }
-
-
-def _read_sw_amount_ratio_percentiles(
-    conn,
-    row_ts: str,
-    rt_quote: dict | None,
-    bench_ts: str,
-    bench_map: dict[date, float],
-    row_map: dict[date, float],
-    *,
-    bench_rt_quote: dict | None = None,
-    lookback_years: int = SW_AMT_RATIO_PCTILE_LOOKBACK_YEARS,
-) -> dict[str, float | None]:
-    """成交额比%分位：T-1..T-120 的 ratio=100*行万元/801003万元，锚定日=prior[k-1]；
-    T-0：当日(锚定 session 日)优先 rt 量比×100，否则回退锚定日日线比；分位样本为对应窗口日线万元比。"""
-    spec = (
-        ("sw_amt_pctile_t1", 1),
-        ("sw_amt_pctile_t5", 5),
-        ("sw_amt_pctile_t20", 20),
-        ("sw_amt_pctile_t60", 60),
-        ("sw_amt_pctile_t120", 120),
-    )
-    out: dict[str, float | None] = {"sw_amt_pctile_t0": None}
-    for k, _ in spec:
-        out[k] = None
-    rtu = str(row_ts or "").strip().upper()
-    btu = str(bench_ts or "").strip().upper()
-    if not rtu or not btu or rtu == btu or conn is None:
-        return out
-    _ed, prior = _sw_index_sw_daily_ed_and_prior_dates(conn, rtu, rt_quote)
-    if not prior:
-        return out
-    lo_pad = int(lookback_years * 366 + 45)
-    d_hist_hi = prior[0]
-    lo0 = d_hist_hi - timedelta(days=lo_pad)
-    hist0: list[float] = []
-    for d, rv in row_map.items():
-        if d < lo0 or d > d_hist_hi:
-            continue
-        bv = bench_map.get(d)
-        if bv is None or rv is None:
-            continue
-        try:
-            bfv = float(bv)
-            rfv = float(rv)
-        except (TypeError, ValueError):
-            continue
-        if bfv <= 0 or rfv <= 0:
-            continue
-        hist0.append(100.0 * rfv / bfv)
-    hist0.sort()
-    r_t0: float | None = None
-    rq = rt_quote or {}
-    bq = bench_rt_quote or {}
-    try:
-        ry = rq.get("amount_yuan")
-        by = bq.get("amount_yuan")
-        if ry is not None and by is not None:
-            fy = float(ry)
-            fb = float(by)
-            if fy > 0 and fb > 0:
-                r_t0 = 100.0 * (fy / 10000.0) / (fb / 10000.0)
-    except (TypeError, ValueError):
-        r_t0 = None
-    if r_t0 is None and _ed is not None:
-        b_amt = bench_map.get(_ed)
-        r_amt = row_map.get(_ed)
-        if b_amt is not None and r_amt is not None:
-            try:
-                bf = float(b_amt)
-                rf = float(r_amt)
-                if bf > 0 and rf > 0:
-                    r_t0 = 100.0 * rf / bf
-            except (TypeError, ValueError):
-                pass
-    if r_t0 is not None and hist0:
-        out["sw_amt_pctile_t0"] = _sw_empirical_pct_leq(hist0, r_t0)
-    for key, kk in spec:
-        if kk > len(prior):
-            continue
-        d_anchor = prior[kk - 1]
-        b_amt = bench_map.get(d_anchor)
-        r_amt = row_map.get(d_anchor)
-        if b_amt is None or r_amt is None:
-            continue
-        try:
-            bf = float(b_amt)
-            rf = float(r_amt)
-        except (TypeError, ValueError):
-            continue
-        if bf <= 0 or rf <= 0:
-            continue
-        r_now = 100.0 * rf / bf
-        lo = d_anchor - timedelta(days=lo_pad)
-        hist_raw: list[float] = []
-        for d, rv in row_map.items():
-            if d < lo or d > d_anchor:
-                continue
-            bv = bench_map.get(d)
-            if bv is None or rv is None:
-                continue
-            try:
-                bfv = float(bv)
-                rfv = float(rv)
-            except (TypeError, ValueError):
-                continue
-            if bfv <= 0 or rfv <= 0:
-                continue
-            hist_raw.append(100.0 * rfv / bfv)
-        hist_raw.sort()
-        out[key] = _sw_empirical_pct_leq(hist_raw, r_now)
-    return out
-
-
-def _sw_aggregate_h250_by_group(
-    flagged_ts: set[str],
-    ts_to_ind: dict[str, tuple[str, str]],
-) -> dict[str, int]:
-    """命中个股集合按当前 level 的 group_code 计数。"""
-    counts: dict[str, int] = defaultdict(int)
-    for ts in flagged_ts:
-        info = ts_to_ind.get(ts)
-        if not info:
-            continue
-        counts[str(info[0] or "").strip()] += 1
-    return dict(counts)
-
-
-def _sw_fetch_stockstat_t0_ts_codes_by_flag(
-    conn_wind, ts_codes: list[str], flag_key: str
-) -> set[str]:
-    """与涨跌家数面板 stockstat 标志同源（不含 ST），再与 ts_codes 求交。flag_key 见 _SW_STOCKSTAT_T0_FLAG_SQL。"""
-    wh = _SW_STOCKSTAT_T0_FLAG_SQL.get(flag_key)
-    if not conn_wind or not ts_codes or not wh:
-        return set()
-    out: set[str] = set()
-    chunk = 900
-    for i in range(0, len(ts_codes), chunk):
-        part = ts_codes[i : i + chunk]
-        if not part:
-            continue
-        ph = ", ".join(["%s"] * len(part))
-        sql = (
-            "SELECT s.windcodes FROM stock_wind.stockstat s "
-            "WHERE " + wh + " "
-            + _LIMIT_STATS_SQL_NOT_ST_JOIN_S
-            + f" AND s.windcodes IN ({ph})"
-        )
-        with conn_wind.cursor() as cur:
-            cur.execute(sql, tuple(part))
-            for r in cur.fetchall() or []:
-                if r and r[0]:
-                    out.add(str(r[0]).strip())
-    return out
-
-
-def _sw_fetch_stockstat_t0_ts_codes_by_flag_all(
-    conn_wind, flag_key: str
-) -> set[str]:
-    """全市场 stockstat 标志命中（不含 ST）；与申万成分求交后再聚合/明细。"""
-    wh = _SW_STOCKSTAT_T0_FLAG_SQL.get(flag_key)
-    if not conn_wind or not wh:
-        return set()
-    sql = (
-        "SELECT s.windcodes FROM stock_wind.stockstat s "
-        "WHERE " + wh + " "
-        + _LIMIT_STATS_SQL_NOT_ST_JOIN_S
-    )
-    out: set[str] = set()
-    with conn_wind.cursor() as cur:
-        cur.execute(sql)
-        for r in cur.fetchall() or []:
-            if r and r[0]:
-                out.add(str(r[0]).strip())
-    return out
-
-
-def _sw_limit_flagged_pool_key(
-    level: str,
-    parent_l1_code: str,
-    parent_l2_code: str,
-    as_of_date: date | None,
-) -> tuple[str, str, str, str]:
-    return (
-        str(level or "l1").strip().lower(),
-        str(parent_l1_code or "").strip(),
-        str(parent_l2_code or "").strip(),
-        as_of_date.isoformat() if as_of_date else "",
-    )
-
-
-def _sw_limit_flagged_pool_get(
-    pool_key: tuple[str, str, str, str],
-    now_ts: float | None = None,
-) -> tuple[dict[str, set[str]] | None, dict[str, tuple[str, str]] | None]:
-    now_ts = time.time() if now_ts is None else now_ts
-    with _cache_lock:
-        hit = _sw_limit_flagged_pool_cache.get(pool_key)
-        if hit is not None and now_ts < hit[0]:
-            _sw_limit_flagged_pool_cache.move_to_end(pool_key)
-            return hit[1], hit[2]
-    return None, None
-
-
-def _sw_limit_flagged_pool_put(
-    pool_key: tuple[str, str, str, str],
-    flagged_by_col: dict[str, set[str]],
-    ts_to_ind: dict[str, tuple[str, str]],
-) -> None:
-    if not flagged_by_col or not ts_to_ind:
-        return
-    with _cache_lock:
-        while len(_sw_limit_flagged_pool_cache) >= SW_LIMIT_FLAGGED_POOL_MAX:
-            _sw_limit_flagged_pool_cache.popitem(last=False)
-        _sw_limit_flagged_pool_cache[pool_key] = (
-            time.time() + SW_LIMIT_FLAGGED_POOL_TTL,
-            {k: set(v) for k, v in flagged_by_col.items()},
-            dict(ts_to_ind),
-        )
-        _sw_limit_flagged_pool_cache.move_to_end(pool_key)
-
-
-def _sw_stock_basic_meta_get(ts_code: str, now_ts: float | None = None) -> dict | None:
-    now_ts = time.time() if now_ts is None else now_ts
-    key = str(ts_code or "").strip()
-    if not key:
-        return None
-    with _cache_lock:
-        hit = _sw_stock_basic_meta_cache.get(key)
-        if hit is not None and now_ts < hit[0]:
-            return dict(hit[1])
-    return None
-
-
-def _sw_warm_stock_basic_meta_cache(
-    conn_tushare, ts_codes: set[str] | list[str]
-) -> None:
-    """批量预热 stock_basic 元数据，供明细弹窗秒开。"""
-    if conn_tushare is None or not ts_codes:
-        return
-    now_ts = time.time()
-    missing: list[str] = []
-    for ts in ts_codes:
-        key = str(ts or "").strip()
-        if not key:
-            continue
-        with _cache_lock:
-            hit = _sw_stock_basic_meta_cache.get(key)
-            if hit is None or now_ts >= hit[0]:
-                missing.append(key)
-    if not missing:
-        return
-    rows = _sw_fetch_stock_basic_limit_detail_rows(conn_tushare, missing)
-    expiry = now_ts + SW_STOCK_BASIC_META_TTL
-    with _cache_lock:
-        for row in rows:
-            ts = str(row.get("ts_code") or "").strip()
-            if ts:
-                _sw_stock_basic_meta_cache[ts] = (expiry, dict(row))
-
-
-def _sw_build_limit_detail_rows_from_ts_codes(
-    conn_tushare,
-    matched_ts: list[str],
-) -> list[dict]:
-    rows: list[dict] = []
-    missing: list[str] = []
-    now_ts = time.time()
-    for ts in matched_ts:
-        meta = _sw_stock_basic_meta_get(ts, now_ts)
-        if meta:
-            rows.append(meta)
-        else:
-            missing.append(ts)
-    if missing and conn_tushare is not None:
-        fetched = _sw_fetch_stock_basic_limit_detail_rows(conn_tushare, missing)
-        expiry = now_ts + SW_STOCK_BASIC_META_TTL
-        with _cache_lock:
-            for row in fetched:
-                ts = str(row.get("ts_code") or "").strip()
-                if ts:
-                    _sw_stock_basic_meta_cache[ts] = (expiry, dict(row))
-        rows.extend(fetched)
-    by_ts = {str(r.get("ts_code") or "").strip(): r for r in rows}
-    return [by_ts[ts] for ts in matched_ts if ts in by_ts]
-
-
-def _sw_fetch_hlc_ts_code_sets(conn_wind, ts_codes: list[str]) -> dict[str, set[str]]:
-    """一次性取回 6 个 HL_C 收盘价口径命中集合，避免申万页重复执行 MA/MP 重型 JOIN。"""
-    result: dict[str, set[str]] = {kind: set() for _, kind in _SW_INDUSTRY_HLC_SPECS}
-    if not conn_wind or not ts_codes:
-        return result
-
-    c = _LIMIT_STATS_RT_CLOSE_QFQ
-    select_flags = (
-        f"CASE WHEN mp.high_250 IS NOT NULL AND mp.low_250 IS NOT NULL AND ({c}) > mp.high_250 THEN 1 ELSE 0 END AS hlc_ch_250, "
-        f"CASE WHEN mp.high_250 IS NOT NULL AND mp.low_250 IS NOT NULL AND ({c}) < mp.low_250 THEN 1 ELSE 0 END AS hlc_cl_250, "
-        f"CASE WHEN mp.high_850 IS NOT NULL AND mp.low_850 IS NOT NULL AND ({c}) > mp.high_850 THEN 1 ELSE 0 END AS hlc_ch_850, "
-        f"CASE WHEN mp.high_850 IS NOT NULL AND mp.low_850 IS NOT NULL AND ({c}) < mp.low_850 THEN 1 ELSE 0 END AS hlc_cl_850, "
-        f"CASE WHEN mp.h_high IS NOT NULL AND mp.h_low IS NOT NULL AND ({c}) > mp.h_high THEN 1 ELSE 0 END AS hlc_ch_h, "
-        f"CASE WHEN mp.h_high IS NOT NULL AND mp.h_low IS NOT NULL AND ({c}) < mp.h_low THEN 1 ELSE 0 END AS hlc_cl_h"
-    )
-    ordered_kinds = ["hlc_ch_250", "hlc_cl_250", "hlc_ch_850", "hlc_cl_850", "hlc_ch_h", "hlc_cl_h"]
-    chunk = 5000
-    for i in range(0, len(ts_codes), chunk):
-        part = ts_codes[i : i + chunk]
-        if not part:
-            continue
-        ph = ", ".join(["%s"] * len(part))
-        sql = (
-            """
-WITH d AS (
-    SELECT DATE(MAX(trade_time)) AS trade_date
-    FROM stock_wind.rt_k
-    WHERE trade_time IS NOT NULL
-),
-ma AS (
-    SELECT m.ts_code, m.high_qfq, m.low_qfq, m.close_qfq,
-           p.high AS pro_high, p.low AS pro_low, p.close AS pro_close
-    FROM stock_tushare.stk_factor_ma m
-    INNER JOIN (
-        SELECT m2.ts_code, MAX(m2.trade_date) AS md
-        FROM stock_tushare.stk_factor_ma m2
-        INNER JOIN d ON m2.trade_date <= d.trade_date
-        GROUP BY m2.ts_code
-    ) mx ON m.ts_code = mx.ts_code AND m.trade_date = mx.md
-    LEFT JOIN stock_tushare.stk_factor_pro p
-      ON p.ts_code = m.ts_code AND p.trade_date = m.trade_date
-),
-mp AS (
-    SELECT m.ts_code, m.high_250, m.high_850, m.h_high, m.low_250, m.low_850, m.h_low
-    FROM stock_tushare.stk_factor_ma m
-    INNER JOIN (
-        SELECT m2.ts_code, MAX(m2.trade_date) AS md
-        FROM stock_tushare.stk_factor_ma m2
-        INNER JOIN d ON m2.trade_date < d.trade_date
-        GROUP BY m2.ts_code
-    ) mx ON m.ts_code = mx.ts_code AND m.trade_date = mx.md
-)
-SELECT s1.windcodes, """
-            + select_flags
-            + """
-FROM stock_wind.stockstat s1
-"""
-            "INNER JOIN stock_wind.rt_k rt ON s1.windcodes = rt.ts_code "
-            "INNER JOIN ma ON ma.ts_code = rt.ts_code "
-            "INNER JOIN mp ON mp.ts_code = rt.ts_code "
-            + "WHERE NOT (rt.vol = 0 AND rt.amount = 0) AND "
-            + _LIMIT_STATS_RT_K_FRESH_TRADE_DATE
-            + " "
-            + _LIMIT_STATS_SQL_NOT_ST_STOCKSTAT_S1
-            + f" AND s1.windcodes IN ({ph})"
-        )
-        with conn_wind.cursor() as cur:
-            cur.execute(sql, tuple(part))
-            for r in cur.fetchall() or []:
-                if r and r[0]:
-                    ts = str(r[0]).strip()
-                    for offset, kind in enumerate(ordered_kinds, start=1):
-                        if int(r[offset] or 0) != 0:
-                            result[kind].add(ts)
-    return result
-
-
-def _sw_fetch_hlc_ts_codes_by_kind(
-    conn_wind, ts_codes: list[str], kind: str
-) -> set[str]:
-    """涨跌家数 HL_C 明细同源：收盘前复权价突破/跌破上一交易日 MA 阈值（不含 ST）。"""
-    if kind not in _LIMIT_STATS_HLC_DETAIL_WHERE or not conn_wind or not ts_codes:
-        return set()
-    cond = _LIMIT_STATS_HLC_DETAIL_WHERE[kind]
-    out: set[str] = set()
-    chunk = 900
-    for i in range(0, len(ts_codes), chunk):
-        part = ts_codes[i : i + chunk]
-        if not part:
-            continue
-        ph = ", ".join(["%s"] * len(part))
-        sql = (
-            """
-WITH d AS (
-    SELECT DATE(MAX(trade_time)) AS trade_date
-    FROM stock_wind.rt_k
-    WHERE trade_time IS NOT NULL
-),
-ma AS (
-    SELECT m.ts_code, m.high_qfq, m.low_qfq, m.close_qfq,
-           p.high AS pro_high, p.low AS pro_low, p.close AS pro_close
-    FROM stock_tushare.stk_factor_ma m
-    INNER JOIN (
-        SELECT m2.ts_code, MAX(m2.trade_date) AS md
-        FROM stock_tushare.stk_factor_ma m2
-        INNER JOIN d ON m2.trade_date <= d.trade_date
-        GROUP BY m2.ts_code
-    ) mx ON m.ts_code = mx.ts_code AND m.trade_date = mx.md
-    LEFT JOIN stock_tushare.stk_factor_pro p
-      ON p.ts_code = m.ts_code AND p.trade_date = m.trade_date
-),
-mp AS (
-    SELECT m.ts_code, m.high_250, m.high_850, m.h_high, m.low_250, m.low_850, m.h_low
-    FROM stock_tushare.stk_factor_ma m
-    INNER JOIN (
-        SELECT m2.ts_code, MAX(m2.trade_date) AS md
-        FROM stock_tushare.stk_factor_ma m2
-        INNER JOIN d ON m2.trade_date < d.trade_date
-        GROUP BY m2.ts_code
-    ) mx ON m.ts_code = mx.ts_code AND m.trade_date = mx.md
-)
-SELECT s1.windcodes
-FROM stock_wind.stockstat s1
-INNER JOIN stock_wind.rt_k rt ON s1.windcodes = rt.ts_code
-INNER JOIN ma ON ma.ts_code = rt.ts_code
-INNER JOIN mp ON mp.ts_code = rt.ts_code
-WHERE """
-            + cond
-            + " AND "
-            + _LIMIT_STATS_RT_K_FRESH_TRADE_DATE
-            + " "
-            + _LIMIT_STATS_SQL_NOT_ST_STOCKSTAT_S1
-            + f" AND s1.windcodes IN ({ph})"
-        )
-        with conn_wind.cursor() as cur:
-            cur.execute(sql, tuple(part))
-            for r in cur.fetchall() or []:
-                if r and r[0]:
-                    out.add(str(r[0]).strip())
-    return out
-
-
-def _sw_fetch_archive_ts_codes_by_kind(
-    conn_tushare,
-    ts_codes: list[str],
-    trade_date: date,
-    kind: str,
-) -> set[str]:
-    """limit_stats_archive_detail：指定交易日+kind 的个股集合（再与申万成分求交）。"""
-    grouped = _sw_fetch_archive_ts_codes_grouped_by_kinds(
-        conn_tushare, ts_codes, trade_date, [kind]
-    )
-    return grouped.get(kind, set())
-
-
-def _sw_fetch_archive_ts_codes_grouped_by_kinds(
-    conn_tushare,
-    ts_codes: list[str],
-    trade_date: date,
-    kinds: list[str],
-) -> dict[str, set[str]]:
-    """一次查询拉取多个 kind 的归档个股集合（申万页历史模式计数/明细同源）。"""
-    ordered_kinds = [str(k).strip() for k in kinds if str(k or "").strip()]
-    result: dict[str, set[str]] = {k: set() for k in ordered_kinds}
-    if conn_tushare is None or not ts_codes or not ordered_kinds or trade_date is None:
-        return result
-    chunk = 900
-    tbl = TABLE_LIMIT_STATS_ARCHIVE_DETAIL
-    kind_ph = ", ".join(["%s"] * len(ordered_kinds))
-    for i in range(0, len(ts_codes), chunk):
-        part = ts_codes[i : i + chunk]
-        if not part:
-            continue
-        ph = ", ".join(["%s"] * len(part))
-        sql = (
-            f"SELECT d.kind, d.ts_code FROM stock_tushare.{tbl} d "
-            f"WHERE d.trade_date = %s AND d.kind IN ({kind_ph}) AND d.ts_code IN ({ph})"
-        )
-        with conn_tushare.cursor() as cur:
-            cur.execute(sql, (trade_date, *ordered_kinds, *part))
-            for r in cur.fetchall() or []:
-                if not r or not r[0] or not r[1]:
-                    continue
-                kind = str(r[0]).strip()
-                if kind in result:
-                    result[kind].add(str(r[1]).strip())
-    return result
-
-
-def _sw_fetch_limit_count_maps(
-    ts_to_ind: dict[str, tuple[str, str]],
-    selected_trade_date: date | None,
-) -> tuple[
-    dict[str, dict[str, int]],
-    dict[str, dict[str, int]],
-    dict[str, set[str]],
-]:
-    """申万页新高/低 12 列：盘中 stockstat+HL_C，或历史日 limit_stats_archive_detail。"""
-    sw_t0_count_maps: dict[str, dict[str, int]] = {}
-    sw_hlc_count_maps: dict[str, dict[str, int]] = {}
-    flagged_by_col: dict[str, set[str]] = {}
-    if not ts_to_ind:
-        return sw_t0_count_maps, sw_hlc_count_maps, flagged_by_col
-    ts_codes = sorted(ts_to_ind.keys())
-    ts_set = set(ts_codes)
-    if selected_trade_date is not None:
-        stat_kinds = [
-            str(_SW_LIMIT_DETAIL_COLUMN_META[jk].get("archive_kind") or "").strip()
-            for jk, _ in _SW_INDUSTRY_LIMITSTAT_T0_SPECS
-        ]
-        hlc_kinds = [
-            str(_SW_LIMIT_DETAIL_COLUMN_META[jk].get("archive_kind") or "").strip()
-            for jk, _ in _SW_INDUSTRY_HLC_SPECS
-        ]
-        conn_t = None
-        try:
-            conn_t = pymysql.connect(**DB_CONFIG_TUSHARE)
-            stat_grouped = _sw_fetch_archive_ts_codes_grouped_by_kinds(
-                conn_t, ts_codes, selected_trade_date, stat_kinds
-            )
-            hlc_grouped = _sw_fetch_archive_ts_codes_grouped_by_kinds(
-                conn_t, ts_codes, selected_trade_date, hlc_kinds
-            )
-            for jk, _ in _SW_INDUSTRY_LIMITSTAT_T0_SPECS:
-                arch_kind = str(_SW_LIMIT_DETAIL_COLUMN_META[jk].get("archive_kind") or "").strip()
-                flagged = set(stat_grouped.get(arch_kind, set()))
-                flagged_by_col[jk] = flagged
-                sw_t0_count_maps[jk] = _sw_aggregate_h250_by_group(flagged, ts_to_ind)
-            for jk, _ in _SW_INDUSTRY_HLC_SPECS:
-                arch_kind = str(_SW_LIMIT_DETAIL_COLUMN_META[jk].get("archive_kind") or "").strip()
-                flagged = set(hlc_grouped.get(arch_kind, set()))
-                flagged_by_col[jk] = flagged
-                sw_hlc_count_maps[jk] = _sw_aggregate_h250_by_group(flagged, ts_to_ind)
-        finally:
-            if conn_t is not None:
-                try:
-                    conn_t.close()
-                except Exception:
-                    pass
-        return sw_t0_count_maps, sw_hlc_count_maps, flagged_by_col
-    conn_w = None
-    try:
-        conn_w = pymysql.connect(**DB_CONFIG)
-        for jk, flag_key in _SW_INDUSTRY_LIMITSTAT_T0_SPECS:
-            flagged = _sw_fetch_stockstat_t0_ts_codes_by_flag_all(conn_w, flag_key) & ts_set
-            flagged_by_col[jk] = flagged
-            sw_t0_count_maps[jk] = _sw_aggregate_h250_by_group(flagged, ts_to_ind)
-        hlc_sets = _sw_fetch_hlc_ts_code_sets(conn_w, ts_codes)
-        for jk, hlc_kind in _SW_INDUSTRY_HLC_SPECS:
-            flagged = set(hlc_sets.get(hlc_kind, set()))
-            flagged_by_col[jk] = flagged
-            sw_hlc_count_maps[jk] = _sw_aggregate_h250_by_group(flagged, ts_to_ind)
-    finally:
-        if conn_w is not None:
-            try:
-                conn_w.close()
-            except Exception:
-                pass
-    return sw_t0_count_maps, sw_hlc_count_maps, flagged_by_col
-
-
-def _parse_sw_industry_trade_date_param(raw: str | None) -> date | None:
-    """解析申万行业 API 的 trade_date=YYYY-MM-DD（或 YYYYMMDD）。"""
-    s = str(raw or "").strip()
-    if not s:
-        return None
-    if len(s) >= 10 and s[4] == "-":
-        try:
-            return datetime.strptime(s[:10], "%Y-%m-%d").date()
-        except ValueError:
-            return None
-    digits = s.replace("-", "")[:8]
-    if len(digits) == 8 and digits.isdigit():
-        try:
-            return datetime.strptime(digits, "%Y%m%d").date()
-        except ValueError:
-            return None
-    return None
-
-
-def _sw_margin_empty_fields() -> dict[str, float | None]:
-    return {
-        'sw_margin_rzye': None,
-        'sw_margin_1d': None,
-        'sw_margin_3d': None,
-        'sw_margin_5d': None,
-        'sw_margin_20d': None,
-        'sw_margin_60d': None,
-    }
-
-
-def _sw_margin_yuan_to_yi(val) -> float | None:
-    try:
-        if val is None:
-            return None
-        return round(float(val) / 100000000.0, 2)
-    except (TypeError, ValueError):
-        return None
-
-
-def _sw_resolve_margin_as_of(selected_trade_date: date | None) -> tuple[date | None, str | None]:
-    """融资基准日：实时取 margin_detail 最新日；历史回放取行情日前一交易日。"""
-    if selected_trade_date is not None:
-        prev_dates = get_prev_n_trade_dates(selected_trade_date, 1)
-        if not prev_dates:
-            return None, 'prev_of_selected'
-        return _parse_sw_industry_trade_date_param(prev_dates[0]), 'prev_of_selected'
-
-    conn_w = None
-    try:
-        conn_w = pymysql.connect(**DB_CONFIG)
-        with conn_w.cursor() as cur:
-            cur.execute("SELECT MAX(trade_date) FROM stock_wind.margin_detail")
-            row = cur.fetchone()
-        if row and row[0] is not None:
-            return _parse_sw_industry_trade_date_param(row[0]), 'latest'
-    except Exception as e:
-        logger.warning('sw_industry_stats 查询 margin_detail 最新日失败: %s', e)
-    finally:
-        if conn_w is not None:
-            try:
-                conn_w.close()
-            except Exception:
-                pass
-    return None, None
-
-
-def _sw_fetch_margin_metrics_by_group(
-    ts_to_ind: dict[str, tuple[str, str]],
-    selected_trade_date: date | None,
-) -> tuple[dict[str, dict[str, float | None]], dict[str, float | None], date | None, str | None]:
-    """按申万分组聚合 stock_wind.margin_detail，返回亿元口径的融资余额/净买入字段。"""
-    empty_summary = _sw_margin_empty_fields()
-    if not ts_to_ind:
-        return {}, empty_summary, None, None
-
-    margin_as_of, margin_mode = _sw_resolve_margin_as_of(selected_trade_date)
-    if margin_as_of is None:
-        logger.warning('sw_industry_stats 融资余额(sw_margin_*) 无可用 margin_as_of，置 None')
-        return {}, empty_summary, None, margin_mode
-
-    sums_by_group: dict[str, dict[str, float]] = defaultdict(
-        lambda: {
-            'sw_margin_rzye': 0.0,
-            'sw_margin_1d': 0.0,
-            'sw_margin_3d': 0.0,
-            'sw_margin_5d': 0.0,
-            'sw_margin_20d': 0.0,
-            'sw_margin_60d': 0.0,
-        }
-    )
-    summary_sums = {
-        'sw_margin_rzye': 0.0,
-        'sw_margin_1d': 0.0,
-        'sw_margin_3d': 0.0,
-        'sw_margin_5d': 0.0,
-        'sw_margin_20d': 0.0,
-        'sw_margin_60d': 0.0,
-    }
-    seen_any = {
-        'sw_margin_rzye': False,
-        'sw_margin_1d': False,
-        'sw_margin_3d': False,
-        'sw_margin_5d': False,
-        'sw_margin_20d': False,
-        'sw_margin_60d': False,
-    }
-
-    ts_codes = sorted(ts_to_ind.keys())
-    conn_w = None
-    try:
-        conn_w = pymysql.connect(**DB_CONFIG)
-        chunk = 800
-        for i in range(0, len(ts_codes), chunk):
-            part = ts_codes[i : i + chunk]
-            if not part:
-                continue
-            ph = ', '.join(['%s'] * len(part))
-            sql = (
-                "SELECT ts_code, rzye, rzjmre, rzjmre_t3, rzjmre_t5, rzjmre_t20, rzjmre_t60 "
-                f"FROM stock_wind.margin_detail WHERE trade_date = %s AND ts_code IN ({ph})"
-            )
-            with conn_w.cursor() as cur:
-                cur.execute(sql, (margin_as_of,) + tuple(part))
-                rows = cur.fetchall() or []
-            for r in rows:
-                tc = str(r[0] or '').strip()
-                ind_info = ts_to_ind.get(tc)
-                if ind_info is None:
-                    continue
-                group_code = ind_info[0]
-                values = {
-                    'sw_margin_rzye': r[1],
-                    'sw_margin_1d': r[2],
-                    'sw_margin_3d': r[3],
-                    'sw_margin_5d': r[4],
-                    'sw_margin_20d': r[5],
-                    'sw_margin_60d': r[6],
-                }
-                for key, raw_val in values.items():
-                    if raw_val is None:
-                        continue
-                    try:
-                        fv = float(raw_val)
-                    except (TypeError, ValueError):
-                        continue
-                    sums_by_group[group_code][key] += fv
-                    summary_sums[key] += fv
-                    seen_any[key] = True
-    except Exception as e:
-        logger.warning('sw_industry_stats 聚合 stock_wind.margin_detail 失败: %s', e)
-        return {}, empty_summary, margin_as_of, margin_mode
-    finally:
-        if conn_w is not None:
-            try:
-                conn_w.close()
-            except Exception:
-                pass
-
-    out_by_group: dict[str, dict[str, float | None]] = {}
-    for group_code, group_sums in sums_by_group.items():
-        out_by_group[group_code] = {
-            key: _sw_margin_yuan_to_yi(val)
-            for key, val in group_sums.items()
-        }
-    summary_fields = {
-        key: _sw_margin_yuan_to_yi(val) if seen_any[key] else None
-        for key, val in summary_sums.items()
-    }
-    return out_by_group, summary_fields, margin_as_of, margin_mode
-
-
-def _sw_build_idx_sw_quote_list(group_codes: list[str]) -> list[str]:
-    """申万行业指数 ts_code 列表（含全 A 基准 801003.SI），供 rt_sw_k / index_sw_daily 预取。"""
-    idx_sw_list: list[str] = []
-    seen_sw_ts: set[str] = set()
-    for gc in group_codes:
-        tsu = _normalize_sw_industry_index_ts_code(str(gc))
-        if tsu and tsu not in seen_sw_ts:
-            seen_sw_ts.add(tsu)
-            idx_sw_list.append(tsu)
-    bench_ts = str(SW_STATS_SUMMARY_ALL_A_SW_TS or "").strip().upper()
-    if bench_ts and bench_ts not in seen_sw_ts:
-        seen_sw_ts.add(bench_ts)
-        idx_sw_list.append(bench_ts)
-    idx_sw_list.sort()
-    return idx_sw_list
-
-
-def _sw_apply_live_row_market_fields(
-    row: dict,
-    *,
-    rt_sw_quotes: dict[str, dict],
-    range_cache_sw: dict[str, dict],
-    amt_pctile_cache_sw: dict[str, dict],
-    sw_t0_count_maps: dict[str, dict[str, int]],
-    sw_hlc_count_maps: dict[str, dict[str, int]],
-) -> None:
-    """将实时层字段写入单行（与 api_sw_industry_stats 冷路径一致）。"""
-    group_code = str(row.get('group_code') or row.get('l1_code') or '').strip()
-    idx_ts = _normalize_sw_industry_index_ts_code(group_code)
-    rq = rt_sw_quotes.get(idx_ts) if idx_ts else None
-    sw_pct_val = None
-    if rq and rq.get('pct_change') is not None:
-        try:
-            sw_pct_val = round(float(rq['pct_change']), 2)
-        except (TypeError, ValueError):
-            sw_pct_val = None
-    rd_sw = range_cache_sw.get(idx_ts) if idx_ts else None
-    row['sw_pct'] = sw_pct_val
-    row['sw_pct_t1'] = (rd_sw or {}).get('range_pct_t1')
-    row['sw_pct_t5'] = (rd_sw or {}).get('range_pct_t5')
-    row['sw_pct_t20'] = (rd_sw or {}).get('range_pct_t20')
-    row['sw_pct_t60'] = (rd_sw or {}).get('range_pct_t60')
-    row['sw_pct_t120'] = (rd_sw or {}).get('range_pct_t120')
-    rd_amt = amt_pctile_cache_sw.get(idx_ts) if idx_ts else None
-    row['sw_amt_pctile_t0'] = (rd_amt or {}).get('sw_amt_pctile_t0')
-    row['sw_amt_pctile_t1'] = (rd_amt or {}).get('sw_amt_pctile_t1')
-    row['sw_amt_pctile_t5'] = (rd_amt or {}).get('sw_amt_pctile_t5')
-    row['sw_amt_pctile_t20'] = (rd_amt or {}).get('sw_amt_pctile_t20')
-    row['sw_amt_pctile_t60'] = (rd_amt or {}).get('sw_amt_pctile_t60')
-    row['sw_amt_pctile_t120'] = (rd_amt or {}).get('sw_amt_pctile_t120')
-    for jk, _ in _SW_INDUSTRY_LIMITSTAT_T0_SPECS:
-        row[jk] = int(sw_t0_count_maps.get(jk, {}).get(group_code, 0))
-    for jk, _ in _SW_INDUSTRY_HLC_SPECS:
-        row[jk] = int(sw_hlc_count_maps.get(jk, {}).get(group_code, 0))
-
-
-def _sw_fetch_live_market_maps(
-    ts_to_ind: dict[str, tuple[str, str]],
-    selected_trade_date: date | None = None,
-    pool_key: tuple[str, str, str, str] | None = None,
-) -> tuple[
-    dict[str, dict],
-    dict[str, dict],
-    dict[str, dict],
-    dict[str, dict[str, int]],
-    dict[str, dict[str, int]],
-]:
-    """实时层批量预取：rt_sw_k 区间涨跌幅、成交额比%、stockstat 新高低、HL_C 收盘价新高低。"""
-    empty: tuple = ({}, {}, {}, {}, {})
-    if not ts_to_ind:
-        return empty
-    group_codes = sorted({info[0] for info in ts_to_ind.values()})
-    idx_sw_list = _sw_build_idx_sw_quote_list(group_codes)
-    ts_codes = sorted(ts_to_ind.keys())
-    rt_sw_quotes: dict[str, dict] = {}
-    range_cache_sw: dict[str, dict] = {}
-    amt_pctile_cache_sw: dict[str, dict] = {}
-    sw_t0_count_maps: dict[str, dict[str, int]] = {}
-    sw_hlc_count_maps: dict[str, dict[str, int]] = {}
-    conn_ts = None
-    try:
-        conn_ts = pymysql.connect(**DB_CONFIG_TUSHARE)
-        rt_sw_quotes = _fetch_rt_sw_k_quotes(idx_sw_list, conn_ts)
-        for tsu in idx_sw_list:
-            range_cache_sw[tsu] = _read_index_sw_daily_interval_range_pct(
-                conn_ts, tsu, rt_sw_quotes.get(tsu)
-            )
-        bench_ts_amt = SW_STATS_SUMMARY_ALL_A_SW_TS
-        min_amt_d = date.today() - timedelta(days=366 * 7 + 30)
-        bench_amt_map = _load_index_sw_daily_amount_by_date(conn_ts, bench_ts_amt, min_amt_d)
-        row_amt_maps: dict[str, dict[date, float]] = {}
-        for tsu in idx_sw_list:
-            row_amt_maps[tsu] = _load_index_sw_daily_amount_by_date(conn_ts, tsu, min_amt_d)
-        bench_rt_q = rt_sw_quotes.get(str(bench_ts_amt or "").strip().upper())
-        for tsu in idx_sw_list:
-            amt_pctile_cache_sw[tsu] = _read_sw_amount_ratio_percentiles(
-                conn_ts,
-                tsu,
-                rt_sw_quotes.get(tsu),
-                bench_ts_amt,
-                bench_amt_map,
-                row_amt_maps[tsu],
-                bench_rt_quote=bench_rt_q,
-            )
-        sw_t0_count_maps, sw_hlc_count_maps, flagged_by_col = _sw_fetch_limit_count_maps(
-            ts_to_ind, selected_trade_date
-        )
-        if pool_key and flagged_by_col:
-            _sw_limit_flagged_pool_put(pool_key, flagged_by_col, ts_to_ind)
-            union_ts: set[str] = set()
-            for flagged in flagged_by_col.values():
-                union_ts |= flagged
-            if union_ts:
-                _sw_warm_stock_basic_meta_cache(conn_ts, union_ts)
-    except Exception as e:
-        logger.warning('sw_industry_stats 实时层预取失败: %s', e)
-        return empty
-    finally:
-        if conn_ts is not None:
-            try:
-                conn_ts.close()
-            except Exception:
-                pass
-    return rt_sw_quotes, range_cache_sw, amt_pctile_cache_sw, sw_t0_count_maps, sw_hlc_count_maps
-
-
-def _sw_patch_margin_fields_in_payload(
-    payload: dict,
-    ts_to_ind: dict[str, tuple[str, str]],
-    selected_trade_date: date | None,
-    level: str,
-) -> None:
-    """命中申万页长缓存时仍刷新融资余额列（margin_detail 日更或同日落库修正）。"""
-    if level == 'l3' or not ts_to_ind or not payload:
-        return
-    sw_margin_by_group, sw_margin_summary, margin_as_of, margin_mode = (
-        _sw_fetch_margin_metrics_by_group(ts_to_ind, selected_trade_date)
-    )
-    margin_keys = tuple(_sw_margin_empty_fields().keys())
-    for row in payload.get('rows') or []:
-        if not isinstance(row, dict):
-            continue
-        group_code = str(row.get('l1_code') or '').strip()
-        margin_fields = sw_margin_by_group.get(group_code) or {}
-        for mk in margin_keys:
-            row[mk] = margin_fields.get(mk)
-    summary = payload.get('summary_row')
-    if isinstance(summary, dict):
-        for mk in margin_keys:
-            summary[mk] = sw_margin_summary.get(mk)
-    payload['margin_as_of'] = margin_as_of.isoformat() if margin_as_of else None
-    payload['margin_as_of_mode'] = margin_mode
-
-
-def _sw_patch_live_market_fields_in_payload(
-    payload: dict,
-    ts_to_ind: dict[str, tuple[str, str]],
-    selected_trade_date: date | None,
-    level: str,
-    pool_key: tuple[str, str, str, str] | None = None,
-) -> None:
-    """命中申万页长缓存时刷新实时层：区间涨跌幅、成交额比%、新高/低 12 列及融资余额。"""
-    _sw_patch_margin_fields_in_payload(payload, ts_to_ind, selected_trade_date, level)
-    if level == 'l3' or not ts_to_ind or not payload:
-        return
-    rows = payload.get('rows') or []
-    if not rows:
-        return
-    (
-        rt_sw_quotes,
-        range_cache_sw,
-        amt_pctile_cache_sw,
-        sw_t0_count_maps,
-        sw_hlc_count_maps,
-    ) = _sw_fetch_live_market_maps(ts_to_ind, selected_trade_date, pool_key=pool_key)
-    if not rt_sw_quotes and not sw_t0_count_maps and not sw_hlc_count_maps:
-        return
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        _sw_apply_live_row_market_fields(
-            row,
-            rt_sw_quotes=rt_sw_quotes,
-            range_cache_sw=range_cache_sw,
-            amt_pctile_cache_sw=amt_pctile_cache_sw,
-            sw_t0_count_maps=sw_t0_count_maps,
-            sw_hlc_count_maps=sw_hlc_count_maps,
-        )
-    summary = payload.get('summary_row')
-    if isinstance(summary, dict):
-        for k in (
-            'sw_pct', 'sw_pct_t1', 'sw_pct_t5', 'sw_pct_t20', 'sw_pct_t60', 'sw_pct_t120',
-            'sw_amt_pctile_t0', 'sw_amt_pctile_t1', 'sw_amt_pctile_t5',
-            'sw_amt_pctile_t20', 'sw_amt_pctile_t60', 'sw_amt_pctile_t120',
-        ):
-            summary[k] = None
-        for jk, _ in _SW_INDUSTRY_LIMITSTAT_T0_SPECS:
-            summary[jk] = sum(int(r.get(jk) or 0) for r in rows if isinstance(r, dict))
-        for jk, _ in _SW_INDUSTRY_HLC_SPECS:
-            summary[jk] = sum(int(r.get(jk) or 0) for r in rows if isinstance(r, dict))
-
-
-def _sw_format_list_date_for_detail(raw) -> str:
-    if raw is None:
-        return "--"
-    if isinstance(raw, datetime):
-        return raw.date().isoformat()
-    if isinstance(raw, date):
-        return raw.isoformat()
-    s = str(raw).strip()
-    if not s:
-        return "--"
-    if len(s) >= 10 and s[4] == "-":
-        return s[:10]
-    digits = s.replace("-", "")[:8]
-    if len(digits) == 8 and digits.isdigit():
-        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
-    return s
-
-
-def _sw_fetch_stock_basic_limit_detail_rows(
-    conn_tushare, ts_codes: list[str]
-) -> list[dict]:
-    if not ts_codes or conn_tushare is None:
-        return []
-    out: list[dict] = []
-    chunk = 500
-    ordered = sorted({str(c).strip() for c in ts_codes if c})
-    for i in range(0, len(ordered), chunk):
-        part = ordered[i : i + chunk]
-        ph = ", ".join(["%s"] * len(part))
-        sql = (
-            "SELECT ts_code, COALESCE(name, ''), list_date "
-            "FROM stock_tushare.stock_basic "
-            f"WHERE ts_code IN ({ph}) ORDER BY ts_code ASC"
-        )
-        with conn_tushare.cursor() as cur:
-            cur.execute(sql, tuple(part))
-            rows = cur.fetchall() or []
-        for r in rows:
-            out.append(
-                {
-                    "ts_code": str(r[0] or "").strip(),
-                    "sec_name": str(r[1] or "").strip() or "--",
-                    "list_date": _sw_format_list_date_for_detail(
-                        r[2] if len(r) > 2 else None
-                    ),
-                }
-            )
-    return out
-
-
-def _sw_query_member_ts_map(
-    conn,
-    level: str,
-    parent_l1_code: str,
-    parent_l2_code: str,
-) -> tuple[dict[str, tuple[str, str]], dict[str, list[str]]]:
-    """与 api_sw_industry_stats 相同的申万成分映射（group_code → 个股列表）。"""
-    sql_sw = (
-        "SELECT z.ts_code, z.l1_code, z.l1_name, z.l2_code, z.l2_name, z.l3_code, z.l3_name "
-        "FROM ( "
-        "  SELECT m.ts_code, m.l1_code, m.l1_name, m.l2_code, m.l2_name, m.l3_code, m.l3_name, "
-        "    ROW_NUMBER() OVER (PARTITION BY m.ts_code ORDER BY m.in_date DESC, m.l1_code ASC, m.l2_code ASC, m.l2_name ASC) AS rn "
-        "  FROM stock_tushare.index_member_all_sw m "
-        "  WHERE (m.is_new = 'Y' OR m.is_new IS NULL) "
-        "    AND m.l1_code IS NOT NULL AND m.l1_code <> '' "
-        "    AND m.l1_name IS NOT NULL AND m.l1_name <> '' "
-        "    AND m.l2_code IS NOT NULL AND m.l2_code <> '' "
-        "    AND m.l2_name IS NOT NULL AND m.l2_name <> '' "
-        ") z "
-        "WHERE z.rn = 1"
-    )
-    with conn.cursor() as cur:
-        cur.execute(sql_sw)
-        sw_rows = cur.fetchall() or []
-    ts_to_ind: dict[str, tuple[str, str]] = {}
-    ts_by_group: dict[str, list[str]] = defaultdict(list)
-    for row in sw_rows:
-        ts_code = str(row[0] or "").strip()
-        l1_code = str(row[1] or "").strip()
-        l2_code = str(row[3] or "").strip()
-        l3_code = str(row[5] or "").strip()
-        l3_name = str(row[6] or "").strip()
-        l2_name = str(row[4] or "").strip()
-        l1_name = str(row[2] or "").strip()
-        if not ts_code or not l1_code or not l2_code:
-            continue
-        if parent_l1_code and l1_code != parent_l1_code:
-            continue
-        if parent_l2_code and l2_code != parent_l2_code:
-            continue
-        if level == "l2":
-            group_code = l2_code
-            group_name = l2_name
-        elif level == "l3":
-            if not l3_code or not l3_name:
-                continue
-            group_code = l3_code
-            group_name = l3_name
-        else:
-            group_code = l1_code
-            group_name = l1_name
-        ts_to_ind[ts_code] = (group_code, group_name)
-        ts_by_group[group_code].append(ts_code)
-    for gc in list(ts_by_group.keys()):
-        ts_by_group[gc] = sorted(set(ts_by_group[gc]))
-    return ts_to_ind, dict(ts_by_group)
-
-
-def read_sw_industry_limit_detail(
-    group_code: str,
-    column_key: str,
-    level: str,
-    parent_l1_code: str,
-    parent_l2_code: str,
-    as_of_date: date | None,
-    limit: int = 2000,
-) -> dict:
-    """申万行业行内新高/低分布单元格明细：代码、名称、上市日期（stock_basic.list_date）。"""
-    col = str(column_key or "").strip()
-    meta = _SW_LIMIT_DETAIL_COLUMN_META.get(col)
-    result: dict = {
-        "ok": True,
-        "rows": [],
-        "error": None,
-        "column": col,
-        "group_code": str(group_code or "").strip(),
-        "trade_date": as_of_date.isoformat() if as_of_date else None,
-        "title": meta.get("title") if meta else col,
-        "count": 0,
-    }
-    if not meta:
-        result["ok"] = False
-        result["error"] = "不支持的 column"
-        return result
-    if level not in ("l1", "l2", "l3"):
-        level = "l1"
-    try:
-        limit_n = int(limit)
-    except Exception:
-        limit_n = 2000
-    limit_n = max(1, min(limit_n, 5000))
-    pool_key = _sw_limit_flagged_pool_key(level, parent_l1_code, parent_l2_code, as_of_date)
-    flagged_by_col, ts_to_ind_pool = _sw_limit_flagged_pool_get(pool_key)
-    if flagged_by_col is not None and col in flagged_by_col and ts_to_ind_pool:
-        flagged = flagged_by_col.get(col) or set()
-        gc = str(group_code or "").strip()
-        if gc:
-            scope = {ts for ts, (g, _) in ts_to_ind_pool.items() if g == gc}
-            matched = sorted(flagged & scope)
-        else:
-            matched = sorted(flagged)
-        total_matched = len(matched)
-        if len(matched) > limit_n:
-            matched = matched[:limit_n]
-        conn_t = None
-        try:
-            conn_t = pymysql.connect(**DB_CONFIG_TUSHARE)
-            rows = _sw_build_limit_detail_rows_from_ts_codes(conn_t, matched)
-            result["rows"] = rows
-            result["count"] = len(rows)
-            result["from_pool"] = True
-            if total_matched > limit_n:
-                result["truncated"] = True
-                result["total_matched"] = total_matched
-            if as_of_date is not None and not rows and ts_to_ind_pool:
-                result["hint"] = (
-                    f"{as_of_date.isoformat()} 暂无归档明细；"
-                    "仅收市并完成归档的交易日可查，或点「恢复今日」查看盘中"
-                )
-            return result
-        finally:
-            if conn_t is not None:
-                try:
-                    conn_t.close()
-                except Exception:
-                    pass
-
-    conn_t = None
-    conn_w = None
-    try:
-        conn_t = pymysql.connect(**DB_CONFIG_TUSHARE)
-        ts_to_ind_cached = ts_to_ind_pool
-        if ts_to_ind_cached:
-            _ts_to_ind = ts_to_ind_cached
-            ts_by_group: dict[str, list[str]] = defaultdict(list)
-            for ts, (g, _) in _ts_to_ind.items():
-                ts_by_group[g].append(ts)
-            for gk in list(ts_by_group.keys()):
-                ts_by_group[gk] = sorted(set(ts_by_group[gk]))
-        else:
-            _ts_to_ind, ts_by_group = _sw_query_member_ts_map(
-                conn_t, level, parent_l1_code, parent_l2_code
-            )
-        gc = str(group_code or "").strip()
-        if gc:
-            scope_ts = list(ts_by_group.get(gc, []))
-        else:
-            scope_ts = sorted(_ts_to_ind.keys())
-        if not scope_ts:
-            return result
-        flagged: set[str] = set()
-        if as_of_date is not None:
-            arch_kind = str(meta.get("archive_kind") or "").strip()
-            if not arch_kind:
-                result["ok"] = False
-                result["error"] = "历史归档 kind 未配置"
-                return result
-            flagged = _sw_fetch_archive_ts_codes_by_kind(
-                conn_t, scope_ts, as_of_date, arch_kind
-            )
-        else:
-            conn_w = pymysql.connect(**DB_CONFIG)
-            if meta.get("fetch") == "stat":
-                flagged = _sw_fetch_stockstat_t0_ts_codes_by_flag(
-                    conn_w, scope_ts, str(meta.get("flag_key") or "")
-                )
-            else:
-                flagged = _sw_fetch_hlc_ts_codes_by_kind(
-                    conn_w, scope_ts, str(meta.get("hlc_kind") or "")
-                )
-        matched = sorted(flagged)
-        if len(matched) > limit_n:
-            matched = matched[:limit_n]
-        rows = _sw_build_limit_detail_rows_from_ts_codes(conn_t, matched)
-        result["rows"] = rows
-        result["count"] = len(rows)
-        if as_of_date is not None and not rows and scope_ts:
-            result["hint"] = (
-                f"{as_of_date.isoformat()} 暂无归档明细；"
-                "仅收市并完成归档的交易日可查，或点「恢复今日」查看盘中"
-            )
-        if len(flagged) > limit_n:
-            result["truncated"] = True
-            result["total_matched"] = len(flagged)
-        return result
-    except Exception as e:
-        logger.exception("sw_industry_limit_detail 查询失败: %s", e)
-        result["ok"] = False
-        result["error"] = str(e)
-        return result
-    finally:
-        for c in (conn_w, conn_t):
-            if c is not None:
-                try:
-                    c.close()
-                except Exception:
-                    pass
-
-
-def api_sw_industry_limit_detail():
-    """申万行业页：新高/低分布列点击明细（代码、名称、上市日期）。"""
-    column_key = str(request.args.get('column') or request.args.get('col') or '').strip()
-    group_code = str(
-        request.args.get('group_code') or request.args.get('industry_code') or ''
-    ).strip()
-    level = str(request.args.get('level') or 'l1').strip().lower()
-    parent_l1_code = str(request.args.get('parent_l1_code') or '').strip()
-    parent_l2_code = str(request.args.get('parent_l2_code') or '').strip()
-    as_of_date = _parse_sw_industry_trade_date_param(request.args.get('trade_date'))
-    try:
-        limit_n = int(request.args.get('limit') or 2000)
-    except Exception:
-        limit_n = 2000
-    cache_key = (
-        column_key,
-        group_code,
-        level,
-        parent_l1_code,
-        parent_l2_code,
-        as_of_date.isoformat() if as_of_date else '',
-        limit_n,
-    )
-    now_ts = time.time()
-    hit = _small_ttl_cache_get(_sw_industry_limit_detail_cache, cache_key, now_ts)
-    if hit is not None:
-        return jsonify(hit)
-    payload = read_sw_industry_limit_detail(
-        group_code,
-        column_key,
-        level,
-        parent_l1_code,
-        parent_l2_code,
-        as_of_date,
-        limit=limit_n,
-    )
-    if payload.get('ok'):
-        _small_ttl_cache_put(
-            _sw_industry_limit_detail_cache,
-            cache_key,
-            payload,
-            SW_INDUSTRY_LIMIT_DETAIL_CACHE_TTL,
-            SW_INDUSTRY_LIMIT_DETAIL_CACHE_MAX,
-        )
-        return jsonify(payload)
-    return jsonify(payload), 400
-
-
-def api_sw_index_amt_pctile_series():
-    """申万行业指数：近 N 年收盘 + 日度成交额比%分位序列（Amt% 弹窗双轴图）。"""
-    rawTs = str(request.args.get('ts_code') or '').strip()
-    tsCode = _normalize_sw_industry_index_ts_code(rawTs) or rawTs.strip().upper()
-    try:
-        years = int(float(request.args.get('years') or 3))
-    except (TypeError, ValueError):
-        years = 3
-    cacheKey = f'{tsCode}|{years}'
-    nowTs = time.time()
-    hit = _small_ttl_cache_get(_sw_amt_pctile_series_cache, cacheKey, nowTs)
-    if hit is not None:
-        return jsonify(hit)
-    conn = None
-    try:
-        conn = pymysql.connect(**DB_CONFIG_TUSHARE)
-        payload = _compute_sw_index_close_amt_pctile_series(conn, tsCode, years)
-        if payload.get('success'):
-            _small_ttl_cache_put(
-                _sw_amt_pctile_series_cache,
-                cacheKey,
-                payload,
-                SW_AMT_PCTILE_SERIES_CACHE_TTL,
-                SW_AMT_PCTILE_SERIES_CACHE_MAX,
-            )
-        return jsonify(payload)
-    except Exception as e:
-        logger.error('sw_index_amt_pctile_series 失败: %s', e)
-        return jsonify(
-            {
-                'success': False,
-                'error': str(e),
-                'ts_code': tsCode,
-                'bench_ts': str(SW_STATS_SUMMARY_ALL_A_SW_TS or '801003.SI'),
-                'years': years,
-                'trade_date': [],
-                'close': [],
-                'amt_pctile': [],
-            }
-        ), 500
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-
-def api_sw_industry_stats():
-    """申万行业统计（支持 level=l1/l2/l3）：家数 + 最近13季单季营收（亿）+ 营收同比增速(%)
-    + 单季扣非净利（亿）+ 扣非同比增速(%)；营收/扣非同比均为上年同季可比口径；
-    s_high/s_qoq、dtp_high/dtp_qoq 为 s*/dtp* 各季序列的新高与环比连升次数（同 qcf_high/qcf_qoq 口径）；
-    + dnk{idx}：行业全样本上年同季负、当季正；可选扩展 has_sw_extend_metrics 时每季另含
-    ycf{idx} 单季经营现金流净额同比增速(%)（拆单季后与营收 y{idx} 同可比累加口径）、
-    ycfnk{idx}：ycf 为空但行业单季现金流合计（与 qcf 同源）上年同季<0 且当季>0 时为真，前端显示「转正」（对齐扣非 dy/dnk）；
-    qcf{idx} 单季经营现金流行业累计（亿）、qgm{idx} 单季毛利率行业中位数（%）、qroe{idx} 单季扣非ROE 行业中位数（%）、
-    qcf_high/qcf_qoq、qgm_high/qgm_qoq、qroe_high/qroe_qoq：对上述现金流累计或中位数13季序列的新高与环比连升次数（口径同财报页 m_high/m_qoq）；
-    cl{idx} 合同负债行业累计（亿）、fa{idx} 固定资产行业累计（亿）；取数与财报页 /rt-monitor/fina 单季逻辑一致；进程内 LRU 缓存。"""
-    level = str(request.args.get('level') or 'l1').strip().lower()
-    parent_l1_code = str(request.args.get('parent_l1_code') or '').strip()
-    parent_l2_code = str(request.args.get('parent_l2_code') or '').strip()
-    selected_trade_date = _parse_sw_industry_trade_date_param(request.args.get('trade_date'))
-    if level not in ('l1', 'l2', 'l3'):
-        level = 'l1'
-    if parent_l2_code:
-        level = 'l3'
-    # 只要指定了一级行业筛选，则按二级行业明细返回（满足“选一级看二级明细”）
-    elif parent_l1_code:
-        level = 'l2'
-    # x12：缓存命中时刷新实时层（区间涨跌幅/成交额比%/新高低/融资余额）；rt_sw_k 含 amount
-    trade_date_key = selected_trade_date.isoformat() if selected_trade_date else ''
-    cache_key = f'{level}|{parent_l1_code}|{parent_l2_code}|{trade_date_key}|x12'
-    limit_pool_key = _sw_limit_flagged_pool_key(
-        level, parent_l1_code, parent_l2_code, selected_trade_date
-    )
-    now_ts = time.time()
-    hit_payload, hit_ts_to_ind, hit_level = _sw_industry_stats_cache_get(cache_key, now_ts)
-    if hit_payload is not None:
-        _sw_patch_live_market_fields_in_payload(
-            hit_payload,
-            hit_ts_to_ind or {},
-            selected_trade_date,
-            hit_level or level,
-            pool_key=limit_pool_key,
-        )
-        return jsonify(hit_payload)
-
-    conn = None
-    try:
-        has_sw_extend_metrics = False
-        conn = pymysql.connect(**DB_CONFIG_TUSHARE)
-        sql_sw = (
-            "SELECT z.ts_code, z.l1_code, z.l1_name, z.l2_code, z.l2_name, z.l3_code, z.l3_name "
-            "FROM ( "
-            "  SELECT m.ts_code, m.l1_code, m.l1_name, m.l2_code, m.l2_name, m.l3_code, m.l3_name, "
-            "    ROW_NUMBER() OVER (PARTITION BY m.ts_code ORDER BY m.in_date DESC, m.l1_code ASC, m.l2_code ASC, m.l2_name ASC) AS rn "
-            "  FROM stock_tushare.index_member_all_sw m "
-            "  WHERE (m.is_new = 'Y' OR m.is_new IS NULL) "
-            "    AND m.l1_code IS NOT NULL AND m.l1_code <> '' "
-            "    AND m.l1_name IS NOT NULL AND m.l1_name <> '' "
-            "    AND m.l2_code IS NOT NULL AND m.l2_code <> '' "
-            "    AND m.l2_name IS NOT NULL AND m.l2_name <> '' "
-            ") z "
-            "WHERE z.rn = 1"
-        )
-        with conn.cursor() as cur:
-            cur.execute(sql_sw)
-            sw_rows = cur.fetchall() or []
-        if not sw_rows:
-            payload = {
-                'success': True,
-                'rows': [],
-                'summary_row': None,
-                'periods': [],
-                'has_q_dtprofit': False,
-                'level': level,
-                'selected_l1_code': parent_l1_code,
-                'selected_l1_name': None,
-                'selected_l2_code': parent_l2_code,
-                'selected_l2_name': None,
-                'l1_options': [],
-                'l2_options': [],
-                'count': 0,
-                'has_sw_extend_metrics': False,
-                'cache_ttl_sec': SW_INDUSTRY_STATS_CACHE_TTL_API_SEC,
-            }
-            _sw_industry_stats_cache_put(
-                cache_key,
-                payload,
-                {},
-                level,
-                SW_INDUSTRY_STATS_CACHE_TTL,
-                SW_INDUSTRY_STATS_CACHE_MAX,
-            )
-            return jsonify(payload)
-
-        ts_to_ind: dict[str, tuple[str, str]] = {}
-        ts_to_parent: dict[str, tuple[str, str]] = {}
-        ind_meta: dict[str, dict] = {}
-        l1_option_map: dict[str, str] = {}
-        l2_option_map: dict[str, str] = {}
-        for row in sw_rows:
-            ts_code = str(row[0] or '').strip()
-            l1_code = str(row[1] or '').strip()
-            l1_name = str(row[2] or '').strip()
-            l2_code = str(row[3] or '').strip()
-            l2_name = str(row[4] or '').strip()
-            l3_code = str(row[5] or '').strip()
-            l3_name = str(row[6] or '').strip()
-            if not ts_code or not l1_code or not l2_code:
-                continue
-            l1_option_map[l1_code] = l1_name
-            if not parent_l1_code or l1_code == parent_l1_code:
-                l2_option_map[l2_code] = l2_name
-            if parent_l1_code and l1_code != parent_l1_code:
-                continue
-            if parent_l2_code and l2_code != parent_l2_code:
-                continue
-            if level == 'l2':
-                group_code = l2_code
-                group_name = l2_name
-            elif level == 'l3':
-                if not l3_code or not l3_name:
-                    continue
-                group_code = l3_code
-                group_name = l3_name
-            else:
-                group_code = l1_code
-                group_name = l1_name
-            ts_to_ind[ts_code] = (group_code, group_name)
-            ts_to_parent[ts_code] = (l1_code, l1_name)
-            if group_code not in ind_meta:
-                ind_meta[group_code] = {'l1_name': group_name, 'company_count': 0}
-            ind_meta[group_code]['company_count'] += 1
-        ts_by_l1: dict[str, list[str]] = defaultdict(list)
-        for _ts, (_lc, _) in ts_to_ind.items():
-            ts_by_l1[_lc].append(_ts)
-        ts_codes = sorted(ts_to_ind.keys())
-        if not ts_codes:
-            payload = {
-                'success': True,
-                'rows': [],
-                'summary_row': None,
-                'periods': [],
-                'has_q_dtprofit': False,
-                'level': level,
-                'selected_l1_code': parent_l1_code,
-                'selected_l1_name': l1_option_map.get(parent_l1_code),
-                'selected_l2_code': parent_l2_code,
-                'selected_l2_name': l2_option_map.get(parent_l2_code),
-                'l1_options': [{'l1_code': k, 'l1_name': v} for k, v in sorted(l1_option_map.items(), key=lambda x: x[1])],
-                'l2_options': [{'l2_code': k, 'l2_name': v} for k, v in sorted(l2_option_map.items(), key=lambda x: x[1])],
-                'count': 0,
-                'has_sw_extend_metrics': False,
-                'cache_ttl_sec': SW_INDUSTRY_STATS_CACHE_TTL_API_SEC,
-            }
-            _sw_industry_stats_cache_put(
-                cache_key,
-                payload,
-                {},
-                level,
-                SW_INDUSTRY_STATS_CACHE_TTL,
-                SW_INDUSTRY_STATS_CACHE_MAX,
-            )
-            return jsonify(payload)
-
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT DISTINCT end_date FROM stock_tushare.income "
-                "WHERE end_date IS NOT NULL "
-                "ORDER BY end_date DESC LIMIT 13"
-            )
-            raw_periods = cur.fetchall() or []
-        periods = [_normalize_end_date_yyyymmdd(r[0]) for r in raw_periods if r and r[0] is not None]
-        periods = [p for p in periods if p]
-
-        has_inc_rt = _tushare_column_exists(conn, 'income', 'report_type')
-        date_keys = _fina_income_date_keys_with_yoy_for_periods(periods)
-        rev_nested = _fina_batch_income_total_revenue(conn, ts_codes, date_keys, has_inc_rt)
-
-        has_q_dtprofit = _tushare_column_exists(conn, 'fina_indicator', 'q_dtprofit')
-        has_fi_rt = _tushare_column_exists(conn, 'fina_indicator', 'report_type')
-        dtp_nested: dict[str, dict[str, float]] = {}
-        if has_q_dtprofit:
-            dtp_period_keys = _fina_periods_union_yoy_for_q_dtprofit(periods)
-            dtp_nested = _fina_batch_fina_indicator_q_dtprofit(
-                conn, ts_codes, dtp_period_keys, has_fi_rt
-            )
-
-        ind_rev: dict[str, dict[str, float]] = defaultdict(dict)
-        for l1_code in ind_meta.keys():
-            for p in periods:
-                ind_rev[l1_code][p] = 0.0
-        for ts_code, rev_map in rev_nested.items():
-            ind_info = ts_to_ind.get(ts_code)
-            if ind_info is None:
-                continue
-            l1_code = ind_info[0]
-            for p in periods:
-                yq = _fina_yq_from_anchor(p)
-                if not yq:
-                    continue
-                sq = _fina_quarter_single_revenue(rev_map, yq[0], yq[1])
-                if sq is not None:
-                    ind_rev[l1_code][p] += float(sq)
-
-        # 申万锁定区新增：总市值/自由市值（口径对齐财报页）
-        # total_mv_yi: stk_factor_pro.total_mv(万元)/10000 => 亿元
-        # free_mv_yi: stk_factor_pro.free_share(万股) * rt_k.close(元/股) /10000 => 亿元
-        ind_total_mv: dict[str, float] = defaultdict(float)
-        ind_free_mv: dict[str, float] = defaultdict(float)
-        market_total_mv = 0.0
-        market_free_mv = 0.0
-        has_tmv = _tushare_column_exists(conn, 'stk_factor_pro', 'total_mv')
-        has_fs = _tushare_column_exists(conn, 'stk_factor_pro', 'free_share')
-        if has_tmv or has_fs:
-            max_d = None
-            with conn.cursor() as cur:
-                cur.execute('SELECT MAX(trade_date) FROM stock_tushare.stk_factor_pro')
-                mx = cur.fetchone()
-                if mx and mx[0] is not None:
-                    max_d = mx[0]
-            sfp_map: dict[str, tuple[float | None, float | None]] = {}
-            if max_d is not None:
-                sel_cols = ['ts_code']
-                if has_tmv:
-                    sel_cols.append('total_mv')
-                if has_fs:
-                    sel_cols.append('free_share')
-                col_sql = ', '.join(sel_cols)
-                chunk = 480
-                for i in range(0, len(ts_codes), chunk):
-                    part = ts_codes[i : i + chunk]
-                    if not part:
-                        continue
-                    ph = ', '.join(['%s'] * len(part))
-                    sql = (
-                        f'SELECT {col_sql} FROM stock_tushare.stk_factor_pro '
-                        f'WHERE trade_date = %s AND ts_code IN ({ph})'
-                    )
-                    with conn.cursor() as cur:
-                        cur.execute(sql, (max_d, *part))
-                        for raw in cur.fetchall() or []:
-                            if not raw or raw[0] is None:
-                                continue
-                            tc = str(raw[0]).strip()
-                            if not tc:
-                                continue
-                            idx = 1
-                            tmv_v = None
-                            fs_v = None
-                            if has_tmv:
-                                tmv_v = raw[idx] if len(raw) > idx else None
-                                idx += 1
-                            if has_fs:
-                                fs_v = raw[idx] if len(raw) > idx else None
-                            tmv_num = None
-                            fs_num = None
-                            try:
-                                if tmv_v is not None:
-                                    tmv_num = float(tmv_v) / 10000.0
-                            except (TypeError, ValueError):
-                                tmv_num = None
-                            try:
-                                if fs_v is not None:
-                                    fs_num = float(fs_v)
-                            except (TypeError, ValueError):
-                                fs_num = None
-                            sfp_map[tc] = (tmv_num, fs_num)
-
-            close_map: dict[str, float] = {}
-            if has_fs:
-                try:
-                    conn_w = pymysql.connect(**DB_CONFIG)
-                    try:
-                        chunk = 480
-                        for i in range(0, len(ts_codes), chunk):
-                            part = ts_codes[i : i + chunk]
-                            if not part:
-                                continue
-                            ph = ', '.join(['%s'] * len(part))
-                            sql = (
-                                'SELECT ts_code, close FROM ('
-                                '  SELECT ts_code, close, '
-                                '    ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_time DESC) AS rn '
-                                '  FROM rt_k WHERE ts_code IN (' + ph + ')'
-                                ') x WHERE rn = 1'
-                            )
-                            with conn_w.cursor() as cur:
-                                cur.execute(sql, tuple(part))
-                                for r2 in cur.fetchall() or []:
-                                    if not r2 or r2[0] is None or r2[1] is None:
-                                        continue
-                                    tc2 = str(r2[0]).strip()
-                                    if not tc2:
-                                        continue
-                                    try:
-                                        close_map[tc2] = float(r2[1])
-                                    except (TypeError, ValueError):
-                                        continue
-                    finally:
-                        conn_w.close()
-                except Exception as e:
-                    logger.warning('sw_industry_stats 查询 rt_k close 失败，自由市值将不完整: %s', e)
-
-            for tc in ts_codes:
-                ind_info = ts_to_ind.get(tc)
-                if ind_info is None:
-                    continue
-                l1_code = ind_info[0]
-                pair = sfp_map.get(tc)
-                if not pair:
-                    continue
-                tmv_yi, fs_wangu = pair
-                if tmv_yi is not None:
-                    ind_total_mv[l1_code] += float(tmv_yi)
-                    market_total_mv += float(tmv_yi)
-                if fs_wangu is not None:
-                    close_v = close_map.get(tc)
-                    if close_v is not None:
-                        free_yi = float(fs_wangu) * float(close_v) / 10000.0
-                        ind_free_mv[l1_code] += free_yi
-                        market_free_mv += free_yi
-
-        period_keys_for_dtp: set[str] = set()
-        ind_dtp: dict[str, dict[str, float]] = defaultdict(dict)
-        market_dtp_by_p: dict[str, float] = defaultdict(float)
-        if has_q_dtprofit:
-            period_keys_for_dtp = set(periods)
-            for _p in periods:
-                _pp = _fina_yoy_anchor_end_date(_p)
-                if _pp:
-                    period_keys_for_dtp.add(_pp)
-            for l1_code in ind_meta.keys():
-                for pk in period_keys_for_dtp:
-                    ind_dtp[l1_code][pk] = 0.0
-            for ts_code, ed_map in dtp_nested.items():
-                ind_info = ts_to_ind.get(ts_code)
-                if ind_info is None:
-                    continue
-                l1_code = ind_info[0]
-                for pk in period_keys_for_dtp:
-                    pv = ed_map.get(pk)
-                    if pv is not None:
-                        ind_dtp[l1_code][pk] += float(pv)
-            for l1_code in ind_meta.keys():
-                for pk in period_keys_for_dtp:
-                    market_dtp_by_p[pk] += float(ind_dtp[l1_code][pk])
-
-        # 扩展指标（口径对齐财报页 fina-arturn）：经营现金流单季(亿，行业个股累计)、毛利率/ROE扣非(行业均值)、合同负债/固定资产(亿，累计)
-        cf_nested_sw: dict[str, dict[str, float]] = {}
-        margin_nested_sw: dict[str, dict[str, tuple[float | None, float | None]]] = {}
-        bs_cf_nested_sw: dict[str, dict[str, tuple[float | None, float | None]]] = {}
-        if periods and ts_codes:
-            has_n_cf_sw = _tushare_column_exists(conn, 'cashflow', 'n_cashflow_act')
-            has_cf_rt_sw = _tushare_column_exists(conn, 'cashflow', 'report_type')
-            has_q_gs_sw = _tushare_column_exists(conn, 'fina_indicator', 'q_gsprofit_margin')
-            has_q_dt_roe_sw = _tushare_column_exists(conn, 'fina_indicator', 'q_dt_roe')
-            has_bs_rt_sw = _tushare_column_exists(conn, 'balancesheet', 'report_type')
-            has_adv_sw = _tushare_column_exists(conn, 'balancesheet', 'adv_receipts')
-            has_cl_sw = _tushare_column_exists(conn, 'balancesheet', 'contract_liab')
-            has_fa_sw = _tushare_column_exists(conn, 'balancesheet', 'fix_assets_total')
-            cf_keys_sq = _fina_income_date_keys_with_yoy_for_periods(periods)
-            if has_n_cf_sw:
-                try:
-                    cf_nested_sw = _fina_batch_cashflow_n_cashflow_act(
-                        conn, ts_codes, cf_keys_sq, has_cf_rt_sw
-                    )
-                    has_sw_extend_metrics = True
-                except Exception as e:
-                    logger.warning('sw_industry_stats 经营现金流批量读取失败: %s', e)
-            if has_q_gs_sw or has_q_dt_roe_sw:
-                try:
-                    margin_nested_sw = _fina_batch_fina_indicator_q_gs_margin_q_dt_roe(
-                        conn,
-                        ts_codes,
-                        periods,
-                        has_fi_rt,
-                        has_q_gs_sw,
-                        has_q_dt_roe_sw,
-                    )
-                    has_sw_extend_metrics = True
-                except Exception as e:
-                    logger.warning('sw_industry_stats 毛利率/ROE(扣非)批量读取失败: %s', e)
-            if has_cl_sw or has_fa_sw:
-                try:
-                    bs_cf_nested_sw = _fina_batch_balancesheet_contract_fix_yi(
-                        conn,
-                        ts_codes,
-                        periods,
-                        has_bs_rt=has_bs_rt_sw,
-                        has_adv=has_adv_sw,
-                        has_contract=has_cl_sw,
-                        has_fix=has_fa_sw,
-                    )
-                    has_sw_extend_metrics = True
-                except Exception as e:
-                    logger.warning('sw_industry_stats 合同负债/固定资产批量读取失败: %s', e)
-
-        # ===== 实时/行情层批量预取（l3 档位不出实时字段，与指数页一致） =====
-        range_cache_sw: dict[str, dict] = {}
-        rt_sw_quotes: dict[str, dict] = {}
-        amt_pctile_cache_sw: dict[str, dict[str, float | None]] = {}
-        sw_t0_count_maps: dict[str, dict[str, int]] = {}
-        sw_hlc_count_maps: dict[str, dict[str, int]] = {}
-        if level != 'l3':
-            try:
-                rt_sw_quotes, range_cache_sw, amt_pctile_cache_sw, sw_t0_count_maps, sw_hlc_count_maps = (
-                    _sw_fetch_live_market_maps(
-                        ts_to_ind, selected_trade_date, pool_key=limit_pool_key
-                    )
-                )
-            except Exception as e:
-                logger.warning('sw_industry_stats 区间涨跌幅/成交额比/新高低预取失败: %s', e)
-                rt_sw_quotes = {}
-                range_cache_sw = {}
-                amt_pctile_cache_sw = {}
-                sw_t0_count_maps = {}
-                sw_hlc_count_maps = {}
-            # 融资余额：按 stock_wind.margin_detail 个股明细聚合，单位从元转亿元。
-            sw_margin_by_group, sw_margin_summary, margin_as_of, margin_as_of_mode = (
-                _sw_fetch_margin_metrics_by_group(ts_to_ind, selected_trade_date)
-            )
-        else:
-            sw_margin_by_group = {}
-            sw_margin_summary = _sw_margin_empty_fields()
-            margin_as_of = None
-            margin_as_of_mode = None
-
-        rows = []
-        for l1_code in sorted(ind_meta.keys()):
-            row = {
-                'l1_code': l1_code,
-                'group_code': l1_code,
-                'l1_name': ind_meta[l1_code].get('l1_name'),
-                'company_count': int(ind_meta[l1_code].get('company_count') or 0),
-                'total_mv_yi': round(float(ind_total_mv.get(l1_code, 0.0)), 2),
-                'free_mv_yi': round(float(ind_free_mv.get(l1_code, 0.0)), 2),
-            }
-            for idx, p in enumerate(periods):
-                row[f's{idx}'] = round((ind_rev.get(l1_code, {}).get(p, 0.0) / 100000000.0), 2)
-            if has_q_dtprofit:
-                for idx, p in enumerate(periods):
-                    cur_raw = float(ind_dtp.get(l1_code, {}).get(p, 0.0))
-                    row[f'dtp{idx}'] = round(cur_raw / 100000000.0, 2)
-                    pp = _fina_yoy_anchor_end_date(p)
-                    prev_raw = float(ind_dtp.get(l1_code, {}).get(pp, 0.0)) if pp else 0.0
-                    row[f'dnk{idx}'] = bool(pp and prev_raw < 0 and cur_raw > 0)
-            else:
-                for idx in range(len(periods)):
-                    row[f'dtp{idx}'] = None
-            _sw_attach_high_qoq_pair(row, 's', 's_high', 's_qoq', len(periods))
-            _sw_attach_high_qoq_pair(row, 'dtp', 'dtp_high', 'dtp_qoq', len(periods))
-            for idx, p in enumerate(periods):
-                yv = _sw_rev_yoy_yoypct_for_codes(ts_by_l1.get(l1_code, []), rev_nested, p)
-                row[f'y{idx}'] = round(yv, 2) if yv is not None else None
-            if has_q_dtprofit:
-                for idx, p in enumerate(periods):
-                    dyv = _sw_dtp_yoy_yoypct_for_codes(ts_by_l1.get(l1_code, []), dtp_nested, p)
-                    row[f'dy{idx}'] = round(dyv, 2) if dyv is not None else None
-            if has_sw_extend_metrics:
-                ts_list = ts_by_l1.get(l1_code, [])
-                for idx, p in enumerate(periods):
-                    ycfv = _sw_cf_yoy_yoypct_for_codes(
-                        ts_list, cf_nested_sw, p
-                    )
-                    row[f'ycf{idx}'] = (
-                        round(ycfv, 2) if ycfv is not None else None
-                    )
-                    pp_y = _fina_yoy_anchor_end_date(p)
-                    if pp_y:
-                        cur_cf_y = _sw_cf_industry_single_q_sum_yuan(
-                            ts_list, cf_nested_sw, p
-                        )
-                        prev_cf_y = _sw_cf_industry_single_q_sum_yuan(
-                            ts_list, cf_nested_sw, pp_y
-                        )
-                        row[f'ycfnk{idx}'] = bool(
-                            cur_cf_y is not None
-                            and prev_cf_y is not None
-                            and prev_cf_y < 0
-                            and cur_cf_y > 0
-                        )
-                    else:
-                        row[f'ycfnk{idx}'] = False
-                for idx, p in enumerate(periods):
-                    tot_yuan = 0.0
-                    any_ocf = False
-                    for tc in ts_list:
-                        yq = _fina_yq_from_anchor(p)
-                        if not yq:
-                            continue
-                        sq = _fina_quarter_single_revenue(
-                            cf_nested_sw.get(tc, {}), yq[0], yq[1]
-                        )
-                        if sq is not None:
-                            tot_yuan += float(sq)
-                            any_ocf = True
-                    row[f'qcf{idx}'] = (
-                        round(tot_yuan / 100000000.0, 2) if any_ocf else None
-                    )
-                    gms: list[float] = []
-                    roes: list[float] = []
-                    for tc in ts_list:
-                        tup_m = margin_nested_sw.get(tc, {}).get(p)
-                        if not tup_m:
-                            continue
-                        if tup_m[0] is not None:
-                            gms.append(float(tup_m[0]))
-                        if tup_m[1] is not None:
-                            roes.append(float(tup_m[1]))
-                    row[f'qgm{idx}'] = _sw_median_rounded(gms)
-                    row[f'qroe{idx}'] = _sw_median_rounded(roes)
-                    cs = 0.0
-                    fs = 0.0
-                    any_cl = False
-                    any_fa = False
-                    for tc in ts_list:
-                        tup_b = bs_cf_nested_sw.get(tc, {}).get(p)
-                        if not tup_b:
-                            continue
-                        if tup_b[0] is not None:
-                            cs += float(tup_b[0])
-                            any_cl = True
-                        if tup_b[1] is not None:
-                            fs += float(tup_b[1])
-                            any_fa = True
-                    row[f'cl{idx}'] = round(cs, 2) if any_cl else None
-                    row[f'fa{idx}'] = round(fs, 2) if any_fa else None
-                _sw_attach_high_qoq_pair(
-                    row, 'qcf', 'qcf_high', 'qcf_qoq', len(periods)
-                )
-                _sw_attach_high_qoq_pair(
-                    row, 'qgm', 'qgm_high', 'qgm_qoq', len(periods)
-                )
-                _sw_attach_high_qoq_pair(
-                    row, 'qroe', 'qroe_high', 'qroe_qoq', len(periods)
-                )
-            else:
-                for idx in range(len(periods)):
-                    row[f'ycf{idx}'] = None
-                    row[f'ycfnk{idx}'] = None
-                    row[f'qcf{idx}'] = None
-                    row[f'qgm{idx}'] = None
-                    row[f'qroe{idx}'] = None
-                    row[f'cl{idx}'] = None
-                    row[f'fa{idx}'] = None
-                row['qcf_high'] = None
-                row['qcf_qoq'] = None
-                row['qgm_high'] = None
-                row['qgm_qoq'] = None
-                row['qroe_high'] = None
-                row['qroe_qoq'] = None
-            # ===== 实时/行情层逐行写入（l3 全部置 None，与指数页一致） =====
-            if level == 'l3':
-                for _k in (
-                    'sw_pct', 'sw_pct_t1', 'sw_pct_t5', 'sw_pct_t20', 'sw_pct_t60', 'sw_pct_t120',
-                    'sw_amt_pctile_t0', 'sw_amt_pctile_t1', 'sw_amt_pctile_t5',
-                    'sw_amt_pctile_t20', 'sw_amt_pctile_t60', 'sw_amt_pctile_t120',
-                    'sw_h250_t0', 'sw_h850', 'sw_h_his', 'sw_l250', 'sw_l850', 'sw_l_his',
-                    'sw_hlc_h250', 'sw_hlc_h850', 'sw_hlc_h_his',
-                    'sw_hlc_l250', 'sw_hlc_l850', 'sw_hlc_l_his',
-                    'sw_margin_rzye', 'sw_margin_1d', 'sw_margin_3d',
-                    'sw_margin_5d', 'sw_margin_20d', 'sw_margin_60d',
-                ):
-                    row[_k] = None
-            else:
-                _sw_apply_live_row_market_fields(
-                    row,
-                    rt_sw_quotes=rt_sw_quotes,
-                    range_cache_sw=range_cache_sw,
-                    amt_pctile_cache_sw=amt_pctile_cache_sw,
-                    sw_t0_count_maps=sw_t0_count_maps,
-                    sw_hlc_count_maps=sw_hlc_count_maps,
-                )
-                margin_fields = sw_margin_by_group.get(l1_code) or {}
-                empty_margin_fields = _sw_margin_empty_fields()
-                for _mk in empty_margin_fields.keys():
-                    row[_mk] = margin_fields.get(_mk)
-            rows.append(row)
-
-        summary_row: dict | None = None
-        if rows:
-            selected_l1_name = l1_option_map.get(parent_l1_code) if parent_l1_code else None
-            selected_l2_name = l2_option_map.get(parent_l2_code) if parent_l2_code else None
-            summary_row = {
-                'l1_code': '',
-                'l1_name': selected_l2_name or selected_l1_name or '全部A股',
-                'company_count': sum(int(r.get('company_count') or 0) for r in rows),
-                'total_mv_yi': round(float(market_total_mv), 2),
-                'free_mv_yi': round(float(market_free_mv), 2),
-                'is_summary': True,
-            }
-            # 实时层：区间涨跌幅/成交额比%汇总置 None；新高新低分布按各行合计；融资按全市场合计。
-            for _k in (
-                'sw_pct', 'sw_pct_t1', 'sw_pct_t5', 'sw_pct_t20', 'sw_pct_t60', 'sw_pct_t120',
-                'sw_amt_pctile_t0', 'sw_amt_pctile_t1', 'sw_amt_pctile_t5',
-                'sw_amt_pctile_t20', 'sw_amt_pctile_t60', 'sw_amt_pctile_t120',
-            ):
-                summary_row[_k] = None
-            summary_row.update(sw_margin_summary)
-            for _jk, _ in _SW_INDUSTRY_LIMITSTAT_T0_SPECS:
-                summary_row[_jk] = sum(int(r.get(_jk) or 0) for r in rows)
-            for _jk, _ in _SW_INDUSTRY_HLC_SPECS:
-                summary_row[_jk] = sum(int(r.get(_jk) or 0) for r in rows)
-            for idx in range(len(periods)):
-                summary_row[f's{idx}'] = round(
-                    sum(float(r.get(f's{idx}') or 0) for r in rows), 2
-                )
-            if has_q_dtprofit:
-                for idx in range(len(periods)):
-                    summary_row[f'dtp{idx}'] = round(
-                        sum(float(r.get(f'dtp{idx}') or 0) for r in rows), 2
-                    )
-                for idx, p in enumerate(periods):
-                    pp = _fina_yoy_anchor_end_date(p)
-                    cur_m = float(market_dtp_by_p.get(p, 0.0))
-                    prev_m = float(market_dtp_by_p.get(pp, 0.0)) if pp else 0.0
-                    summary_row[f'dnk{idx}'] = bool(pp and prev_m < 0 and cur_m > 0)
-            else:
-                for idx in range(len(periods)):
-                    summary_row[f'dtp{idx}'] = None
-            for idx, p in enumerate(periods):
-                ysum = _sw_rev_yoy_yoypct_for_codes(ts_codes, rev_nested, p)
-                summary_row[f'y{idx}'] = round(ysum, 2) if ysum is not None else None
-            if has_q_dtprofit:
-                for idx, p in enumerate(periods):
-                    dys = _sw_dtp_yoy_yoypct_for_codes(ts_codes, dtp_nested, p)
-                    summary_row[f'dy{idx}'] = round(dys, 2) if dys is not None else None
-            _sw_attach_high_qoq_pair(
-                summary_row, 's', 's_high', 's_qoq', len(periods)
-            )
-            _sw_attach_high_qoq_pair(
-                summary_row, 'dtp', 'dtp_high', 'dtp_qoq', len(periods)
-            )
-            if has_sw_extend_metrics:
-                for idx, p in enumerate(periods):
-                    ycfv_s = _sw_cf_yoy_yoypct_for_codes(
-                        ts_codes, cf_nested_sw, p
-                    )
-                    summary_row[f'ycf{idx}'] = (
-                        round(ycfv_s, 2) if ycfv_s is not None else None
-                    )
-                    pp_s = _fina_yoy_anchor_end_date(p)
-                    if pp_s:
-                        cur_cf_s = _sw_cf_industry_single_q_sum_yuan(
-                            ts_codes, cf_nested_sw, p
-                        )
-                        prev_cf_s = _sw_cf_industry_single_q_sum_yuan(
-                            ts_codes, cf_nested_sw, pp_s
-                        )
-                        summary_row[f'ycfnk{idx}'] = bool(
-                            cur_cf_s is not None
-                            and prev_cf_s is not None
-                            and prev_cf_s < 0
-                            and cur_cf_s > 0
-                        )
-                    else:
-                        summary_row[f'ycfnk{idx}'] = False
-                for idx, p in enumerate(periods):
-                    tot_yuan = 0.0
-                    any_ocf = False
-                    for tc in ts_codes:
-                        yq = _fina_yq_from_anchor(p)
-                        if not yq:
-                            continue
-                        sq = _fina_quarter_single_revenue(
-                            cf_nested_sw.get(tc, {}), yq[0], yq[1]
-                        )
-                        if sq is not None:
-                            tot_yuan += float(sq)
-                            any_ocf = True
-                    summary_row[f'qcf{idx}'] = (
-                        round(tot_yuan / 100000000.0, 2) if any_ocf else None
-                    )
-                    gms_m: list[float] = []
-                    roes_m: list[float] = []
-                    for tc in ts_codes:
-                        tup_mm = margin_nested_sw.get(tc, {}).get(p)
-                        if not tup_mm:
-                            continue
-                        if tup_mm[0] is not None:
-                            gms_m.append(float(tup_mm[0]))
-                        if tup_mm[1] is not None:
-                            roes_m.append(float(tup_mm[1]))
-                    summary_row[f'qgm{idx}'] = _sw_median_rounded(gms_m)
-                    summary_row[f'qroe{idx}'] = _sw_median_rounded(roes_m)
-                    cs_m = 0.0
-                    fs_m = 0.0
-                    any_cl_m = False
-                    any_fa_m = False
-                    for tc in ts_codes:
-                        tup_bm = bs_cf_nested_sw.get(tc, {}).get(p)
-                        if not tup_bm:
-                            continue
-                        if tup_bm[0] is not None:
-                            cs_m += float(tup_bm[0])
-                            any_cl_m = True
-                        if tup_bm[1] is not None:
-                            fs_m += float(tup_bm[1])
-                            any_fa_m = True
-                    summary_row[f'cl{idx}'] = round(cs_m, 2) if any_cl_m else None
-                    summary_row[f'fa{idx}'] = round(fs_m, 2) if any_fa_m else None
-                _sw_attach_high_qoq_pair(
-                    summary_row, 'qcf', 'qcf_high', 'qcf_qoq', len(periods)
-                )
-                _sw_attach_high_qoq_pair(
-                    summary_row, 'qgm', 'qgm_high', 'qgm_qoq', len(periods)
-                )
-                _sw_attach_high_qoq_pair(
-                    summary_row, 'qroe', 'qroe_high', 'qroe_qoq', len(periods)
-                )
-            elif summary_row is not None:
-                for idx in range(len(periods)):
-                    summary_row[f'ycf{idx}'] = None
-                    summary_row[f'ycfnk{idx}'] = None
-                    summary_row[f'qcf{idx}'] = None
-                    summary_row[f'qgm{idx}'] = None
-                    summary_row[f'qroe{idx}'] = None
-                    summary_row[f'cl{idx}'] = None
-                    summary_row[f'fa{idx}'] = None
-                summary_row['qcf_high'] = None
-                summary_row['qcf_qoq'] = None
-                summary_row['qgm_high'] = None
-                summary_row['qgm_qoq'] = None
-                summary_row['qroe_high'] = None
-                summary_row['qroe_qoq'] = None
-
-        payload = {
-            'success': True,
-            'rows': rows,
-            'summary_row': summary_row,
-            'periods': periods,
-            'has_q_dtprofit': bool(has_q_dtprofit),
-            'has_rev_yoy': len(periods) > 0,
-            'has_dtp_yoy': bool(has_q_dtprofit and len(periods) > 0),
-            'level': level,
-            'selected_l1_code': parent_l1_code,
-            'selected_l1_name': l1_option_map.get(parent_l1_code),
-            'selected_l2_code': parent_l2_code,
-            'selected_l2_name': l2_option_map.get(parent_l2_code),
-            'trade_date': selected_trade_date.isoformat() if selected_trade_date else None,
-            'is_historical': selected_trade_date is not None,
-            'historical_hint': (
-                '新高/低 12 列读 limit_stats_archive_detail 归档；区间涨跌幅等为所选日行情'
-                if selected_trade_date is not None
-                else None
-            ),
-            'margin_as_of': margin_as_of.isoformat() if margin_as_of else None,
-            'margin_as_of_mode': margin_as_of_mode,
-            'l1_options': [{'l1_code': k, 'l1_name': v} for k, v in sorted(l1_option_map.items(), key=lambda x: x[1])],
-            'l2_options': [{'l2_code': k, 'l2_name': v} for k, v in sorted(l2_option_map.items(), key=lambda x: x[1])],
-            'count': len(rows),
-            'has_sw_extend_metrics': bool(
-                has_sw_extend_metrics and len(periods) > 0
-            ),
-            'cache_ttl_sec': SW_INDUSTRY_STATS_CACHE_TTL_API_SEC,
-        }
-        _sw_industry_stats_cache_put(
-            cache_key,
-            payload,
-            ts_to_ind,
-            level,
-            SW_INDUSTRY_STATS_CACHE_TTL,
-            SW_INDUSTRY_STATS_CACHE_MAX,
-        )
-        return jsonify(payload)
-    except Exception as e:
-        logger.error('读取申万行业统计（含单季营收/扣非净利）失败: %s', e)
-        return jsonify({'success': False, 'error': str(e), 'rows': []}), 500
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-
-def _load_index_constituent_weights(index_code: str) -> tuple[dict[str, float], list[str], dict[str, dict[str, float]]]:
-    """读取宽基指数成分权重（归一化到 100%）。
-
-    Returns:
-        (aggregate_pct_by_ts, selected_index_codes, per_index_pct_by_ts)
-    """
-    all_codes = [code for code, _ in INDEX_MONITOR_CODES]
-    selected_codes = [index_code] if index_code and index_code in all_codes else list(all_codes)
-    if not selected_codes:
-        return {}, [], {}
-
-    conn = None
-    try:
-        conn = pymysql.connect(**DB_CONFIG)
-        placeholders = ', '.join(['%s'] * len(selected_codes))
-        sql = (
-            "SELECT iw.index_code, iw.con_code, iw.weight "
-            "FROM stock_wind.index_weight iw "
-            "INNER JOIN ("
-            "  SELECT index_code, MAX(trade_date) AS md "
-            "  FROM stock_wind.index_weight "
-            f"  WHERE index_code IN ({placeholders}) "
-            "  GROUP BY index_code"
-            ") x ON x.index_code = iw.index_code AND x.md = iw.trade_date "
-            f"WHERE iw.index_code IN ({placeholders})"
-        )
-        with conn.cursor() as cur:
-            cur.execute(sql, tuple(selected_codes + selected_codes))
-            rows = cur.fetchall() or []
-    except Exception as e:
-        logger.warning("读取 index_weight 成分失败: %s", e)
-        return {}, selected_codes, {}
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    per_index_raw: dict[str, dict[str, float]] = defaultdict(dict)
-    for row in rows:
-        idx_code = str(row[0] or '').strip().upper()
-        ts_code = str(row[1] or '').strip().upper()
-        if not idx_code or not ts_code:
-            continue
-        try:
-            w = float(row[2]) if row[2] is not None else 0.0
-        except (TypeError, ValueError):
-            w = 0.0
-        if w <= 0:
-            continue
-        per_index_raw[idx_code][ts_code] = per_index_raw[idx_code].get(ts_code, 0.0) + w
-
-    # 先在指数内归一，再跨指数等权平均，保证“全部宽基指数”总权重约 100%
-    per_index_pct: dict[str, dict[str, float]] = {}
-    for idx_code in selected_codes:
-        item = per_index_raw.get(idx_code, {})
-        total = sum(item.values())
-        if total <= 0:
-            continue
-        per_index_pct[idx_code] = {ts_code: (raw_w / total) * 100.0 for ts_code, raw_w in item.items()}
-
-    aggregate: dict[str, float] = defaultdict(float)
-    valid_count = 0
-    for idx_code in selected_codes:
-        item = per_index_pct.get(idx_code, {})
-        if not item:
-            continue
-        valid_count += 1
-        for ts_code, pct_w in item.items():
-            aggregate[ts_code] += pct_w
-
-    if valid_count <= 0:
-        return {}, selected_codes, per_index_pct
-    for ts_code in list(aggregate.keys()):
-        aggregate[ts_code] = aggregate[ts_code] / valid_count
-    return dict(aggregate), selected_codes, per_index_pct
-
-
-def api_index_industry_stats():
-    """宽基指数行业统计：指数成分来自 index_weight，分组与13季口径对齐 sw_industry_stats。"""
-    level = str(request.args.get('level') or 'l1').strip().lower()
-    parent_l1_code = str(request.args.get('parent_l1_code') or '').strip()
-    parent_l2_code = str(request.args.get('parent_l2_code') or '').strip()
-    index_code = str(request.args.get('index_code') or '').strip().upper()
-    if level not in ('l1', 'l2', 'l3'):
-        level = 'l1'
-    if parent_l2_code:
-        level = 'l3'
-    elif parent_l1_code:
-        level = 'l2'
-    cache_key = f'{index_code}|{level}|{parent_l1_code}|{parent_l2_code}|x10'
-    now_ts = time.time()
-    hit = _small_ttl_cache_get(_index_industry_stats_cache, cache_key, now_ts)
-    if hit is not None:
-        return jsonify(hit)
-
-    ts_weight_pct, selected_codes, per_index_pct = _load_index_constituent_weights(index_code)
-    is_index_overview = (not index_code) and (not parent_l1_code) and (not parent_l2_code)
-    ts_universe = set(ts_weight_pct.keys())
-    index_options = [{'index_code': code, 'index_name': name} for code, name in INDEX_MONITOR_CODES]
-    if not ts_universe:
-        payload = {
-            'success': True, 'rows': [], 'summary_row': None, 'periods': [],
-            'has_q_dtprofit': False, 'has_sw_extend_metrics': False,
-            'level': level, 'selected_l1_code': parent_l1_code, 'selected_l2_code': parent_l2_code,
-            'l1_options': [], 'l2_options': [], 'count': 0, 'cache_ttl_sec': SW_INDUSTRY_STATS_CACHE_TTL_API_SEC,
-            'index_code': index_code, 'index_options': index_options, 'selected_index_codes': selected_codes,
-        }
-        _small_ttl_cache_put(_index_industry_stats_cache, cache_key, payload, SW_INDUSTRY_STATS_CACHE_TTL, SW_INDUSTRY_STATS_CACHE_MAX)
-        return jsonify(payload)
-
-    conn = None
-    try:
-        has_sw_extend_metrics = False
-        conn = pymysql.connect(**DB_CONFIG_TUSHARE)
-        sql_sw = (
-            "SELECT z.ts_code, z.l1_code, z.l1_name, z.l2_code, z.l2_name, z.l3_code, z.l3_name "
-            "FROM ( "
-            "  SELECT m.ts_code, m.l1_code, m.l1_name, m.l2_code, m.l2_name, m.l3_code, m.l3_name, "
-            "    ROW_NUMBER() OVER (PARTITION BY m.ts_code ORDER BY m.in_date DESC, m.l1_code ASC, m.l2_code ASC, m.l2_name ASC) AS rn "
-            "  FROM stock_tushare.index_member_all_sw m "
-            "  WHERE (m.is_new = 'Y' OR m.is_new IS NULL) "
-            "    AND m.l1_code IS NOT NULL AND m.l1_code <> '' "
-            "    AND m.l1_name IS NOT NULL AND m.l1_name <> '' "
-            "    AND m.l2_code IS NOT NULL AND m.l2_code <> '' "
-            "    AND m.l2_name IS NOT NULL AND m.l2_name <> '' "
-            ") z WHERE z.rn = 1"
-        )
-        with conn.cursor() as cur:
-            cur.execute(sql_sw)
-            sw_rows = cur.fetchall() or []
-
-        ts_to_ind: dict[str, tuple[str, str]] = {}
-        ind_meta: dict[str, dict] = {}
-        l1_option_map: dict[str, str] = {}
-        l2_option_map: dict[str, str] = {}
-        if is_index_overview:
-            for idx_code, idx_name in INDEX_MONITOR_CODES:
-                ts_map = per_index_pct.get(idx_code, {})
-                if not ts_map:
-                    continue
-                for ts_code, pct_w in ts_map.items():
-                    ts_code_u = str(ts_code or '').strip().upper()
-                    if not ts_code_u:
-                        continue
-                    ts_to_ind[ts_code_u] = (idx_code, idx_name)
-                    if idx_code not in ind_meta:
-                        ind_meta[idx_code] = {'l1_name': idx_name, 'company_count': 0, 'weight_pct': 0.0}
-                    ind_meta[idx_code]['company_count'] += 1
-                    ind_meta[idx_code]['weight_pct'] += float(pct_w)
-        else:
-            for row in sw_rows:
-                ts_code = str(row[0] or '').strip().upper()
-                if ts_code not in ts_universe:
-                    continue
-                l1_code = str(row[1] or '').strip()
-                l1_name = str(row[2] or '').strip()
-                l2_code = str(row[3] or '').strip()
-                l2_name = str(row[4] or '').strip()
-                l3_code = str(row[5] or '').strip()
-                l3_name = str(row[6] or '').strip()
-                if not ts_code or not l1_code or not l2_code:
-                    continue
-                l1_option_map[l1_code] = l1_name
-                if not parent_l1_code or l1_code == parent_l1_code:
-                    l2_option_map[l2_code] = l2_name
-                if parent_l1_code and l1_code != parent_l1_code:
-                    continue
-                if parent_l2_code and l2_code != parent_l2_code:
-                    continue
-                if level == 'l2':
-                    group_code, group_name = l2_code, l2_name
-                elif level == 'l3':
-                    if not l3_code or not l3_name:
-                        continue
-                    group_code, group_name = l3_code, l3_name
-                else:
-                    group_code, group_name = l1_code, l1_name
-                ts_to_ind[ts_code] = (group_code, group_name)
-                if group_code not in ind_meta:
-                    ind_meta[group_code] = {'l1_name': group_name, 'company_count': 0, 'weight_pct': 0.0}
-                ind_meta[group_code]['company_count'] += 1
-                ind_meta[group_code]['weight_pct'] += float(ts_weight_pct.get(ts_code, 0.0))
-
-        ts_by_l1: dict[str, list[str]] = defaultdict(list)
-        if is_index_overview:
-            # 宽基总览：允许同一成分股同时属于多个指数，不能用 ts->单组映射覆盖。
-            for idx_code, _idx_name in INDEX_MONITOR_CODES:
-                ts_list = sorted((per_index_pct.get(idx_code) or {}).keys())
-                if ts_list:
-                    ts_by_l1[idx_code] = ts_list
-            ts_codes = sorted({tc for arr in ts_by_l1.values() for tc in arr})
-        else:
-            ts_codes = sorted(ts_to_ind.keys())
-            for _ts, (_lc, _) in ts_to_ind.items():
-                ts_by_l1[_lc].append(_ts)
-
-        if not ts_codes:
-            payload = {
-                'success': True, 'rows': [], 'summary_row': None, 'periods': [],
-                'has_q_dtprofit': False, 'has_sw_extend_metrics': False, 'level': level,
-                'selected_l1_code': parent_l1_code, 'selected_l2_code': parent_l2_code,
-                'l1_options': [{'l1_code': k, 'l1_name': v} for k, v in sorted(l1_option_map.items(), key=lambda x: x[1])],
-                'l2_options': [{'l2_code': k, 'l2_name': v} for k, v in sorted(l2_option_map.items(), key=lambda x: x[1])],
-                'count': 0, 'cache_ttl_sec': SW_INDUSTRY_STATS_CACHE_TTL_API_SEC,
-                'index_code': index_code, 'index_options': index_options, 'selected_index_codes': selected_codes,
-            }
-            _small_ttl_cache_put(_index_industry_stats_cache, cache_key, payload, SW_INDUSTRY_STATS_CACHE_TTL, SW_INDUSTRY_STATS_CACHE_MAX)
-            return jsonify(payload)
-
-        with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT end_date FROM stock_tushare.income WHERE end_date IS NOT NULL ORDER BY end_date DESC LIMIT 13")
-            raw_periods = cur.fetchall() or []
-        periods = [_normalize_end_date_yyyymmdd(r[0]) for r in raw_periods if r and r[0] is not None]
-        periods = [p for p in periods if p]
-
-        has_inc_rt = _tushare_column_exists(conn, 'income', 'report_type')
-        date_keys = _fina_income_date_keys_with_yoy_for_periods(periods)
-        rev_nested = _fina_batch_income_total_revenue(conn, ts_codes, date_keys, has_inc_rt)
-
-        has_q_dtprofit = _tushare_column_exists(conn, 'fina_indicator', 'q_dtprofit')
-        has_fi_rt = _tushare_column_exists(conn, 'fina_indicator', 'report_type')
-        dtp_nested: dict[str, dict[str, float]] = {}
-        if has_q_dtprofit:
-            dtp_period_keys = _fina_periods_union_yoy_for_q_dtprofit(periods)
-            dtp_nested = _fina_batch_fina_indicator_q_dtprofit(conn, ts_codes, dtp_period_keys, has_fi_rt)
-
-        ind_rev: dict[str, dict[str, float]] = defaultdict(dict)
-        for l1_code in ind_meta.keys():
-            for p in periods:
-                ind_rev[l1_code][p] = 0.0
-        if is_index_overview:
-            for l1_code in ind_meta.keys():
-                ts_list = ts_by_l1.get(l1_code, [])
-                for ts_code in ts_list:
-                    rev_map = rev_nested.get(ts_code, {})
-                    if not rev_map:
-                        continue
-                    for p in periods:
-                        yq = _fina_yq_from_anchor(p)
-                        if not yq:
-                            continue
-                        sq = _fina_quarter_single_revenue(rev_map, yq[0], yq[1])
-                        if sq is not None:
-                            ind_rev[l1_code][p] += float(sq)
-        else:
-            for ts_code, rev_map in rev_nested.items():
-                ind_info = ts_to_ind.get(ts_code)
-                if ind_info is None:
-                    continue
-                l1_code = ind_info[0]
-                for p in periods:
-                    yq = _fina_yq_from_anchor(p)
-                    if not yq:
-                        continue
-                    sq = _fina_quarter_single_revenue(rev_map, yq[0], yq[1])
-                    if sq is not None:
-                        ind_rev[l1_code][p] += float(sq)
-
-        # 复用 sw 现有市值口径
-        ind_total_mv: dict[str, float] = defaultdict(float)
-        ind_free_mv: dict[str, float] = defaultdict(float)
-        market_total_mv = 0.0
-        market_free_mv = 0.0
-        has_tmv = _tushare_column_exists(conn, 'stk_factor_pro', 'total_mv')
-        has_fs = _tushare_column_exists(conn, 'stk_factor_pro', 'free_share')
-        if has_tmv or has_fs:
-            max_d = None
-            with conn.cursor() as cur:
-                cur.execute('SELECT MAX(trade_date) FROM stock_tushare.stk_factor_pro')
-                mx = cur.fetchone()
-                if mx and mx[0] is not None:
-                    max_d = mx[0]
-            sfp_map: dict[str, tuple[float | None, float | None]] = {}
-            if max_d is not None:
-                sel_cols = ['ts_code']
-                if has_tmv:
-                    sel_cols.append('total_mv')
-                if has_fs:
-                    sel_cols.append('free_share')
-                col_sql = ', '.join(sel_cols)
-                chunk = 480
-                for i in range(0, len(ts_codes), chunk):
-                    part = ts_codes[i:i + chunk]
-                    if not part:
-                        continue
-                    ph = ', '.join(['%s'] * len(part))
-                    sql = f'SELECT {col_sql} FROM stock_tushare.stk_factor_pro WHERE trade_date = %s AND ts_code IN ({ph})'
-                    with conn.cursor() as cur:
-                        cur.execute(sql, (max_d, *part))
-                        for raw in cur.fetchall() or []:
-                            if not raw or raw[0] is None:
-                                continue
-                            tc = str(raw[0]).strip()
-                            if not tc:
-                                continue
-                            idx = 1
-                            tmv_num = None
-                            fs_num = None
-                            if has_tmv:
-                                try:
-                                    tmv_num = float(raw[idx]) / 10000.0 if raw[idx] is not None else None
-                                except (TypeError, ValueError):
-                                    tmv_num = None
-                                idx += 1
-                            if has_fs:
-                                try:
-                                    fs_num = float(raw[idx]) if raw[idx] is not None else None
-                                except (TypeError, ValueError):
-                                    fs_num = None
-                            sfp_map[tc] = (tmv_num, fs_num)
-
-            close_map: dict[str, float] = {}
-            if has_fs:
-                try:
-                    conn_w = pymysql.connect(**DB_CONFIG)
-                    try:
-                        chunk = 480
-                        for i in range(0, len(ts_codes), chunk):
-                            part = ts_codes[i:i + chunk]
-                            if not part:
-                                continue
-                            ph = ', '.join(['%s'] * len(part))
-                            sql = (
-                                'SELECT ts_code, close FROM ('
-                                '  SELECT ts_code, close, ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_time DESC) AS rn '
-                                f'  FROM rt_k WHERE ts_code IN ({ph})'
-                                ') x WHERE rn = 1'
-                            )
-                            with conn_w.cursor() as cur:
-                                cur.execute(sql, tuple(part))
-                                for r2 in cur.fetchall() or []:
-                                    if not r2 or r2[0] is None or r2[1] is None:
-                                        continue
-                                    try:
-                                        close_map[str(r2[0]).strip()] = float(r2[1])
-                                    except (TypeError, ValueError):
-                                        continue
-                    finally:
-                        conn_w.close()
-                except Exception as e:
-                    logger.warning('index_industry_stats 查询 rt_k close 失败: %s', e)
-
-            if is_index_overview:
-                market_tmv_seen: set[str] = set()
-                market_fmv_seen: set[str] = set()
-                for l1_code in ind_meta.keys():
-                    for tc in ts_by_l1.get(l1_code, []):
-                        pair = sfp_map.get(tc)
-                        if not pair:
-                            continue
-                        tmv_yi, fs_wangu = pair
-                        if tmv_yi is not None:
-                            ind_total_mv[l1_code] += float(tmv_yi)
-                            if tc not in market_tmv_seen:
-                                market_total_mv += float(tmv_yi)
-                                market_tmv_seen.add(tc)
-                        if fs_wangu is not None and close_map.get(tc) is not None:
-                            free_yi = float(fs_wangu) * float(close_map[tc]) / 10000.0
-                            ind_free_mv[l1_code] += free_yi
-                            if tc not in market_fmv_seen:
-                                market_free_mv += free_yi
-                                market_fmv_seen.add(tc)
-            else:
-                for tc in ts_codes:
-                    ind_info = ts_to_ind.get(tc)
-                    if ind_info is None:
-                        continue
-                    l1_code = ind_info[0]
-                    pair = sfp_map.get(tc)
-                    if not pair:
-                        continue
-                    tmv_yi, fs_wangu = pair
-                    if tmv_yi is not None:
-                        ind_total_mv[l1_code] += float(tmv_yi)
-                        market_total_mv += float(tmv_yi)
-                    if fs_wangu is not None and close_map.get(tc) is not None:
-                        free_yi = float(fs_wangu) * float(close_map[tc]) / 10000.0
-                        ind_free_mv[l1_code] += free_yi
-                        market_free_mv += free_yi
-
-        # 扣非/扩展口径复用 sw
-        period_keys_for_dtp: set[str] = set()
-        ind_dtp: dict[str, dict[str, float]] = defaultdict(dict)
-        market_dtp_by_p: dict[str, float] = defaultdict(float)
-        if has_q_dtprofit:
-            period_keys_for_dtp = set(periods)
-            for _p in periods:
-                _pp = _fina_yoy_anchor_end_date(_p)
-                if _pp:
-                    period_keys_for_dtp.add(_pp)
-            for l1_code in ind_meta.keys():
-                for pk in period_keys_for_dtp:
-                    ind_dtp[l1_code][pk] = 0.0
-            if is_index_overview:
-                for l1_code in ind_meta.keys():
-                    for ts_code in ts_by_l1.get(l1_code, []):
-                        ed_map = dtp_nested.get(ts_code, {})
-                        if not ed_map:
-                            continue
-                        for pk in period_keys_for_dtp:
-                            pv = ed_map.get(pk)
-                            if pv is not None:
-                                ind_dtp[l1_code][pk] += float(pv)
-            else:
-                for ts_code, ed_map in dtp_nested.items():
-                    ind_info = ts_to_ind.get(ts_code)
-                    if ind_info is None:
-                        continue
-                    l1_code = ind_info[0]
-                    for pk in period_keys_for_dtp:
-                        pv = ed_map.get(pk)
-                        if pv is not None:
-                            ind_dtp[l1_code][pk] += float(pv)
-            for l1_code in ind_meta.keys():
-                for pk in period_keys_for_dtp:
-                    market_dtp_by_p[pk] += float(ind_dtp[l1_code][pk])
-
-        cf_nested_sw: dict[str, dict[str, float]] = {}
-        margin_nested_sw: dict[str, dict[str, tuple[float | None, float | None]]] = {}
-        bs_cf_nested_sw: dict[str, dict[str, tuple[float | None, float | None]]] = {}
-        if periods and ts_codes:
-            has_n_cf_sw = _tushare_column_exists(conn, 'cashflow', 'n_cashflow_act')
-            has_cf_rt_sw = _tushare_column_exists(conn, 'cashflow', 'report_type')
-            has_q_gs_sw = _tushare_column_exists(conn, 'fina_indicator', 'q_gsprofit_margin')
-            has_q_dt_roe_sw = _tushare_column_exists(conn, 'fina_indicator', 'q_dt_roe')
-            has_bs_rt_sw = _tushare_column_exists(conn, 'balancesheet', 'report_type')
-            has_adv_sw = _tushare_column_exists(conn, 'balancesheet', 'adv_receipts')
-            has_cl_sw = _tushare_column_exists(conn, 'balancesheet', 'contract_liab')
-            has_fa_sw = _tushare_column_exists(conn, 'balancesheet', 'fix_assets_total')
-            cf_keys_sq = _fina_income_date_keys_with_yoy_for_periods(periods)
-            if has_n_cf_sw:
-                try:
-                    cf_nested_sw = _fina_batch_cashflow_n_cashflow_act(conn, ts_codes, cf_keys_sq, has_cf_rt_sw)
-                    has_sw_extend_metrics = True
-                except Exception as e:
-                    logger.warning('index_industry_stats 经营现金流批量读取失败: %s', e)
-            if has_q_gs_sw or has_q_dt_roe_sw:
-                try:
-                    margin_nested_sw = _fina_batch_fina_indicator_q_gs_margin_q_dt_roe(conn, ts_codes, periods, has_fi_rt, has_q_gs_sw, has_q_dt_roe_sw)
-                    has_sw_extend_metrics = True
-                except Exception as e:
-                    logger.warning('index_industry_stats 毛利率/ROE(扣非)批量读取失败: %s', e)
-            if has_cl_sw or has_fa_sw:
-                try:
-                    bs_cf_nested_sw = _fina_batch_balancesheet_contract_fix_yi(conn, ts_codes, periods, has_bs_rt=has_bs_rt_sw, has_adv=has_adv_sw, has_contract=has_cl_sw, has_fix=has_fa_sw)
-                    has_sw_extend_metrics = True
-                except Exception as e:
-                    logger.warning('index_industry_stats 合同负债/固定资产批量读取失败: %s', e)
-
-        range_cache_sw: dict[str, dict] = {}
-        rt_sw_quotes: dict[str, dict] = {}
-        amt_pctile_cache_sw: dict[str, dict[str, float | None]] = {}
-        if (not is_index_overview) and level != 'l3':
-            idx_sw_list: list[str] = []
-            seen_sw_ts: set[str] = set()
-            for gc in ind_meta.keys():
-                tsu = _normalize_sw_industry_index_ts_code(str(gc))
-                if tsu and tsu not in seen_sw_ts:
-                    seen_sw_ts.add(tsu)
-                    idx_sw_list.append(tsu)
-            idx_sw_list.sort()
-            _bts_amt = str(SW_STATS_SUMMARY_ALL_A_SW_TS or "").strip().upper()
-            if _bts_amt and _bts_amt not in seen_sw_ts:
-                seen_sw_ts.add(_bts_amt)
-                idx_sw_list.append(_bts_amt)
-            idx_sw_list.sort()
-            rt_sw_quotes = _fetch_rt_sw_k_quotes(idx_sw_list, conn)
-            for tsu in idx_sw_list:
-                range_cache_sw[tsu] = _read_index_sw_daily_interval_range_pct(
-                    conn, tsu, rt_sw_quotes.get(tsu)
-                )
-            bench_ts_amt = SW_STATS_SUMMARY_ALL_A_SW_TS
-            min_amt_d = date.today() - timedelta(days=366 * 7 + 30)
-            bench_amt_map = _load_index_sw_daily_amount_by_date(
-                conn, bench_ts_amt, min_amt_d
-            )
-            row_amt_maps: dict[str, dict[date, float]] = {}
-            for tsu in idx_sw_list:
-                row_amt_maps[tsu] = _load_index_sw_daily_amount_by_date(conn, tsu, min_amt_d)
-            _bench_rt_q_sw = rt_sw_quotes.get(_bts_amt)
-            for tsu in idx_sw_list:
-                amt_pctile_cache_sw[tsu] = _read_sw_amount_ratio_percentiles(
-                    conn,
-                    tsu,
-                    rt_sw_quotes.get(tsu),
-                    bench_ts_amt,
-                    bench_amt_map,
-                    row_amt_maps[tsu],
-                    bench_rt_quote=_bench_rt_q_sw,
-                )
-
-        rows = []
-        for l1_code in sorted(ind_meta.keys()):
-            row = {
-                'l1_code': l1_code,
-                'l1_name': ind_meta[l1_code].get('l1_name'),
-                'company_count': int(ind_meta[l1_code].get('company_count') or 0),
-                'weight_pct': round(float(ind_meta[l1_code].get('weight_pct') or 0.0), 2),
-                'total_mv_yi': round(float(ind_total_mv.get(l1_code, 0.0)), 2),
-                'free_mv_yi': round(float(ind_free_mv.get(l1_code, 0.0)), 2),
-            }
-            for idx, p in enumerate(periods):
-                row[f's{idx}'] = round((ind_rev.get(l1_code, {}).get(p, 0.0) / 100000000.0), 2)
-            if has_q_dtprofit:
-                for idx, p in enumerate(periods):
-                    cur_raw = float(ind_dtp.get(l1_code, {}).get(p, 0.0))
-                    row[f'dtp{idx}'] = round(cur_raw / 100000000.0, 2)
-                    pp = _fina_yoy_anchor_end_date(p)
-                    prev_raw = float(ind_dtp.get(l1_code, {}).get(pp, 0.0)) if pp else 0.0
-                    row[f'dnk{idx}'] = bool(pp and prev_raw < 0 and cur_raw > 0)
-            else:
-                for idx in range(len(periods)):
-                    row[f'dtp{idx}'] = None
-            _sw_attach_high_qoq_pair(row, 's', 's_high', 's_qoq', len(periods))
-            _sw_attach_high_qoq_pair(row, 'dtp', 'dtp_high', 'dtp_qoq', len(periods))
-            for idx, p in enumerate(periods):
-                yv = _sw_rev_yoy_yoypct_for_codes(ts_by_l1.get(l1_code, []), rev_nested, p)
-                row[f'y{idx}'] = round(yv, 2) if yv is not None else None
-            if has_q_dtprofit:
-                for idx, p in enumerate(periods):
-                    dyv = _sw_dtp_yoy_yoypct_for_codes(ts_by_l1.get(l1_code, []), dtp_nested, p)
-                    row[f'dy{idx}'] = round(dyv, 2) if dyv is not None else None
-            if has_sw_extend_metrics:
-                ts_list = ts_by_l1.get(l1_code, [])
-                for idx, p in enumerate(periods):
-                    ycfv = _sw_cf_yoy_yoypct_for_codes(ts_list, cf_nested_sw, p)
-                    row[f'ycf{idx}'] = round(ycfv, 2) if ycfv is not None else None
-                    pp_y = _fina_yoy_anchor_end_date(p)
-                    if pp_y:
-                        cur_cf_y = _sw_cf_industry_single_q_sum_yuan(ts_list, cf_nested_sw, p)
-                        prev_cf_y = _sw_cf_industry_single_q_sum_yuan(ts_list, cf_nested_sw, pp_y)
-                        row[f'ycfnk{idx}'] = bool(cur_cf_y is not None and prev_cf_y is not None and prev_cf_y < 0 and cur_cf_y > 0)
-                    else:
-                        row[f'ycfnk{idx}'] = False
-                for idx, p in enumerate(periods):
-                    tot_yuan = 0.0
-                    any_ocf = False
-                    for tc in ts_list:
-                        yq = _fina_yq_from_anchor(p)
-                        if not yq:
-                            continue
-                        sq = _fina_quarter_single_revenue(cf_nested_sw.get(tc, {}), yq[0], yq[1])
-                        if sq is not None:
-                            tot_yuan += float(sq)
-                            any_ocf = True
-                    row[f'qcf{idx}'] = round(tot_yuan / 100000000.0, 2) if any_ocf else None
-                    gms: list[float] = []
-                    roes: list[float] = []
-                    for tc in ts_list:
-                        tup_m = margin_nested_sw.get(tc, {}).get(p)
-                        if not tup_m:
-                            continue
-                        if tup_m[0] is not None:
-                            gms.append(float(tup_m[0]))
-                        if tup_m[1] is not None:
-                            roes.append(float(tup_m[1]))
-                    row[f'qgm{idx}'] = _sw_median_rounded(gms)
-                    row[f'qroe{idx}'] = _sw_median_rounded(roes)
-                    cs = 0.0
-                    fs = 0.0
-                    any_cl = False
-                    any_fa = False
-                    for tc in ts_list:
-                        tup_b = bs_cf_nested_sw.get(tc, {}).get(p)
-                        if not tup_b:
-                            continue
-                        if tup_b[0] is not None:
-                            cs += float(tup_b[0])
-                            any_cl = True
-                        if tup_b[1] is not None:
-                            fs += float(tup_b[1])
-                            any_fa = True
-                    row[f'cl{idx}'] = round(cs, 2) if any_cl else None
-                    row[f'fa{idx}'] = round(fs, 2) if any_fa else None
-                _sw_attach_high_qoq_pair(row, 'qcf', 'qcf_high', 'qcf_qoq', len(periods))
-                _sw_attach_high_qoq_pair(row, 'qgm', 'qgm_high', 'qgm_qoq', len(periods))
-                _sw_attach_high_qoq_pair(row, 'qroe', 'qroe_high', 'qroe_qoq', len(periods))
-            else:
-                for idx in range(len(periods)):
-                    row[f'ycf{idx}'] = None
-                    row[f'ycfnk{idx}'] = None
-                    row[f'qcf{idx}'] = None
-                    row[f'qgm{idx}'] = None
-                    row[f'qroe{idx}'] = None
-                    row[f'cl{idx}'] = None
-                    row[f'fa{idx}'] = None
-                row['qcf_high'] = None
-                row['qcf_qoq'] = None
-                row['qgm_high'] = None
-                row['qgm_qoq'] = None
-                row['qroe_high'] = None
-                row['qroe_qoq'] = None
-            if is_index_overview or level == 'l3':
-                row['sw_pct'] = None
-                row['sw_pct_t1'] = None
-                row['sw_pct_t5'] = None
-                row['sw_pct_t20'] = None
-                row['sw_pct_t60'] = None
-                row['sw_pct_t120'] = None
-                row['sw_amt_pctile_t0'] = None
-                row['sw_amt_pctile_t1'] = None
-                row['sw_amt_pctile_t5'] = None
-                row['sw_amt_pctile_t20'] = None
-                row['sw_amt_pctile_t60'] = None
-                row['sw_amt_pctile_t120'] = None
-            else:
-                idx_ts = _normalize_sw_industry_index_ts_code(l1_code)
-                rq = rt_sw_quotes.get(idx_ts) if idx_ts else None
-                sw_pct_val = None
-                if rq and rq.get('pct_change') is not None:
-                    try:
-                        sw_pct_val = round(float(rq['pct_change']), 2)
-                    except (TypeError, ValueError):
-                        sw_pct_val = None
-                rd_sw = range_cache_sw.get(idx_ts) if idx_ts else None
-                row['sw_pct'] = sw_pct_val
-                row['sw_pct_t1'] = (rd_sw or {}).get('range_pct_t1')
-                row['sw_pct_t5'] = (rd_sw or {}).get('range_pct_t5')
-                row['sw_pct_t20'] = (rd_sw or {}).get('range_pct_t20')
-                row['sw_pct_t60'] = (rd_sw or {}).get('range_pct_t60')
-                row['sw_pct_t120'] = (rd_sw or {}).get('range_pct_t120')
-                rd_amt = amt_pctile_cache_sw.get(idx_ts) if idx_ts else None
-                row['sw_amt_pctile_t0'] = (rd_amt or {}).get('sw_amt_pctile_t0')
-                row['sw_amt_pctile_t1'] = (rd_amt or {}).get('sw_amt_pctile_t1')
-                row['sw_amt_pctile_t5'] = (rd_amt or {}).get('sw_amt_pctile_t5')
-                row['sw_amt_pctile_t20'] = (rd_amt or {}).get('sw_amt_pctile_t20')
-                row['sw_amt_pctile_t60'] = (rd_amt or {}).get('sw_amt_pctile_t60')
-                row['sw_amt_pctile_t120'] = (rd_amt or {}).get('sw_amt_pctile_t120')
-            rows.append(row)
-
-        summary_row: dict | None = None
-        if rows:
-            selected_l1_name = l1_option_map.get(parent_l1_code) if parent_l1_code else None
-            selected_l2_name = l2_option_map.get(parent_l2_code) if parent_l2_code else None
-            summary_row = {
-                'l1_code': '',
-                'l1_name': selected_l2_name or selected_l1_name or ('全部宽基指数' if not index_code else dict(INDEX_MONITOR_CODES).get(index_code, index_code)),
-                'company_count': sum(int(r.get('company_count') or 0) for r in rows),
-                'weight_pct': 100.0,
-                'total_mv_yi': round(float(market_total_mv), 2),
-                'free_mv_yi': round(float(market_free_mv), 2),
-                'is_summary': True,
-            }
-            for idx in range(len(periods)):
-                summary_row[f's{idx}'] = round(sum(float(r.get(f's{idx}') or 0) for r in rows), 2)
-            if has_q_dtprofit:
-                for idx in range(len(periods)):
-                    summary_row[f'dtp{idx}'] = round(sum(float(r.get(f'dtp{idx}') or 0) for r in rows), 2)
-                for idx, p in enumerate(periods):
-                    pp = _fina_yoy_anchor_end_date(p)
-                    cur_m = float(market_dtp_by_p.get(p, 0.0))
-                    prev_m = float(market_dtp_by_p.get(pp, 0.0)) if pp else 0.0
-                    summary_row[f'dnk{idx}'] = bool(pp and prev_m < 0 and cur_m > 0)
-            else:
-                for idx in range(len(periods)):
-                    summary_row[f'dtp{idx}'] = None
-            for idx, p in enumerate(periods):
-                ysum = _sw_rev_yoy_yoypct_for_codes(ts_codes, rev_nested, p)
-                summary_row[f'y{idx}'] = round(ysum, 2) if ysum is not None else None
-            if has_q_dtprofit:
-                for idx, p in enumerate(periods):
-                    dys = _sw_dtp_yoy_yoypct_for_codes(ts_codes, dtp_nested, p)
-                    summary_row[f'dy{idx}'] = round(dys, 2) if dys is not None else None
-            _sw_attach_high_qoq_pair(summary_row, 's', 's_high', 's_qoq', len(periods))
-            _sw_attach_high_qoq_pair(summary_row, 'dtp', 'dtp_high', 'dtp_qoq', len(periods))
-            if has_sw_extend_metrics:
-                for idx, p in enumerate(periods):
-                    ycfv_s = _sw_cf_yoy_yoypct_for_codes(ts_codes, cf_nested_sw, p)
-                    summary_row[f'ycf{idx}'] = round(ycfv_s, 2) if ycfv_s is not None else None
-                    pp_s = _fina_yoy_anchor_end_date(p)
-                    if pp_s:
-                        cur_cf_s = _sw_cf_industry_single_q_sum_yuan(ts_codes, cf_nested_sw, p)
-                        prev_cf_s = _sw_cf_industry_single_q_sum_yuan(ts_codes, cf_nested_sw, pp_s)
-                        summary_row[f'ycfnk{idx}'] = bool(cur_cf_s is not None and prev_cf_s is not None and prev_cf_s < 0 and cur_cf_s > 0)
-                    else:
-                        summary_row[f'ycfnk{idx}'] = False
-                for idx, p in enumerate(periods):
-                    tot_yuan = 0.0
-                    any_ocf = False
-                    for tc in ts_codes:
-                        yq = _fina_yq_from_anchor(p)
-                        if not yq:
-                            continue
-                        sq = _fina_quarter_single_revenue(cf_nested_sw.get(tc, {}), yq[0], yq[1])
-                        if sq is not None:
-                            tot_yuan += float(sq)
-                            any_ocf = True
-                    summary_row[f'qcf{idx}'] = round(tot_yuan / 100000000.0, 2) if any_ocf else None
-                    gms_m: list[float] = []
-                    roes_m: list[float] = []
-                    for tc in ts_codes:
-                        tup_mm = margin_nested_sw.get(tc, {}).get(p)
-                        if not tup_mm:
-                            continue
-                        if tup_mm[0] is not None:
-                            gms_m.append(float(tup_mm[0]))
-                        if tup_mm[1] is not None:
-                            roes_m.append(float(tup_mm[1]))
-                    summary_row[f'qgm{idx}'] = _sw_median_rounded(gms_m)
-                    summary_row[f'qroe{idx}'] = _sw_median_rounded(roes_m)
-                    cs_m = 0.0
-                    fs_m = 0.0
-                    any_cl_m = False
-                    any_fa_m = False
-                    for tc in ts_codes:
-                        tup_bm = bs_cf_nested_sw.get(tc, {}).get(p)
-                        if not tup_bm:
-                            continue
-                        if tup_bm[0] is not None:
-                            cs_m += float(tup_bm[0])
-                            any_cl_m = True
-                        if tup_bm[1] is not None:
-                            fs_m += float(tup_bm[1])
-                            any_fa_m = True
-                    summary_row[f'cl{idx}'] = round(cs_m, 2) if any_cl_m else None
-                    summary_row[f'fa{idx}'] = round(fs_m, 2) if any_fa_m else None
-                _sw_attach_high_qoq_pair(summary_row, 'qcf', 'qcf_high', 'qcf_qoq', len(periods))
-                _sw_attach_high_qoq_pair(summary_row, 'qgm', 'qgm_high', 'qgm_qoq', len(periods))
-                _sw_attach_high_qoq_pair(summary_row, 'qroe', 'qroe_high', 'qroe_qoq', len(periods))
-            else:
-                for idx in range(len(periods)):
-                    summary_row[f'ycf{idx}'] = None
-                    summary_row[f'ycfnk{idx}'] = None
-                    summary_row[f'qcf{idx}'] = None
-                    summary_row[f'qgm{idx}'] = None
-                    summary_row[f'qroe{idx}'] = None
-                    summary_row[f'cl{idx}'] = None
-                    summary_row[f'fa{idx}'] = None
-                summary_row['qcf_high'] = None
-                summary_row['qcf_qoq'] = None
-                summary_row['qgm_high'] = None
-                summary_row['qgm_qoq'] = None
-                summary_row['qroe_high'] = None
-                summary_row['qroe_qoq'] = None
-
-        if summary_row is not None:
-            for _sk in (
-                'sw_pct',
-                'sw_pct_t1',
-                'sw_pct_t5',
-                'sw_pct_t20',
-                'sw_pct_t60',
-                'sw_pct_t120',
-                'sw_amt_pctile_t0',
-                'sw_amt_pctile_t1',
-                'sw_amt_pctile_t5',
-                'sw_amt_pctile_t20',
-                'sw_amt_pctile_t60',
-                'sw_amt_pctile_t120',
-            ):
-                summary_row[_sk] = None
-
-        payload = {
-            'success': True,
-            'rows': rows,
-            'summary_row': summary_row,
-            'periods': periods,
-            'has_q_dtprofit': bool(has_q_dtprofit),
-            'has_rev_yoy': len(periods) > 0,
-            'has_dtp_yoy': bool(has_q_dtprofit and len(periods) > 0),
-            'level': level,
-            'selected_l1_code': parent_l1_code,
-            'selected_l1_name': l1_option_map.get(parent_l1_code),
-            'selected_l2_code': parent_l2_code,
-            'selected_l2_name': l2_option_map.get(parent_l2_code),
-            'l1_options': [{'l1_code': k, 'l1_name': v} for k, v in sorted(l1_option_map.items(), key=lambda x: x[1])],
-            'l2_options': [{'l2_code': k, 'l2_name': v} for k, v in sorted(l2_option_map.items(), key=lambda x: x[1])],
-            'count': len(rows),
-            'has_sw_extend_metrics': bool(has_sw_extend_metrics and len(periods) > 0),
-            'cache_ttl_sec': SW_INDUSTRY_STATS_CACHE_TTL_API_SEC,
-            'index_code': index_code,
-            'index_options': index_options,
-            'selected_index_codes': selected_codes,
-        }
-        _small_ttl_cache_put(_index_industry_stats_cache, cache_key, payload, SW_INDUSTRY_STATS_CACHE_TTL, SW_INDUSTRY_STATS_CACHE_MAX)
-        return jsonify(payload)
-    except Exception as e:
-        logger.error('读取宽基指数行业统计失败: %s', e)
-        return jsonify({'success': False, 'error': str(e), 'rows': []}), 500
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
 
 def get_rt_median():
     """行情涨跌中位数 API：只读 index_stat。按 TTL 重新读表以拿到盘中实时统计写入的最新数据。
-    指数区间涨跌幅、成交额 MAX T-60 仅在 TTL 刷新时重算，与 index_stat 缓存同周期，避免轮询时重复打库。"""
+    指数区间涨跌幅、成交额全历史 MAX 与 MAX/MIN T-60 仅在 TTL 刷新时重算，与 index_stat 缓存同周期，避免轮询时重复打库。"""
     global rt_table_cache, rt_last_read_ts
     now = time.time()
     with _cache_lock:
@@ -6987,6 +3709,27 @@ def get_rt_median():
                             _ts,
                             row_e,
                         )
+                try:
+                    metric_hist = _ensure_idx_metric_history(conn_idx, idx_ts_list)
+                    live_keys = (
+                        ('pct', 'idx_pct_t', 'idx_pct_per'),
+                        ('intra', 'idx_intra_t', 'idx_intra_per'),
+                        ('gap', 'idx_gap_t', 'idx_gap_per'),
+                        ('amp', 'idx_amp_t', 'idx_amp_per'),
+                    )
+                    for _r in table_idx:
+                        _cat = (_r.get('category') or '').strip()
+                        _ts = IDX_PCT_CATEGORY_TO_TS.get(_cat)
+                        samples = metric_hist.get(_ts) or {} if _ts else {}
+                        for sample_key, live_key, per_key in live_keys:
+                            if not _ts:
+                                _r[per_key] = None
+                                continue
+                            _r[per_key] = _idx_gap_percentile(
+                                samples.get(sample_key) or (), _r.get(live_key)
+                            )
+                except Exception as gap_e:
+                    logger.warning('涨跌幅表全历史分位失败: %s', gap_e)
             except Exception as e:
                 logger.warning("table_idx 指数区间涨跌幅失败: %s", e)
             finally:
@@ -6997,7 +3740,7 @@ def get_rt_median():
                         pass
         except Exception as e:
             logger.warning("table_idx 区间涨跌幅外层失败: %s", e)
-    # 成交额（亿）表：各行补充 index_daily 最近 60 个交易日窗口内最大/最小 amount（亿）及对应 trade_date
+    # 成交额（亿）表：全历史 MAX/峰值日，以及最近 60 个交易日窗口内最大/最小 amount（亿）及对应 trade_date
     if need_read and table_med:
         try:
             conn_amt = pymysql.connect(**DB_CONFIG_TUSHARE)
@@ -7008,8 +3751,17 @@ def get_rt_median():
                     _ts = AMOUNT_CATEGORY_TO_INDEX_TS.get(_cat)
                     if _ts:
                         ts_for_batch.append(_ts)
+                hist_map = _batch_index_daily_max_amount_all(conn_amt, ts_for_batch)
                 peak_map = _batch_index_daily_peak_amount_last_n_trade_dates(conn_amt, ts_for_batch, 60)
                 valley_map = _batch_index_daily_valley_amount_last_n_trade_dates(conn_amt, ts_for_batch, 60)
+                if ts_for_batch and not hist_map:
+                    hist_map = {}
+                    for t in sorted(set(ts_for_batch)):
+                        try:
+                            hist_map[t] = _index_daily_max_amount_all(conn_amt, t)
+                        except Exception as fb_e:
+                            logger.warning("成交额表：逐码全历史 MAX 失败 ts=%s: %s", t, fb_e)
+                            hist_map[t] = (None, None)
                 if ts_for_batch and not peak_map:
                     peak_map = {}
                     for t in sorted(set(ts_for_batch)):
@@ -7032,6 +3784,9 @@ def get_rt_median():
                         _ts = AMOUNT_CATEGORY_TO_INDEX_TS.get(_cat)
                         if not _ts:
                             if _cat == AMOUNT_ALL_A_CATEGORY:
+                                _hall_yi, _hall_ds = _marketinfo_max_amount_all(conn_amt)
+                                _r['idx_daily_max_all'] = _hall_yi
+                                _r['idx_daily_max_all_date'] = _hall_ds
                                 _yi, _ds = _marketinfo_max_amount_last_n_trade_dates(conn_amt, 60)
                                 _r['idx_daily_max_t60'] = _yi
                                 _r['idx_daily_max_t60_date'] = _ds
@@ -7039,11 +3794,11 @@ def get_rt_median():
                                 _r['idx_daily_min_t60'] = _min_yi
                                 _r['idx_daily_min_t60_date'] = _min_ds
                             else:
-                                _r['idx_daily_max_t60'] = None
-                                _r['idx_daily_max_t60_date'] = None
-                                _r['idx_daily_min_t60'] = None
-                                _r['idx_daily_min_t60_date'] = None
+                                _blank_amount_extreme_fields(_r)
                             continue
+                        _hall_yi, _hall_ds = hist_map.get(_ts, (None, None))
+                        _r['idx_daily_max_all'] = _hall_yi
+                        _r['idx_daily_max_all_date'] = _hall_ds
                         _yi, _ds = peak_map.get(_ts, (None, None))
                         _r['idx_daily_max_t60'] = _yi
                         _r['idx_daily_max_t60_date'] = _ds
@@ -7051,11 +3806,8 @@ def get_rt_median():
                         _r['idx_daily_min_t60'] = _min_yi
                         _r['idx_daily_min_t60_date'] = _min_ds
                     except Exception as amt_row_e:
-                        logger.warning("成交额表：单行 T-60 附加失败 category=%s: %s", _cat, amt_row_e)
-                        _r['idx_daily_max_t60'] = None
-                        _r['idx_daily_max_t60_date'] = None
-                        _r['idx_daily_min_t60'] = None
-                        _r['idx_daily_min_t60_date'] = None
+                        logger.warning("成交额表：单行峰值附加失败 category=%s: %s", _cat, amt_row_e)
+                        _blank_amount_extreme_fields(_r)
             finally:
                 try:
                     conn_amt.close()
@@ -7124,6 +3876,8 @@ def api_limit_stats():
     try:
         data = read_limit_stats_panel()
         with _cache_lock:
+            if limit_stats_cache is not None:
+                data = _merge_limit_stats_panel(limit_stats_cache, data)
             limit_stats_cache = data
             limit_stats_last_read_ts = now_ts
         resp = jsonify(data)
@@ -7242,13 +3996,15 @@ def get_idx_minute_diff_prev5():
 
 def _query_top_moves(limit: int = 30):
     """从 stock_wind.stockstat 读取冲高回落/大幅回升/当日成交额 TopN，并补充申万行业。
+    - 三表均 INNER JOIN 当日新鲜 rt_k，且排除 vol=0 且 amount=0（停牌/无成交），与盘中实时统计口径一致。
     - decline：decline_rate 升序（越小回落越多）
     - recovery：recovery_rate 降序（越大回升越多）
     - amount_top：amount 降序；昨成交额来自 stk_factor_pro 各码最新 trade_date 的 amount（千元→亿）；
-      自由流通换手率 = rt_k.vol（股）/ (free_share（万股）×10000) ×100。
-    - amount_top_weighted_pct：TopN 内 Σ(pctchange×amount)/Σ(amount)，amount 与排序列同为 **stockstat.amount**（元），
-      非 rt_k.amount；与「按 stockstat 成交额取前 N 名再加权」自洽，算术无误。若需与盘口 rt_k 成交额逐字对齐，需改排序与权重来源。
+      自由流通换手率 = rt_k.vol（股）/ (free_share（万股）×10000) ×100；
+      free_share 优先取最新日，为空则回退最近非空日（股本变动慢，盘后字段未齐时避免整列 --）。
+    - amount_top_weighted_pct：TopN 内 Σ(pctchange×amount)/Σ(amount)，amount 与排序列同为 **stockstat.amount**（元）。
     """
+    global _topMovesFactorExp
     empty_top = {
         'decline_top30': [],
         'recovery_top30': [],
@@ -7289,11 +4045,16 @@ def _query_top_moves(limit: int = 30):
     try:
         # 申万行业：与 read_limit_stats_detail / _limit_stats_sw_join_sql 同一套 LEFT JOIN，禁止 SELECT 标量子查询 × TopN
         _sw_j = _limit_stats_sw_join_sql('s.windcodes')
+        _rt_k_active = (
+            "INNER JOIN stock_wind.rt_k rt ON rt.ts_code = s.windcodes "
+            f"AND {_LIMIT_STATS_RT_K_FRESH_TRADE_DATE} "
+            "AND NOT (rt.vol = 0 AND rt.amount = 0) "
+        )
         sql_decline = f"""
             SELECT s.windcodes, s.sec_name, s.amount, s.decline_rate,
                    {_LIMIT_STATS_SW_NAME_SELECT}
             FROM stock_wind.stockstat s
-            {_sw_j}WHERE s.decline_rate IS NOT NULL
+            {_rt_k_active}{_sw_j}WHERE s.decline_rate IS NOT NULL
             ORDER BY s.decline_rate ASC
             LIMIT {limit_n}
         """
@@ -7301,7 +4062,7 @@ def _query_top_moves(limit: int = 30):
             SELECT s.windcodes, s.sec_name, s.amount, s.recovery_rate,
                    {_LIMIT_STATS_SW_NAME_SELECT}
             FROM stock_wind.stockstat s
-            {_sw_j}WHERE s.recovery_rate IS NOT NULL
+            {_rt_k_active}{_sw_j}WHERE s.recovery_rate IS NOT NULL
             ORDER BY s.recovery_rate DESC
             LIMIT {limit_n}
         """
@@ -7309,7 +4070,7 @@ def _query_top_moves(limit: int = 30):
             SELECT s.windcodes, s.sec_name, s.amount, s.pctchange,
                    {_LIMIT_STATS_SW_NAME_SELECT}
             FROM stock_wind.stockstat s
-            {_sw_j}WHERE s.amount IS NOT NULL AND s.amount > 0
+            {_rt_k_active}{_sw_j}WHERE s.amount IS NOT NULL AND s.amount > 0
             ORDER BY s.amount DESC
             LIMIT {limit_n}
         """
@@ -7337,28 +4098,63 @@ def _query_top_moves(limit: int = 30):
                 for row in cur.fetchall() or []:
                     if row and row[0] is not None:
                         volByCode[row[0]] = row[1]
-            try:
-                conn_ts = pymysql.connect(**DB_CONFIG_TUSHARE)
+            missing = []
+            nowTs = time.time()
+            with _topMovesInflightLock:
+                factorFresh = nowTs < _topMovesFactorExp
+                if factorFresh:
+                    missing = [c for c in codes if c not in _topMovesFactorByCode]
+                else:
+                    missing = list(codes)
+            if missing:
                 try:
-                    sql_fp = (
-                        f"SELECT f.ts_code, f.amount, f.free_share "
-                        f"FROM stock_tushare.stk_factor_pro f "
-                        f"INNER JOIN ( "
-                        f"  SELECT ts_code, MAX(trade_date) AS mx "
-                        f"  FROM stock_tushare.stk_factor_pro "
-                        f"  WHERE ts_code IN ({placeholders}) "
-                        f"  GROUP BY ts_code "
-                        f") lm ON f.ts_code = lm.ts_code AND f.trade_date = lm.mx"
-                    )
-                    with conn_ts.cursor() as cur:
-                        cur.execute(sql_fp, codes)
-                        for row in cur.fetchall() or []:
-                            if row and row[0] is not None:
-                                factorByCode[row[0]] = (row[1], row[2])
-                finally:
-                    conn_ts.close()
-            except Exception as e_fp:
-                logger.warning("stk_factor_pro 批量查询失败（昨成交额/自由换手）: %s", e_fp)
+                    conn_ts = pymysql.connect(**DB_CONFIG_TUSHARE)
+                    try:
+                        placeholdersM = ','.join(['%s'] * len(missing))
+                        sql_fp = (
+                            f"SELECT a.ts_code, a.amount, "
+                            f"COALESCE(a.free_share, fs.free_share) AS free_share "
+                            f"FROM ( "
+                            f"  SELECT f.ts_code, f.amount, f.free_share "
+                            f"  FROM stock_tushare.stk_factor_pro f "
+                            f"  INNER JOIN ( "
+                            f"    SELECT ts_code, MAX(trade_date) AS mx "
+                            f"    FROM stock_tushare.stk_factor_pro "
+                            f"    WHERE ts_code IN ({placeholdersM}) "
+                            f"    GROUP BY ts_code "
+                            f"  ) lm ON f.ts_code = lm.ts_code AND f.trade_date = lm.mx "
+                            f") a "
+                            f"LEFT JOIN ( "
+                            f"  SELECT f.ts_code, f.free_share "
+                            f"  FROM stock_tushare.stk_factor_pro f "
+                            f"  INNER JOIN ( "
+                            f"    SELECT ts_code, MAX(trade_date) AS mx "
+                            f"    FROM stock_tushare.stk_factor_pro "
+                            f"    WHERE ts_code IN ({placeholdersM}) "
+                            f"      AND free_share IS NOT NULL AND free_share > 0 "
+                            f"    GROUP BY ts_code "
+                            f"  ) lm2 ON f.ts_code = lm2.ts_code AND f.trade_date = lm2.mx "
+                            f") fs ON a.ts_code = fs.ts_code"
+                        )
+                        with conn_ts.cursor() as cur:
+                            cur.execute(sql_fp, missing + missing)
+                            fetched = {}
+                            for row in cur.fetchall() or []:
+                                if row and row[0] is not None:
+                                    fetched[row[0]] = (row[1], row[2])
+                        with _topMovesInflightLock:
+                            if not factorFresh:
+                                _topMovesFactorByCode.clear()
+                            _topMovesFactorByCode.update(fetched)
+                            _topMovesFactorExp = time.time() + TOP_MOVES_FACTOR_TTL
+                    finally:
+                        conn_ts.close()
+                except Exception as e_fp:
+                    logger.warning("stk_factor_pro 批量查询失败（昨成交额/自由换手）: %s", e_fp)
+            with _topMovesInflightLock:
+                for c in codes:
+                    if c in _topMovesFactorByCode:
+                        factorByCode[c] = _topMovesFactorByCode[c]
 
         # 成交额加权涨跌：与 sql_amount_top 同一批行；权重 = stockstat.amount（与 ORDER BY 一致）
         weighted_pct_num = 0.0
@@ -7416,31 +4212,184 @@ def _query_top_moves(limit: int = 30):
         conn.close()
 
 
+def _emptyTopMovesPayload():
+    return {
+        'decline_top30': [],
+        'recovery_top30': [],
+        'amount_top30': [],
+        'amount_top_weighted_pct': None,
+    }
+
+
+def _loadTopMovesCachedOrStale(limitN: int):
+    nowTs = time.time()
+    hit = _small_ttl_cache_get(_top_moves_cache, limitN, nowTs)
+    if hit is not None:
+        return hit, True
+    return _topMovesLastOk.get(limitN), False
+
+
+def _topMovesIsHeavyDb() -> bool:
+    try:
+        from rt_monitor.services.fina_arturn_queries import isFinaArturnBuilding
+        from rt_monitor.services.sw_industry import isSwIndustryRefreshing
+        return isFinaArturnBuilding() or isSwIndustryRefreshing()
+    except Exception:
+        return False
+
+
+def _topMovesAdaptiveInterval(elapsedSec: float) -> float:
+    """查询越慢下次间隔越长；健康时贴前端 2s，打满库时退到 8s。"""
+    if elapsedSec <= 0.25:
+        return TOP_MOVES_REFRESH_MIN_SEC
+    return min(
+        TOP_MOVES_REFRESH_MAX_SEC,
+        max(TOP_MOVES_REFRESH_MIN_SEC, float(elapsedSec) * 4.0),
+    )
+
+
+def _storeTopMovesOk(limitN: int, payload: dict, ttlSec: float) -> None:
+    if not payload or payload.get('error'):
+        return
+    _topMovesLastOk[limitN] = payload
+    _small_ttl_cache_put(
+        _top_moves_cache, limitN, payload, ttlSec, TOP_MOVES_CACHE_MAX,
+    )
+
+
+def _fetchTopMovesOnce(limitN: int, force: bool = False):
+    """singleflight 查库；重查询期间有旧结果则让路。force=True 时忽略 TTL（后台刷）。"""
+    waitEv = None
+    isOwner = False
+    cached = None
+    with _topMovesInflightLock:
+        cached, isFresh = _loadTopMovesCachedOrStale(limitN)
+        if isFresh and cached is not None and not force:
+            return cached, True
+        existing = _topMovesInflight.get(limitN)
+        if existing is not None:
+            waitEv = existing
+        else:
+            waitEv = threading.Event()
+            _topMovesInflight[limitN] = waitEv
+            isOwner = True
+
+    if not isOwner:
+        waitEv.wait(timeout=8.0)
+        cached, _isFresh = _loadTopMovesCachedOrStale(limitN)
+        if cached is not None:
+            return cached, True
+        return _emptyTopMovesPayload(), True
+
+    try:
+        if cached is not None and _topMovesIsHeavyDb():
+            _storeTopMovesOk(limitN, cached, TOP_MOVES_REFRESH_MIN_SEC)
+            return cached, True
+        t0 = time.perf_counter()
+        payload = _query_top_moves(limit=limitN)
+        ttlSec = _topMovesAdaptiveInterval(time.perf_counter() - t0)
+        _storeTopMovesOk(limitN, payload, ttlSec)
+        return payload, False
+    finally:
+        with _topMovesInflightLock:
+            _topMovesInflight.pop(limitN, None)
+        waitEv.set()
+
+
+def _topMovesRefreshPlan(
+    lastHttpMono: float,
+    nowMono: float,
+    hasLastOk: bool,
+    isHeavy: bool,
+) -> tuple[bool, float]:
+    """后台一轮：是否查库、本轮间隔（查库成功后由耗时覆盖）。间隔从本轮开始起算。"""
+    if lastHttpMono <= 0:
+        if not hasLastOk:
+            return True, TOP_MOVES_REFRESH_MIN_SEC
+        return False, TOP_MOVES_IDLE_PAUSE_SEC
+    idleFor = nowMono - lastHttpMono
+    if idleFor > TOP_MOVES_IDLE_PAUSE_SEC:
+        return False, TOP_MOVES_IDLE_PAUSE_SEC
+    if isHeavy:
+        return False, TOP_MOVES_REFRESH_MIN_SEC
+    return True, TOP_MOVES_REFRESH_MIN_SEC
+
+
+def _topMovesRefreshLoop() -> None:
+    """首页 Top30 后台刷：有人看 2～8s；无人看停刷并按 15s 再探；启动先预热一份。"""
+    logger.info(
+        'top_moves 后台刷新已启动 min=%.1fs max=%.1fs idle_pause=%.0fs',
+        TOP_MOVES_REFRESH_MIN_SEC, TOP_MOVES_REFRESH_MAX_SEC, TOP_MOVES_IDLE_PAUSE_SEC,
+    )
+    while True:
+        loopT0 = time.perf_counter()
+        shouldFetch, interval = _topMovesRefreshPlan(
+            _topMovesLastHttpMono,
+            time.monotonic(),
+            TOP_MOVES_HOME_LIMIT in _topMovesLastOk,
+            _topMovesIsHeavyDb(),
+        )
+        try:
+            if shouldFetch:
+                t0 = time.perf_counter()
+                payload, fromCache = _fetchTopMovesOnce(TOP_MOVES_HOME_LIMIT, force=True)
+                elapsed = time.perf_counter() - t0
+                if fromCache:
+                    interval = TOP_MOVES_REFRESH_MIN_SEC
+                elif payload and not payload.get('error'):
+                    interval = _topMovesAdaptiveInterval(elapsed)
+                    _log_slow_api(
+                        'top_moves',
+                        t0,
+                        f"bg limit={TOP_MOVES_HOME_LIMIT} decline={len(payload.get('decline_top30') or [])}",
+                    )
+                else:
+                    interval = TOP_MOVES_REFRESH_MAX_SEC
+        except Exception:
+            logger.exception('top_moves 后台刷新失败')
+            interval = TOP_MOVES_REFRESH_MAX_SEC
+        remain = interval - (time.perf_counter() - loopT0)
+        time.sleep(max(0.2, remain))
+
+
+def warmupTopMovesCacheAsync() -> None:
+    """启动后台刷新首页 Top30，HTTP 只读这份缓存。"""
+    global _topMovesRefreshStarted
+    if _topMovesRefreshStarted:
+        return
+    _topMovesRefreshStarted = True
+    threading.Thread(
+        target=_topMovesRefreshLoop, daemon=True, name='top-moves-refresh',
+    ).start()
+
+
+def _resolveTopMovesPayload(limitN: int):
+    """有旧结果立刻返回（SWR）；首页由后台刷新，其它 limit 仍按需 singleflight。"""
+    cached, isFresh = _loadTopMovesCachedOrStale(limitN)
+    if cached is not None and (isFresh or limitN == TOP_MOVES_HOME_LIMIT):
+        return cached, True
+    return _fetchTopMovesOnce(limitN)
+
+
 def get_top_moves():
     """冲高回落/大幅回升/当日成交额 Top30（stockstat + 申万；成交额表含昨成交额、自由换手、加权涨跌幅）"""
+    global _topMovesLastHttpMono
     t0 = time.perf_counter()
     try:
+        _topMovesLastHttpMono = time.monotonic()
         try:
             limit_n = int(request.args.get('limit', default='30'))
         except Exception:
             limit_n = 30
         limit_n = max(1, min(limit_n, 200))
-        payload = _small_ttl_cache_get(_top_moves_cache, limit_n, time.time())
-        if payload is None:
-            payload = _query_top_moves(limit=limit_n)
-            _small_ttl_cache_put(
-                _top_moves_cache,
-                limit_n,
-                payload,
-                TOP_MOVES_CACHE_TTL,
-                TOP_MOVES_CACHE_MAX,
-            )
+        payload, fromCache = _resolveTopMovesPayload(limit_n)
         status = 200 if not payload.get('error') else 500
-        _log_slow_api(
-            'top_moves',
-            t0,
-            f"limit={limit_n} decline={len(payload.get('decline_top30') or [])}",
-        )
+        if not fromCache:
+            _log_slow_api(
+                'top_moves',
+                t0,
+                f"limit={limit_n} decline={len(payload.get('decline_top30') or [])}",
+            )
         return jsonify(payload), status
     except Exception as e:
         logger.exception("top_moves 接口异常: %s", e)
@@ -7493,6 +4442,18 @@ from rt_monitor.services.fina_arturn_queries import (  # noqa: E402
     _sw_dtp_yoy_yoypct_for_codes,
     _sw_median_rounded,
     _sw_rev_yoy_yoypct_for_codes,
+)
+
+
+# --- 申万/宽基：services/sw_industry（P2 迁出）---
+from rt_monitor.services.sw_industry import (  # noqa: E402
+    INDEX_MONITOR_CODES,
+    api_index_industry_stats,
+    api_sw_index_amt_pctile_series,
+    api_sw_industry_limit_detail,
+    api_sw_industry_stats,
+    read_sw_industry_limit_detail,
+    warmupSwIndustryCacheAsync as _warmup_sw_industry_cache_async,
 )
 
 ETF_BIAS_COLUMN_MAP = {
@@ -8116,6 +5077,7 @@ def _fetch_rt_k_etf_quotes(ts_codes: list) -> dict:
                     "etf_intra": None,
                     "etf_amp": None,
                     "etf_rt_date": None,
+                    "etf_observed_at": None,
                 }
                 continue
             etf_amount_yi = round(amt / 1e8, 2) if amt is not None else None
@@ -8128,11 +5090,18 @@ def _fetch_rt_k_etf_quotes(ts_codes: list) -> dict:
                 else None
             )
             rt_d = None
+            rt_observed_at = None
             if trade_time is not None:
                 try:
                     rt_d = trade_time.date() if hasattr(trade_time, "date") else None
+                    rt_observed_at = (
+                        trade_time.strftime("%Y-%m-%d %H:%M:%S")
+                        if hasattr(trade_time, "strftime")
+                        else str(trade_time)
+                    )
                 except (AttributeError, TypeError, ValueError):
                     rt_d = None
+                    rt_observed_at = None
             out[ts_code] = {
                 "etf_last": round(cl, 4) if cl is not None else None,
                 "etf_high": round(hi, 4) if hi is not None else None,
@@ -8143,6 +5112,7 @@ def _fetch_rt_k_etf_quotes(ts_codes: list) -> dict:
                 "etf_intra": round(idx_intra_t, 4) if idx_intra_t is not None else None,
                 "etf_amp": round(idx_amp_t, 4) if idx_amp_t is not None else None,
                 "etf_rt_date": rt_d,
+                "etf_observed_at": rt_observed_at,
             }
     except Exception as e:
         logger.warning("MA 信号表：读取 rt_k 行情失败: %s", e)
@@ -8154,6 +5124,72 @@ def _fetch_rt_k_etf_quotes(ts_codes: list) -> dict:
             except Exception:
                 pass
     return out
+
+
+_MA_REALTIME_FIELDS = (
+    "etf_last",
+    "etf_high",
+    "etf_low",
+    "etf_amount_yi",
+    "etf_pct",
+    "etf_gap",
+    "etf_intra",
+    "etf_amp",
+    "etf_rt_date",
+    "etf_observed_at",
+)
+_MA_INTRADAY_RANGE_FIELDS = (
+    "range_pct_t5",
+    "range_pct_t20",
+    "range_pct_t60",
+    "range_pct_t120",
+)
+
+
+def _overlay_ma_signal_realtime_rows(
+    cached_rows: list,
+    rt_quotes: dict,
+) -> tuple[list, str | None]:
+    """用轻量 rt_k 快照覆盖 MA 慢缓存中的实时列，不修改原缓存。
+
+    60MIN/日线方向和聚集度保留慢任务结果；T-5/20/60/120 根据缓存帧的
+    期末价反推出同一基期，再用最新价重算。T-1 是最近完整日线收益，不随
+    盘中价格改写。
+    """
+    rows_out: list = []
+    observed_values: list[str] = []
+    for cached in cached_rows or []:
+        row = dict(cached or {})
+        ts_code = str(row.get("ts_code") or "")
+        quote = (rt_quotes or {}).get(ts_code) or {}
+        old_last = row.get("etf_last")
+        new_last = quote.get("etf_last")
+        try:
+            old_last_f = float(old_last) if old_last is not None else None
+            new_last_f = float(new_last) if new_last is not None else None
+        except (TypeError, ValueError):
+            old_last_f = None
+            new_last_f = None
+        if old_last_f and old_last_f > 0 and new_last_f and new_last_f > 0:
+            for field in _MA_INTRADAY_RANGE_FIELDS:
+                old_pct = row.get(field)
+                try:
+                    old_pct_f = float(old_pct) if old_pct is not None else None
+                except (TypeError, ValueError):
+                    old_pct_f = None
+                if old_pct_f is None or (1.0 + old_pct_f / 100.0) <= 0:
+                    continue
+                base_close = old_last_f / (1.0 + old_pct_f / 100.0)
+                if base_close > 0:
+                    row[field] = round((new_last_f / base_close - 1.0) * 100.0, 2)
+        for field in _MA_REALTIME_FIELDS:
+            if quote.get(field) is not None:
+                row[field] = quote[field]
+        observed_at = quote.get("etf_observed_at")
+        if observed_at:
+            observed_values.append(str(observed_at))
+        rows_out.append(row)
+    return rows_out, (max(observed_values) if observed_values else None)
 
 
 def _wind_pct_from_prior_desc_rows(
@@ -8401,7 +5437,7 @@ def _read_index_daily_interval_range_pct(
     *,
     splice_rt: bool = True,
 ) -> dict:
-    """涨跌幅%%表「区间涨跌幅」：历史 index_daily.close；盘中期末用 rt_idx_k（932000/899050 不拼 rt，仅日线）。"""
+    """涨跌幅%%表「区间涨跌幅」：历史 index_daily.close；盘中期末用 rt_idx_k（含 TQ 的 932000/899050）。"""
     empty = {
         "range_pct_t1": None,
         "range_pct_t5": None,
@@ -9073,31 +6109,42 @@ def get_up_num_ma5_series():
 
 
 def get_amount_top5_pct_series():
-    """成交额 Top5%_pct 序列：marketinfo.amount_top5_pct 与 399317.SZ close 对齐，并拼接当日实时点。"""
-    try:
-        series_limit = int(request.args.get('limit', '300'))
-    except (TypeError, ValueError):
-        series_limit = 300
-    series_limit = max(1, min(series_limit, 1300))
-    cache_key = ('amount_top5_pct_series', int(series_limit))
+    """成交额 Top5%_pct 序列：marketinfo.amount_top5_pct 与 399317.SZ close 对齐，并拼接当日实时点。
+    - start_date=YYYY-MM-DD：自该日起升序取全量（上限 AMOUNT_TOP5_PCT_MODAL_SERIES_CAP），供弹窗 pan/zoom 浏览全历史。
+    - 无 start_date：仅 limit（默认 300，最大 AMOUNT_TOP5_PCT_MODAL_LIMIT_TAIL）取最近 N 个交易日（超跌弹窗同款）。"""
+    start_date = _parse_amount_top5_series_start_date(request.args.get('start_date'))
+    if start_date is not None:
+        try:
+            tail_cap = int(request.args.get('limit', str(AMOUNT_TOP5_PCT_MODAL_SERIES_CAP)))
+        except (TypeError, ValueError):
+            tail_cap = AMOUNT_TOP5_PCT_MODAL_SERIES_CAP
+        tail_cap = max(1, min(tail_cap, AMOUNT_TOP5_PCT_MODAL_SERIES_CAP))
+        cache_key = ('amount_top5_pct_series', 'from', start_date.isoformat(), int(tail_cap))
+    else:
+        try:
+            tail_cap = int(request.args.get('limit', '300'))
+        except (TypeError, ValueError):
+            tail_cap = 300
+        tail_cap = max(1, min(tail_cap, AMOUNT_TOP5_PCT_MODAL_LIMIT_TAIL))
+        cache_key = ('amount_top5_pct_series', 'lim', int(tail_cap))
+
     hit = popupSeriesCacheGet(cache_key)
     if hit is not None:
         return jsonify(hit)
 
-    try:
-        conn_ts = pymysql.connect(**DB_CONFIG_TUSHARE)
-    except Exception as e:
-        logger.exception("连接 stock_tushare 失败: %s", e)
-        return jsonify({'error': '数据库连接失败'}), 500
-
-    hist_rows: list[tuple] = []
-    rt_idx_row: tuple | None = None
-    sigma2_low: float | None = None
-    sigma2_high: float | None = None
-    try:
-        with conn_ts.cursor() as cur:
-            cur.execute(
+    hist_sql_asc = """
+                SELECT m.trade_date, m.amount_top5_pct, i.close
+                FROM stock_tushare.marketinfo m
+                INNER JOIN stock_tushare.index_daily i
+                  ON i.trade_date = m.trade_date
+                 AND i.ts_code = '399317.SZ'
+                WHERE m.amount_top5_pct IS NOT NULL
+                  AND i.close IS NOT NULL
+                  AND m.trade_date >= %s
+                ORDER BY m.trade_date ASC
+                LIMIT %s
                 """
+    hist_sql_desc = """
                 SELECT m.trade_date, m.amount_top5_pct, i.close
                 FROM stock_tushare.marketinfo m
                 INNER JOIN stock_tushare.index_daily i
@@ -9107,9 +6154,22 @@ def get_amount_top5_pct_series():
                   AND i.close IS NOT NULL
                 ORDER BY m.trade_date DESC
                 LIMIT %s
-                """,
-                (series_limit,),
-            )
+                """
+
+    try:
+        conn_ts = pymysql.connect(**DB_CONFIG_TUSHARE)
+    except Exception as e:
+        logger.exception("连接 stock_tushare 失败: %s", e)
+        return jsonify({'error': '数据库连接失败'}), 500
+
+    hist_rows: list[tuple] = []
+    rt_idx_row: tuple | None = None
+    try:
+        with conn_ts.cursor() as cur:
+            if start_date is not None:
+                cur.execute(hist_sql_asc, (start_date, tail_cap))
+            else:
+                cur.execute(hist_sql_desc, (tail_cap,))
             hist_rows = cur.fetchall() or []
         with conn_ts.cursor() as cur:
             cur.execute(
@@ -9123,18 +6183,23 @@ def get_amount_top5_pct_series():
     finally:
         conn_ts.close()
 
-    rows_asc = list(reversed(hist_rows))
+    rows_asc = hist_rows if start_date is not None else list(reversed(hist_rows))
     last_td: date | None = None
     if rows_asc:
         last_td = _sql_date_to_py_date(rows_asc[-1][0])
 
+    trade_dates_py: list[date] = []
     times: list[str] = []
     amount_top5_pct: list[float | None] = []
     close: list[float | None] = []
     for td, pct_v, close_v in rows_asc:
+        d_py = _sql_date_to_py_date(td)
+        if d_py is None:
+            continue
         t = pd.to_datetime(td, errors='coerce')
         if pd.isna(t):
             continue
+        trade_dates_py.append(d_py)
         times.append(t.isoformat())
         amount_top5_pct.append(None if pd.isna(pct_v) else float(pct_v))
         close.append(None if pd.isna(close_v) else float(close_v))
@@ -9143,25 +6208,21 @@ def get_amount_top5_pct_series():
     pct_rt_str: str | None = None
     try:
         conn_wind = pymysql.connect(**DB_CONFIG)
-        conn_ts2 = None
         try:
             anchor_date = _read_rt_k_anchor_date(conn_wind)
             pct_rt_str = _compute_stockstat_amount_top5_pct(conn_wind)
-            conn_ts2 = pymysql.connect(**DB_CONFIG_TUSHARE)
-            sigma2_low, sigma2_high = _compute_amount_top5_pct_sigma2_bounds(conn_ts2, conn_wind)
         finally:
             conn_wind.close()
-            if conn_ts2 is not None:
-                conn_ts2.close()
     except Exception as e:
-        logger.warning("amount_top5_pct_series 实时拼接/2σ 跳过: %s", e)
+        logger.warning("amount_top5_pct_series 实时拼接跳过: %s", e)
 
     def _slice_tail_max() -> None:
-        nonlocal times, amount_top5_pct, close
-        if len(times) > series_limit:
-            times = times[-series_limit:]
-            amount_top5_pct = amount_top5_pct[-series_limit:]
-            close = close[-series_limit:]
+        nonlocal times, amount_top5_pct, close, trade_dates_py
+        if len(times) > tail_cap:
+            times = times[-tail_cap:]
+            amount_top5_pct = amount_top5_pct[-tail_cap:]
+            close = close[-tail_cap:]
+            trade_dates_py = trade_dates_py[-tail_cap:]
 
     if (
         anchor_date is not None
@@ -9182,17 +6243,25 @@ def get_amount_top5_pct_series():
                     times[-1] = rt_iso
                     amount_top5_pct[-1] = pct_rt
                     close[-1] = rt_close
+                    trade_dates_py[-1] = anchor_date
                 else:
                     times.append(rt_iso)
                     amount_top5_pct.append(pct_rt)
                     close.append(rt_close)
+                    trade_dates_py.append(anchor_date)
             elif last_td is None or last_td < anchor_date:
                 times.append(rt_iso)
                 amount_top5_pct.append(pct_rt)
                 close.append(rt_close)
+                trade_dates_py.append(anchor_date)
             _slice_tail_max()
         except (TypeError, ValueError) as e:
             logger.warning("amount_top5_pct_series 实时点解析失败: %s", e)
+
+    sigma2_low, sigma2_high = _compute_amount_top5_pct_rolling_sigma2_series(
+        trade_dates_py,
+        amount_top5_pct,
+    )
 
     payload = {
         'times': times,
@@ -9202,9 +6271,10 @@ def get_amount_top5_pct_series():
         'sigma2_high': sigma2_high,
         'series_kind': 'amount_top5_pct',
         'ts_code': '399317.SZ',
-        'limit': series_limit,
+        'limit': tail_cap,
+        'start_date': start_date.isoformat() if start_date else None,
     }
-    popupSeriesCachePut(cache_key, payload)
+    popupSeriesCachePut(cache_key, payload, 60.0)
     return jsonify(payload)
 
 
@@ -9247,11 +6317,28 @@ def get_etf_ma_signal_table():
             age = (now - etf_ma_signal_last_read_ts) if etf_ma_signal_last_read_ts else None
             refreshing = bool(etf_ma_signal_refreshing)
 
+        signal_updated_at = (
+            datetime.fromtimestamp(etf_ma_signal_last_read_ts).strftime('%Y-%m-%d %H:%M:%S')
+            if etf_ma_signal_last_read_ts else '--'
+        )
+
+        def _with_realtime(base_rows: list) -> tuple[list, str | None]:
+            try:
+                quotes = _fetch_rt_k_etf_quotes(list(ETF_MA_SIGNAL_ORDER))
+            except Exception as quote_e:
+                logger.warning("MA 信号表：实时字段覆盖失败: %s", quote_e)
+                quotes = {}
+            return _overlay_ma_signal_realtime_rows(base_rows, quotes)
+
         # 热缓存：直接返回，避免阻塞首屏
         if cached_rows and age is not None and age < ETF_MA_SIGNAL_CACHE_TTL:
+            response_rows, quote_observed_at = _with_realtime(cached_rows)
+            response_rows = _safe_attach_etf_ma_metric_percentiles(response_rows)
             return jsonify({
-                'rows': cached_rows,
-                'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'rows': response_rows,
+                'last_update': quote_observed_at or signal_updated_at,
+                'quote_observed_at': quote_observed_at or '--',
+                'signal_updated_at': signal_updated_at,
                 'warming': False,
                 'stale': False,
             })
@@ -9260,9 +6347,13 @@ def get_etf_ma_signal_table():
         if cached_rows:
             if not refreshing:
                 _kickoff_ma_signal_table_refresh_async(force=False)
+            response_rows, quote_observed_at = _with_realtime(cached_rows)
+            response_rows = _safe_attach_etf_ma_metric_percentiles(response_rows)
             return jsonify({
-                'rows': cached_rows,
-                'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'rows': response_rows,
+                'last_update': quote_observed_at or signal_updated_at,
+                'quote_observed_at': quote_observed_at or '--',
+                'signal_updated_at': signal_updated_at,
                 'warming': False,
                 'stale': True,
             })
@@ -9270,10 +6361,16 @@ def get_etf_ma_signal_table():
         # 无缓存：异步拉取 + 快速兜底行，避免“MA/EMA 数据加载中...”长期悬挂
         if not refreshing:
             _kickoff_ma_signal_table_refresh_async(force=True)
-        fallback_rows = _build_ma_signal_fallback_rows()
+        fallback_rows = _safe_attach_etf_ma_metric_percentiles(_build_ma_signal_fallback_rows())
+        quote_observed_at = max(
+            (str(r.get('etf_observed_at')) for r in fallback_rows if r.get('etf_observed_at')),
+            default=None,
+        )
         return jsonify({
             'rows': fallback_rows,
-            'last_update': '--',
+            'last_update': quote_observed_at or '--',
+            'quote_observed_at': quote_observed_at or '--',
+            'signal_updated_at': '--',
             'warming': True,
             'stale': True,
         })
@@ -10007,6 +7104,9 @@ def get_etf_ma_signal_series():
 # 代码更新时间：2026-06-13 20:20 市场状态表成交额左增 总市值/流通市值/自由市值（total_mv/circ_mv/free_mv÷10000，两位小数）；RT_MONITOR_STATIC_VER 20260613-6
 # 代码更新时间：2026-06-13 20:53 市场状态表中位数右增 振幅（amplitude_399317，两位小数）；中位数表头改名；RT_MONITOR_STATIC_VER 20260613-7
 # 代码更新时间：2026-06-13 20:58 市场状态表成交额右增 5%_Pct（amount_top5_pct，两位小数）；RT_MONITOR_STATIC_VER 20260613-8
+# 代码更新时间：2026-07-20 17:55 市场状态表跌停开右增 HisHC/HisLC（HLhis_CH/HLhis_CL）；RT_MONITOR_STATIC_VER 20260720-1
+# 代码更新时间：2026-07-20 18:06 市场状态 HisHC 弹窗双轴（HisHC/HisLC + 399317）；RT_MONITOR_STATIC_VER 20260720-2
+# 代码更新时间：2026-07-20 18:34 市场状态 120/200/250/850/HisHLC 各自弹窗+右轴 399317；RT_MONITOR_STATIC_VER 20260720-3
 # 代码更新时间：2026-06-13 13:27 补 INDEX_MONITOR_CODES/_index_industry_stats_cache，修复 /rt-monitor/index 500
 # 代码更新时间：2026-06-13 13:45 恢复 Top5%_pct/Per、成交额 MIN T-60/谷值日、涨平跌表头后端字段
 # 代码更新时间：2026-06-13 13:51 HL_C 改用 rt_k 最新日的上一交易日 MA 阈值，避免 ma 含当日 K 线导致全 0
@@ -10034,3 +7134,22 @@ def get_etf_ma_signal_series():
 # 代码更新时间：2026-06-17 09:20 固定资产弹窗恢复 rows[].ann_date（fina_indicator 主选行）；RT_MONITOR_STATIC_VER 20260617-1
 # 代码更新时间：2026-06-17 19:53 P4.4 补全 sw_index_amt_pctile_series/fina_top10/system_scheme API；Amt% 序列 300s TTL 缓存
 # 代码更新时间：2026-06-17 19:58 Amt% 分位序列：预计算日比率 + bisect 窗口，避免 O(n²) 全表扫描
+# 代码更新时间：2026-06-23 15:25 Top30 三表 INNER JOIN rt_k 排除 vol=0 且 amount=0（停牌/无成交）
+# 代码更新时间：2026-06-18 09:11 top10_holders 索引 idx_top10_holders_ts_end_date + load_initial_cache 幂等创建
+# 代码更新时间：2026-06-22 11:18 limit_stats HL_C 改读 stockstat 预写列，修复 ma JOIN 读超时拖死同连接致连板/T-1/超跌等闪 --
+# 代码更新时间：2026-06-23 16:45 amount_top5_pct_series 支持 start_date 全历史（≤6000点）+ 滚动五年 2σ 序列；RT_MONITOR_STATIC_VER 20260623-1
+# 代码更新时间：2026-07-09 09:41 after_request gzip 压缩大 JSON；财报表虚拟滚动见 rt_monitor_fina.js
+# 代码更新时间：2026-07-14 13:46 成交额Top30自由换手：free_share 最新日为空时回退最近非空日
+# 代码更新时间：2026-08-14 22:20 no-store 增 /api/opt-iv-board、/api/opt-sp-plan
+# 代码更新时间：2026-09-02 10:50 amount_top5_pct 滚动 2σ 改 O(n) 滑窗，避免弹窗 12s 超时
+# 代码更新时间：2026-09-07 15:01 top_moves：TTL 8s、singleflight、昨额 120s、保活让路、slow_api 20s 冷却
+# 代码更新时间：2026-09-07 16:53 修复 _topMovesFactorExp UnboundLocalError；申万刷新期间同样让路
+# 代码更新时间：2026-09-07 17:00 top_moves SWR：HTTP 只读内存，后台 2～8s 自适应刷首页 Top30
+# 代码更新时间：2026-09-07 17:27 后台启动预热；无人看按 15s 停刷；间隔从本轮开始起算
+# 代码更新时间：2026-09-07 18:38 LIMIT_STATS_CACHE_TTL 3→1s（涨跌家数贴近 1s）
+# 代码更新时间：2026-09-09 07:28 放开中证2000/北证50 区间涨跌幅拼 rt_idx_k（TQ 写库）
+# 代码更新时间：2026-10-01 12:45 成交额表 T-120 后增全历史 MAX / 峰值日（index_daily 与 marketinfo）
+# 代码更新时间：2026-10-01 14:07 涨跌幅表 Gap 旁注全历史分位
+# 代码更新时间：2026-10-01 15:21 涨跌幅表 Pct/Intra/Gap/Amp 全历史分位与尾部浅底
+# 代码更新时间：2026-10-01 16:45 Ma/Ema 表 AMT/Pct/Intra/Gap/Amp 全历史分位
+# 代码更新时间：2026-10-04 21:54 P5.1 成交额历史极值/均值 12 个只读查询迁至 services/amount_extremes（原名 re-export）

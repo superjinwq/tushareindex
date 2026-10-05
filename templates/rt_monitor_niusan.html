@@ -305,6 +305,11 @@
             line-height: 1;
             color: #546e7a;
         }
+        .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-holder-row button:hover {
+            background: #eceff1;
+            border-color: #90a4ae;
+            color: #c62828;
+        }
         .rt-monitor-niusan-page #niusan-scheme-modal-overlay .niusan-scheme-actions {
             margin-top: 6px;
             display: flex;
@@ -374,6 +379,10 @@
         }
         .rt-monitor-niusan-page .niusan-detail-chg-fall {
             color: #27ae60;
+            font-weight: 600;
+        }
+        .rt-monitor-niusan-page .niusan-detail-chg-xinjin {
+            color: #f9a825;
             font-weight: 600;
         }
         .rt-monitor-niusan-page #niusan-data-table thead tr:not(.niusan-thead-meta) th {
@@ -515,6 +524,10 @@
             color: #27ae60;
             font-weight: 600;
         }
+        .rt-monitor-niusan-page #niusan-data-table tbody td.niusan-hold-chg-xinjin {
+            color: #f9a825;
+            font-weight: 600;
+        }
         /* 持仓变化：数值居中 */
         .rt-monitor-niusan-page #niusan-data-table td:nth-child(9) {
             white-space: nowrap;
@@ -609,13 +622,13 @@
             background: rgba(21, 101, 192, 0.35);
             border-radius: 5px;
         }
-        /* 主表上方：各方案持股汇总（横排换行、宽度随内容） */
+        /* 主表上方：各方案持股汇总（每行固定 7 个，第 8 个起换行；宽度随内容） */
         .rt-monitor-niusan-page #niusan-main-scheme-strip {
             flex-shrink: 0;
             padding: 8px 12px 10px;
-            display: flex;
-            flex-direction: row;
-            flex-wrap: wrap;
+            display: grid;
+            grid-template-columns: repeat(7, max-content);
+            justify-content: start;
             align-items: center;
             gap: 8px 10px;
             border-bottom: 1px solid rgba(21, 101, 192, 0.1);
@@ -670,6 +683,7 @@
                 </div>
                 <div class="niusan-page-head-trail" aria-hidden="true"></div>
             </div>
+            <div id="niusan-boot-err" class="niusan-err" role="alert" hidden></div>
             {% if niusan_error %}
             <div class="niusan-err" role="alert">加载失败：{{ niusan_error }}</div>
             {% endif %}
@@ -720,7 +734,7 @@
     </main>
     {% include '_rt_monitor_niusan_modals.html' %}
     <script type="application/json" id="niusan-rows-json">{{ niusan_rows | tojson }}</script>
-    <script type="application/json" id="niusan-active-view-json">{{ {'scheme_id': niusan_active_scheme_id | default('', true), 'scheme_name': niusan_scheme_title, 'related_join': niusan_related_join | default('', true), 'amt_yi_total': niusan_amt_yi_total} | tojson }}</script>
+    <script type="application/json" id="niusan-active-view-json">{{ {'scheme_id': niusan_active_scheme_id | default('', true), 'scheme_name': niusan_scheme_title, 'related_join': niusan_related_join | default('', true), 'amt_yi_total': niusan_amt_yi_total, 'async_boot': niusan_async_boot | default(false)} | tojson }}</script>
     <script type="application/json" id="niusan-holder-config-json">{{ niusan_holder_cfg_embed | tojson }}</script>
     <script>
 (function () {
@@ -769,6 +783,7 @@
         return '';
     }
     function holdChgClsSuffix(row) {
+        if (row.hold_change === '新进') return ' niusan-hold-chg-xinjin';
         var c = row.hold_change_cls || '';
         if (c === 'rise') return ' niusan-hold-chg-rise';
         if (c === 'fall') return ' niusan-hold-chg-fall';
@@ -954,6 +969,14 @@
     }
 
     var jsonEl = document.getElementById('niusan-rows-json');
+    var niusanAsyncBoot = false;
+    try {
+        var avBoot = document.getElementById('niusan-active-view-json');
+        var avBootObj = avBoot ? JSON.parse(avBoot.textContent || '{}') : {};
+        niusanAsyncBoot = !!avBootObj.async_boot;
+    } catch (eBootFlag) {
+        niusanAsyncBoot = false;
+    }
     try {
         var parsed = jsonEl ? JSON.parse(jsonEl.textContent || '[]') : [];
         niusanRawRows = (parsed || []).map(function (r, i) {
@@ -967,36 +990,6 @@
     } catch (e1) {
         niusanRawRows = [];
     }
-    renderNiusanTbody();
-    schedulePrefetchNiusanDetails();
-
-    (function seedNiusanActiveSchemeCache() {
-        try {
-            var avEl = document.getElementById('niusan-active-view-json');
-            var av = avEl ? JSON.parse(avEl.textContent || '{}') : {};
-            var aid = av.scheme_id ? String(av.scheme_id) : '';
-            if (!aid) return;
-            var rowsCopy = niusanRawRows.map(function (r) {
-                var o = {};
-                for (var k in r) {
-                    if (k === '_order') continue;
-                    if (Object.prototype.hasOwnProperty.call(r, k)) o[k] = r[k];
-                }
-                return o;
-            });
-            niusanSchemeHoldingsCache[aid] = {
-                ok: true,
-                scheme_id: aid,
-                rows: rowsCopy,
-                scheme_name: av.scheme_name != null ? String(av.scheme_name) : '--',
-                related_join: av.related_join != null ? String(av.related_join) : '',
-                amt_yi_total: av.amt_yi_total != null ? String(av.amt_yi_total) : '0.00',
-                report_end_date: null
-            };
-        } catch (eSeed) {
-            /* ignore */
-        }
-    })();
 
     function prefetchNiusanSchemeHoldingsIntoCache() {
         var strip = document.getElementById('niusan-main-scheme-strip');
@@ -1023,7 +1016,41 @@
             setTimeout(run, 700);
         }
     }
-    kickNiusanSchemePrefetchIdle();
+
+    if (niusanAsyncBoot || !niusanRawRows.length) {
+        bootNiusanHoldingsFromApi();
+    } else {
+        renderNiusanTbody();
+        schedulePrefetchNiusanDetails();
+        (function seedNiusanActiveSchemeCache() {
+            try {
+                var avEl = document.getElementById('niusan-active-view-json');
+                var av = avEl ? JSON.parse(avEl.textContent || '{}') : {};
+                var aid = av.scheme_id ? String(av.scheme_id) : '';
+                if (!aid) return;
+                var rowsCopy = niusanRawRows.map(function (r) {
+                    var o = {};
+                    for (var k in r) {
+                        if (k === '_order') continue;
+                        if (Object.prototype.hasOwnProperty.call(r, k)) o[k] = r[k];
+                    }
+                    return o;
+                });
+                niusanSchemeHoldingsCache[aid] = {
+                    ok: true,
+                    scheme_id: aid,
+                    rows: rowsCopy,
+                    scheme_name: av.scheme_name != null ? String(av.scheme_name) : '--',
+                    related_join: av.related_join != null ? String(av.related_join) : '',
+                    amt_yi_total: av.amt_yi_total != null ? String(av.amt_yi_total) : '0.00',
+                    report_end_date: null
+                };
+            } catch (eSeed) {
+                /* ignore */
+            }
+        })();
+        kickNiusanSchemePrefetchIdle();
+    }
 
     /* —— 方案配置弹窗：下拉选方案 + 单块编辑 —— */
     var schemeOverlay = document.getElementById('niusan-scheme-modal-overlay');
@@ -1077,32 +1104,66 @@
         }
     }
 
-    function bindNiusanModalSingleEditor() {
-        if (!niusanModalSingleEditorEl) return;
-        niusanModalSingleEditorEl.querySelectorAll('.niusan-add-holder').forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                var list = btn.closest('.niusan-scheme-card').querySelector('.niusan-holder-list');
-                var wrap = document.createElement('div');
-                wrap.innerHTML = holderRowHtmlModal('');
-                list.appendChild(wrap.firstChild);
-            });
+    function niusanEventElem(ev) {
+        var el = ev && ev.target;
+        if (el && el.nodeType !== 1) {
+            el = el.parentElement;
+        }
+        return (el && typeof el.closest === 'function') ? el : null;
+    }
+
+    function appendNiusanHolderRow(list) {
+        if (!list) return;
+        var wrap = document.createElement('div');
+        wrap.innerHTML = holderRowHtmlModal('');
+        var row = wrap.firstChild;
+        if (!row) return;
+        list.appendChild(row);
+        var inp = row.querySelector('.niusan-holder-input');
+        if (inp) inp.focus();
+    }
+
+    function removeNiusanHolderRow(rmBtn) {
+        var row = rmBtn.closest('.niusan-holder-row');
+        var list = rmBtn.closest('.niusan-holder-list');
+        if (!row || !list) return;
+        if (list.querySelectorAll('.niusan-holder-row').length <= 1) {
+            var inp = row.querySelector('.niusan-holder-input');
+            if (inp) inp.value = '';
+            syncNiusanModalEditorToState();
+            return;
+        }
+        row.remove();
+        syncNiusanModalEditorToState();
+    }
+
+    function ensureNiusanModalEditorBound() {
+        if (!niusanModalSingleEditorEl || niusanModalSingleEditorEl.dataset.niusanEditorBound === '1') {
+            return;
+        }
+        niusanModalSingleEditorEl.dataset.niusanEditorBound = '1';
+        /* 委托：+ 关联人动态插入的「-」原先未绑 click，点了无反应 */
+        niusanModalSingleEditorEl.addEventListener('click', function (ev) {
+            var el = niusanEventElem(ev);
+            if (!el) return;
+            var addBtn = el.closest('.niusan-add-holder');
+            if (addBtn && niusanModalSingleEditorEl.contains(addBtn)) {
+                ev.preventDefault();
+                var card = addBtn.closest('.niusan-scheme-card');
+                appendNiusanHolderRow(card && card.querySelector('.niusan-holder-list'));
+                return;
+            }
+            var rmBtn = el.closest('.niusan-remove-holder');
+            if (rmBtn && niusanModalSingleEditorEl.contains(rmBtn)) {
+                ev.preventDefault();
+                removeNiusanHolderRow(rmBtn);
+            }
         });
-        niusanModalSingleEditorEl.querySelectorAll('.niusan-remove-holder').forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                var row = btn.closest('.niusan-holder-row');
-                var list = btn.closest('.niusan-holder-list');
-                if (list.querySelectorAll('.niusan-holder-row').length <= 1) {
-                    var inp = row.querySelector('.niusan-holder-input');
-                    if (inp) inp.value = '';
-                    return;
-                }
-                row.remove();
-            });
-        });
-        niusanModalSingleEditorEl.querySelectorAll('input[name="niusan-modal-active"]').forEach(function (r) {
-            r.addEventListener('change', function () {
-                niusanModalState.activeId = r.value;
-            });
+        niusanModalSingleEditorEl.addEventListener('change', function (ev) {
+            var t = ev.target;
+            if (t && t.name === 'niusan-modal-active') {
+                niusanModalState.activeId = t.value;
+            }
         });
     }
 
@@ -1163,7 +1224,7 @@
         html += '</div>';
         html += '</div>';
         niusanModalSingleEditorEl.innerHTML = html;
-        bindNiusanModalSingleEditor();
+        ensureNiusanModalEditorBound();
     }
 
     function collectNiusanModalFromDom() {
@@ -1360,7 +1421,8 @@
         if (detailOverlay) detailOverlay.classList.remove('is-open');
     }
 
-    function detailChgClsSuffix(cls) {
+    function detailChgClsSuffix(cls, holdChangeText) {
+        if (holdChangeText === '新进') return ' niusan-detail-chg-xinjin';
         if (cls === 'rise') return ' niusan-detail-chg-rise';
         if (cls === 'fall') return ' niusan-detail-chg-fall';
         return '';
@@ -1388,7 +1450,7 @@
         var parts = [];
         for (var ri = 0; ri < rows.length; ri++) {
             var row = rows[ri];
-            var dcx = detailChgClsSuffix(row.hold_change_cls);
+            var dcx = detailChgClsSuffix(row.hold_change_cls, row.hold_change);
             parts.push(
                 '<tr>' +
                 '<td title="' + escAttr(row.holder_name) + '">' + esc(row.holder_name) + '</td>' +
@@ -1487,9 +1549,38 @@
         }
     }
 
+    function renderNiusanSchemeStrip(summaries, activeId) {
+        var strip = document.getElementById('niusan-main-scheme-strip');
+        if (!strip) return;
+        var list = Array.isArray(summaries) ? summaries : [];
+        if (!list.length) {
+            strip.innerHTML = '';
+            strip.classList.add('niusan-main-scheme-strip--empty');
+            return;
+        }
+        strip.classList.remove('niusan-main-scheme-strip--empty');
+        var aid = activeId != null ? String(activeId) : '';
+        var html = [];
+        for (var i = 0; i < list.length; i++) {
+            var s = list[i] || {};
+            var sid = s.scheme_id != null ? String(s.scheme_id) : '';
+            var sel = aid && sid === aid ? ' is-selected' : '';
+            html.push(
+                '<button type="button" class="niusan-main-scheme-card' + sel + '" data-scheme-id="' +
+                escAttr(sid) + '" title="主表切换为该方案持股">' +
+                esc(s.scheme_name || '--') + '　持股数：' + esc(s.stock_count != null ? s.stock_count : '--') +
+                '　持股金额：' + esc(s.amt_yi_total != null ? s.amt_yi_total : '--') + '亿</button>'
+            );
+        }
+        strip.innerHTML = html.join('');
+    }
+
     function applyNiusanSchemeHoldingsToMainTable(data) {
         if (data.scheme_id != null && String(data.scheme_id).trim() !== '') {
             niusanViewSchemeId = String(data.scheme_id).trim();
+        }
+        if (Array.isArray(data.scheme_summaries) && data.scheme_summaries.length) {
+            renderNiusanSchemeStrip(data.scheme_summaries, niusanViewSchemeId);
         }
         var rows = data.rows || [];
         niusanRawRows = rows.map(function (r, i) {
@@ -1518,6 +1609,60 @@
         detailCache = {};
         renderNiusanTbody();
         schedulePrefetchNiusanDetails();
+    }
+
+    function bootNiusanHoldingsFromApi() {
+        var aid = niusanViewSchemeId;
+        if (!aid) {
+            try {
+                var avEl0 = document.getElementById('niusan-active-view-json');
+                var av0 = avEl0 ? JSON.parse(avEl0.textContent || '{}') : {};
+                aid = av0.scheme_id ? String(av0.scheme_id) : '';
+            } catch (eBoot0) { /* ignore */ }
+        }
+        var tbodyLoad = document.getElementById('niusan-data-tbody');
+        var errEl = document.getElementById('niusan-boot-err');
+        if (!aid) {
+            if (tbodyLoad) {
+                tbodyLoad.innerHTML = '<tr class="median-table-row"><td colspan="15">未配置方案</td></tr>';
+            }
+            return;
+        }
+        if (tbodyLoad) {
+            tbodyLoad.innerHTML = '<tr class="median-table-row"><td colspan="15">加载中…</td></tr>';
+        }
+        fetch(apiUrl('/api/niusan_scheme_holdings?scheme_id=' + encodeURIComponent(aid)), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!data || !data.ok) {
+                    var msg = data && data.error ? String(data.error) : '加载失败';
+                    if (errEl) {
+                        errEl.hidden = false;
+                        errEl.textContent = '加载失败：' + msg;
+                    }
+                    if (tbodyLoad) {
+                        tbodyLoad.innerHTML = '<tr class="median-table-row"><td colspan="15">' + esc(msg) + '</td></tr>';
+                    }
+                    return;
+                }
+                if (errEl) {
+                    errEl.hidden = true;
+                    errEl.textContent = '';
+                }
+                niusanSchemeHoldingsCache[aid] = data;
+                applyNiusanSchemeHoldingsToMainTable(data);
+                kickNiusanSchemePrefetchIdle();
+            })
+            .catch(function (e) {
+                var msg = e && e.message ? e.message : String(e);
+                if (errEl) {
+                    errEl.hidden = false;
+                    errEl.textContent = '请求失败：' + msg;
+                }
+                if (tbodyLoad) {
+                    tbodyLoad.innerHTML = '<tr class="median-table-row"><td colspan="15">请求失败：' + esc(msg) + '</td></tr>';
+                }
+            });
     }
 
     var niusanDetailCloseBtn = document.getElementById('niusan-detail-modal-close');

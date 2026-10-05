@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
+import time
 import uuid
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -34,6 +36,12 @@ _DEFAULT_NIUSAN_HOLDER_CFG: dict = {
         },
     ],
 }
+
+# 持股主表按 scheme_id 缓存（查询约 6s）；配置变更时整表失效
+NIUSAN_HOLDINGS_CACHE_TTL = 180.0
+NIUSAN_HOLDINGS_CACHE_MAX = 24
+_niusanHoldingsCacheLock = threading.Lock()
+_niusanHoldingsCache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
 
 
 def _niusan_holder_cfg_normalize(cfg: dict | None) -> dict:
@@ -120,6 +128,65 @@ def _niusan_holder_cfg_load() -> dict:
         return cfg
 
 
+def _niusan_holdings_cache_invalidate(schemeId: str | None = None) -> None:
+    """schemeId 为空则清空全部持股缓存。"""
+    with _niusanHoldingsCacheLock:
+        if schemeId is None:
+            _niusanHoldingsCache.clear()
+            return
+        sid = str(schemeId or '').strip()
+        if sid:
+            _niusanHoldingsCache.pop(sid, None)
+
+
+def _niusan_holdings_cache_get(schemeId: str) -> dict | None:
+    sid = str(schemeId or '').strip()
+    if not sid:
+        return None
+    nowTs = time.time()
+    with _niusanHoldingsCacheLock:
+        hit = _niusanHoldingsCache.get(sid)
+        if hit is None or nowTs >= hit[0]:
+            if hit is not None:
+                _niusanHoldingsCache.pop(sid, None)
+            return None
+        _niusanHoldingsCache.move_to_end(sid)
+        return hit[1]
+
+
+def _niusan_holdings_cache_put(schemeId: str, payload: dict) -> None:
+    sid = str(schemeId or '').strip()
+    if not sid or not isinstance(payload, dict):
+        return
+    with _niusanHoldingsCacheLock:
+        while len(_niusanHoldingsCache) >= NIUSAN_HOLDINGS_CACHE_MAX:
+            _niusanHoldingsCache.popitem(last=False)
+        _niusanHoldingsCache[sid] = (time.time() + NIUSAN_HOLDINGS_CACHE_TTL, payload)
+        _niusanHoldingsCache.move_to_end(sid)
+
+
+def _niusan_resolve_scheme_id_for_query(forSchemeId: str | None) -> str:
+    sid = str(forSchemeId or '').strip()
+    if sid:
+        return sid
+    sch = _get_active_niusan_scheme()
+    return str(sch.get('id') or '').strip() if isinstance(sch, dict) else ''
+
+
+def queryNiusanHoldingsCached(forSchemeId: str | None = None) -> dict:
+    """持股主表查询（带 TTL）；供页面 API / 启动预热共用。"""
+    sid = _niusan_resolve_scheme_id_for_query(forSchemeId)
+    if sid:
+        hit = _niusan_holdings_cache_get(sid)
+        if hit is not None:
+            return hit
+    payload = _query_niusan_holdings_page_rows(for_scheme_id=forSchemeId or sid or None)
+    err = payload.get('error')
+    if sid and not err:
+        _niusan_holdings_cache_put(sid, payload)
+    return payload
+
+
 def _niusan_holder_cfg_save(cfg: dict) -> dict:
     """校验并保存方案；方案名不参与检索，关联人至少一名。"""
     global _niusan_holder_cfg_cached
@@ -132,6 +199,7 @@ def _niusan_holder_cfg_save(cfg: dict) -> dict:
     with _NIUSAN_CFG_LOCK:
         _niusan_holder_cfg_write_atomic_inner(normalized)
         _niusan_holder_cfg_cached = normalized
+    _niusan_holdings_cache_invalidate(None)
     return normalized
 
 
@@ -272,89 +340,188 @@ def _niusan_ts_codes_present_in_rt_k(ts_codes: list[str]) -> set[str]:
     return out
 
 
-def _niusan_scheme_stock_count_and_amt_yi(cur, report_end: date, holders: list | None) -> tuple[int, str]:
-    """单方案：锚定报告期下合并持股的去重股票只数 + 持股金额(亿)合计（口径同主表 amt_yi）。"""
-    hp = _niusan_holder_like_tuple_from_list(holders)
+def _niusan_fetch_holdings_agg_at_stock_latest(
+    cur, hw: str, hp: tuple
+) -> list[tuple]:
+    """每股：仅当关联人仍出现在该股 top10_floatholders「全市场最新已披露报告期」时纳入。
+
+    口径：stock_latest = MAX(end_date)（该 ts_code、不限股东）；若关联人在该期仍有行则显示，
+    报告期即该最新期；若该期已披露但关联人已不在前十大，则不显示。
+
+    返回行：(ts_code, end_date, hold_sum, ratio_sum, n_chg_lines, sum_hold_change, ann_date_max)。
+    """
     if not hp:
-        return (0, '0.00')
-    hw = _niusan_holder_where_clause_n('t', len(hp))
+        return []
+    # 1) 关联人出现过的股票 → 2) 各股全市场最新报告期 → 3) 仅保留关联人仍在最新期的聚合
     cur.execute(
         f'''
-        SELECT d.ts_code, SUM(d.hold_amount) AS hold_sum
+        SELECT DISTINCT t.ts_code
+        FROM top10_floatholders t
+        WHERE {hw}
+        ''',
+        hp,
+    )
+    ts_codes = [str(r[0]).strip() for r in (cur.fetchall() or []) if r and r[0]]
+    if not ts_codes:
+        return []
+    ph = ','.join(['%s'] * len(ts_codes))
+    cur.execute(
+        f'''
+        SELECT ts_code, MAX(end_date) AS mx_end
+        FROM top10_floatholders
+        WHERE ts_code IN ({ph})
+        GROUP BY ts_code
+        ''',
+        tuple(ts_codes),
+    )
+    stock_latest = {
+        str(r[0]).strip(): r[1]
+        for r in (cur.fetchall() or [])
+        if r and r[0] and r[1] is not None
+    }
+    if not stock_latest:
+        return []
+    # (ts_code, end_date) 成对过滤：关联人在该股最新期
+    pair_sql = ' OR '.join(['(t.ts_code = %s AND t.end_date = %s)'] * len(stock_latest))
+    pair_params: list = []
+    for ts, ed in stock_latest.items():
+        pair_params.extend([ts, ed])
+    cur.execute(
+        f'''
+        SELECT d.ts_code,
+               d.end_date,
+               SUM(d.hold_amount) AS hold_sum,
+               SUM(d.hold_float_ratio) AS ratio_sum,
+               SUM(CASE WHEN d.hold_change IS NOT NULL THEN 1 ELSE 0 END) AS n_chg_lines,
+               SUM(d.hold_change) AS sum_hold_change,
+               MAX(d.ann_date) AS ann_date_max
         FROM (
-            SELECT t.ts_code, t.hold_amount,
+            SELECT t.ts_code, t.end_date, t.hold_amount, t.hold_float_ratio, t.hold_change, t.ann_date,
                 ROW_NUMBER() OVER (
                     PARTITION BY t.ts_code, t.holder_name
                     ORDER BY t.ann_date IS NULL ASC, t.ann_date DESC, t.hold_amount DESC
                 ) AS rn
             FROM top10_floatholders t
-            WHERE t.end_date = %s AND {hw}
+            WHERE ({pair_sql}) AND {hw}
         ) d
         WHERE d.rn = 1
-        GROUP BY d.ts_code
+        GROUP BY d.ts_code, d.end_date
+        ORDER BY d.ts_code
         ''',
-        (report_end,) + hp,
+        tuple(pair_params) + hp,
     )
-    agg = cur.fetchall() or []
+    return list(cur.fetchall() or [])
+
+
+def _niusan_ref_close_map_by_ts_end(
+    cur, pairs: list[tuple[str, date]]
+) -> dict[str, Decimal]:
+    """ts_code → 报告期末及之前最近收盘价（stk_factor_pro.close）。"""
+    out: dict[str, Decimal] = {}
+    if not pairs:
+        return out
+    chunk = 80
+    for i in range(0, len(pairs), chunk):
+        part = pairs[i : i + chunk]
+        unions = ' UNION ALL '.join(['SELECT %s AS ts_code, %s AS end_d'] * len(part))
+        params: list = []
+        for ts, ed in part:
+            params.extend([ts, ed])
+        cur.execute(
+            f'''
+            SELECT s.ts_code, s.close
+            FROM stk_factor_pro s
+            INNER JOIN (
+                SELECT p.ts_code, MAX(p.trade_date) AS mx
+                FROM stk_factor_pro p
+                INNER JOIN ({unions}) e
+                    ON p.ts_code = e.ts_code AND p.trade_date <= e.end_d
+                GROUP BY p.ts_code
+            ) m ON s.ts_code = m.ts_code AND s.trade_date = m.mx
+            ''',
+            tuple(params),
+        )
+        for x in cur.fetchall() or []:
+            ts = str(x[0] or '').strip()
+            if ts and x[1] is not None:
+                out[ts] = x[1] if isinstance(x[1], Decimal) else Decimal(str(x[1]))
+    return out
+
+
+def _niusan_scheme_stock_count_and_amt_yi(cur, holders: list | None) -> tuple[int, str]:
+    """单方案：每股最新已披露前十大口径下的去重股票只数 + 持股金额(亿)合计（同主表）。"""
+    hp = _niusan_holder_like_tuple_from_list(holders)
+    if not hp:
+        return (0, '0.00')
+    hw = _niusan_holder_where_clause_n('t', len(hp))
+    agg = _niusan_fetch_holdings_agg_at_stock_latest(cur, hw, hp)
     if not agg:
         return (0, '0.00')
     rk_ok = _niusan_ts_codes_present_in_rt_k([r[0] for r in agg])
     agg = [r for r in agg if r[0] in rk_ok]
     if not agg:
         return (0, '0.00')
-    ts_list = [r[0] for r in agg]
-    ph = ','.join(['%s'] * len(ts_list))
-    ref_close: dict[str, Decimal] = {}
-    cur.execute(
-        f'''
-        SELECT s.ts_code, s.close
-        FROM stk_factor_pro s
-        INNER JOIN (
-            SELECT ts_code, MAX(trade_date) AS mx
-            FROM stk_factor_pro
-            WHERE ts_code IN ({ph}) AND trade_date <= %s
-            GROUP BY ts_code
-        ) m ON s.ts_code = m.ts_code AND s.trade_date = m.mx
-        ''',
-        tuple(ts_list) + (report_end,),
-    )
-    for x in cur.fetchall() or []:
-        ref_close[x[0]] = x[1] if x[1] is not None else Decimal('0')
+    pairs = [(str(r[0]).strip(), r[1]) for r in agg if r[0] and r[1] is not None]
+    ref_close = _niusan_ref_close_map_by_ts_end(cur, pairs)
     amt_sum = Decimal('0')
     for r in agg:
-        ts_code, hold_sum = r[0], r[1]
+        ts_code, _end_d, hold_sum = r[0], r[1], r[2]
         if hold_sum is None:
             continue
-        rc = ref_close.get(ts_code)
+        rc = ref_close.get(str(ts_code).strip())
         if rc is None:
             continue
         try:
             amt_sum += Decimal(str(hold_sum)) * Decimal(str(rc)) / Decimal('100000000')
         except Exception:
             pass
-    return (len(ts_list), f'{float(amt_sum):.2f}')
+    return (len(agg), f'{float(amt_sum):.2f}')
 
 
-def _niusan_scheme_summaries_for_report(conn, report_end: date) -> list[dict[str, object]]:
-    """配置中各方案：锚定报告期下持股只数 + 持股金额(亿)（与主表口径一致）。"""
+def _niusan_scheme_summaries_for_report(conn) -> list[dict[str, object]]:
+    """配置中各方案：各自按「每股最新已披露前十大」统计持股只数与金额（亿）。"""
     scheme_summaries: list[dict[str, object]] = []
     cfg_page = _niusan_holder_cfg_load()
-    for sch in cfg_page.get('schemes') or []:
-        if not isinstance(sch, dict):
-            continue
+    schemes = [s for s in (cfg_page.get('schemes') or []) if isinstance(s, dict)]
+
+    def _one(sch: dict) -> dict[str, object]:
         sn = str(sch.get('schemeName') or '').strip() or '--'
         hol = sch.get('holders')
         hol_list: list = hol if isinstance(hol, list) else []
-        with conn.cursor() as cur_sm:
-            cnt, amt_s = _niusan_scheme_stock_count_and_amt_yi(cur_sm, report_end, hol_list)
-        scheme_summaries.append(
-            {
-                'scheme_id': str(sch.get('id') or ''),
-                'scheme_name': sn,
-                'stock_count': cnt,
-                'amt_yi_total': amt_s,
-            }
-        )
+        # 每方案独立连接，便于线程池并行
+        c = pymysql.connect(**DB_CONFIG_TUSHARE)
+        try:
+            with c.cursor() as cur_sm:
+                cnt, amt_s = _niusan_scheme_stock_count_and_amt_yi(cur_sm, hol_list)
+        finally:
+            try:
+                c.close()
+            except Exception:
+                pass
+        return {
+            'scheme_id': str(sch.get('id') or ''),
+            'scheme_name': sn,
+            'stock_count': cnt,
+            'amt_yi_total': amt_s,
+        }
+
+    if len(schemes) <= 1:
+        for sch in schemes:
+            scheme_summaries.append(_one(sch))
+        return scheme_summaries
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    with ThreadPoolExecutor(max_workers=min(6, len(schemes))) as pool:
+        futs = {pool.submit(_one, sch): sch for sch in schemes}
+        by_id: dict[str, dict[str, object]] = {}
+        for fut in as_completed(futs):
+            item = fut.result()
+            by_id[str(item.get('scheme_id') or '')] = item
+    for sch in schemes:
+        sid = str(sch.get('id') or '')
+        if sid in by_id:
+            scheme_summaries.append(by_id[sid])
     return scheme_summaries
 
 
@@ -592,8 +759,12 @@ def _niusan_pct_display_cls(pct_str: str) -> str:
 
 
 def _query_niusan_holdings_page_rows(for_scheme_id: str | None = None):
-    """牛散持股页：四人合并为每股一行；读 stock_tushare，最新价另读 stock_wind.rt_k。
-    for_scheme_id 非空时仅针对该配置方案（用于方案汇总卡点击查看明细）；为空则用当前启用方案（主页表）。"""
+    """牛散持股页：关联人合并为每股一行；读 stock_tushare，最新价另读 stock_wind.rt_k。
+
+    纳入口径（每股独立）：仅当关联人仍出现在该股 top10_floatholders 最新已披露报告期；
+    各自行报告期可为不同季（如一股 2026-06-30、另一股仍 2026-03-31）。
+    for_scheme_id 非空时针对该配置方案；为空则用当前启用方案。
+    """
     res = _niusan_resolve_holder_hw_hp(for_scheme_id)
     if not res.get('ok'):
         err = str(res.get('error') or '')
@@ -611,54 +782,30 @@ def _query_niusan_holdings_page_rows(for_scheme_id: str | None = None):
     report_end: date | None = None
     err_msg: str | None = None
     scheme_summaries_out: list[dict[str, object]] = []
+    end_date_by_ts: dict[str, date] = {}
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                f'SELECT MAX(end_date) FROM top10_floatholders t WHERE {hw}',
-                hp,
-            )
-            mx = cur.fetchone()
-            report_end = mx[0] if mx and mx[0] is not None else None
-        if report_end is None:
-            return {'report_end_date': None, 'rows': [], 'error': None, 'amt_yi_total': '0.00', 'scheme_summaries': []}
-
-        with conn.cursor() as cur:
-            cur.execute(
-                f'''
-                SELECT d.ts_code,
-                       SUM(d.hold_amount) AS hold_sum,
-                       SUM(d.hold_float_ratio) AS ratio_sum,
-                       SUM(CASE WHEN d.hold_change IS NOT NULL THEN 1 ELSE 0 END) AS n_chg_lines,
-                       SUM(d.hold_change) AS sum_hold_change,
-                       MAX(d.ann_date) AS ann_date_max
-                FROM (
-                    SELECT t.ts_code, t.hold_amount, t.hold_float_ratio, t.hold_change, t.ann_date,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY t.ts_code, t.holder_name
-                            ORDER BY t.ann_date IS NULL ASC, t.ann_date DESC, t.hold_amount DESC
-                        ) AS rn
-                    FROM top10_floatholders t
-                    WHERE t.end_date = %s AND {hw}
-                ) d
-                WHERE d.rn = 1
-                GROUP BY d.ts_code
-                ORDER BY d.ts_code
-                ''',
-                (report_end,) + hp,
-            )
-            agg = cur.fetchall() or []
+            agg = _niusan_fetch_holdings_agg_at_stock_latest(cur, hw, hp)
         if agg:
             rk_allow = _niusan_ts_codes_present_in_rt_k([r[0] for r in agg])
             agg = [r for r in agg if r[0] in rk_allow]
         if not agg:
-            scheme_summaries_out = _niusan_scheme_summaries_for_report(conn, report_end)
+            scheme_summaries_out = _niusan_scheme_summaries_for_report(conn)
             return {
-                'report_end_date': report_end,
+                'report_end_date': None,
                 'rows': [],
                 'error': None,
                 'amt_yi_total': '0.00',
                 'scheme_summaries': scheme_summaries_out,
             }
+
+        # agg: ts_code, end_date, hold_sum, ratio_sum, n_chg_lines, sum_hold_change, ann_date_max
+        for r in agg:
+            ts = str(r[0] or '').strip()
+            ed = r[1]
+            if ts and ed is not None:
+                end_date_by_ts[ts] = ed
+        report_end = max(end_date_by_ts.values()) if end_date_by_ts else None
 
         ts_list = [r[0] for r in agg]
         ph = ','.join(['%s'] * len(ts_list))
@@ -695,23 +842,9 @@ def _query_niusan_holdings_page_rows(for_scheme_id: str | None = None):
             for x in cur.fetchall() or []:
                 sw_map[x[0]] = x[1] or ''
 
-        ref_close: dict[str, Decimal] = {}
+        pairs_ts_end = [(str(r[0]).strip(), r[1]) for r in agg if r[0] and r[1] is not None]
         with conn.cursor() as cur:
-            cur.execute(
-                f'''
-                SELECT s.ts_code, s.close
-                FROM stk_factor_pro s
-                INNER JOIN (
-                    SELECT ts_code, MAX(trade_date) AS mx
-                    FROM stk_factor_pro
-                    WHERE ts_code IN ({ph}) AND trade_date <= %s
-                    GROUP BY ts_code
-                ) m ON s.ts_code = m.ts_code AND s.trade_date = m.mx
-                ''',
-                tuple(ts_list) + (report_end,),
-            )
-            for x in cur.fetchall() or []:
-                ref_close[x[0]] = x[1] if x[1] is not None else Decimal('0')
+            ref_close = _niusan_ref_close_map_by_ts_end(cur, pairs_ts_end)
 
         latest_bar: dict[str, tuple] = {}
         with conn.cursor() as cur:
@@ -731,14 +864,19 @@ def _query_niusan_holdings_page_rows(for_scheme_id: str | None = None):
             for x in cur.fetchall() or []:
                 latest_bar[x[0]] = (x[1], x[2], x[3], x[4], x[5])
 
-        # 每股：从锚定季末按自然季往前链（缺季即止、新进季即止），再按季边际 VWAP + 持仓变化 blend
-        quarter_date_list = _niusan_quarter_ends_backward_list(report_end, 48)
+        # 每股：以该股纳入报告期为锚，按自然季往前链再 blend VWAP
+        anchor_for_quarters = report_end or max(end_date_by_ts.values())
+        quarter_date_list = _niusan_quarter_ends_backward_list(anchor_for_quarters, 48)
         hold_stats_page: dict[tuple[str, date], tuple[Decimal | None, int]] = {}
         with conn.cursor() as cur:
             hold_stats_page = _niusan_fetch_hold_stats_batch(cur, ts_list, quarter_date_list, hw, hp)
         chain_by_ts: defaultdict[str, list[tuple]] = defaultdict(list)
         for ts_item in ts_list:
-            chain_by_ts[ts_item] = _niusan_hold_chain_quarter_walk(ts_item, report_end, hold_stats_page)
+            ts_key = str(ts_item).strip()
+            anchor = end_date_by_ts.get(ts_key)
+            if anchor is None:
+                continue
+            chain_by_ts[ts_item] = _niusan_hold_chain_quarter_walk(ts_item, anchor, hold_stats_page)
 
         quarter_vwap_memo: dict[tuple[str, date], Decimal | None] = {}
         blended_last_by_ts: dict[str, Decimal | None] = {}
@@ -771,11 +909,12 @@ def _query_niusan_holdings_page_rows(for_scheme_id: str | None = None):
 
         for r in agg:
             ts_code = r[0]
-            hold_sum = r[1]
-            ratio_sum = r[2]
-            n_chg_lines = int(r[3] or 0)
-            sum_chg = r[4]
-            ann_date_mx = r[5]
+            row_end = r[1]
+            hold_sum = r[2]
+            ratio_sum = r[3]
+            n_chg_lines = int(r[4] or 0)
+            sum_chg = r[5]
+            ann_date_mx = r[6]
 
             name, list_dt = sb_map.get(ts_code, ('', None))
             sw_nm = sw_map.get(ts_code, '')
@@ -830,7 +969,7 @@ def _query_niusan_holdings_page_rows(for_scheme_id: str | None = None):
                 except Exception:
                     chg_disp = '--'
 
-            rc = ref_close.get(ts_code)
+            rc = ref_close.get(str(ts_code).strip())
             amt_yi = ''
             if hold_sum is not None and rc is not None:
                 try:
@@ -867,7 +1006,7 @@ def _query_niusan_holdings_page_rows(for_scheme_id: str | None = None):
                     pct_vs_vwap_s = '--'
 
             list_s = str(list_dt) if list_dt is not None else ''
-            period_s = str(report_end) if report_end is not None else '--'
+            period_s = str(row_end) if row_end is not None else '--'
             ann_s = '--'
             if ann_date_mx is not None:
                 try:
@@ -899,7 +1038,7 @@ def _query_niusan_holdings_page_rows(for_scheme_id: str | None = None):
                     'pct_vs_vwap_cls': _niusan_pct_display_cls(pct_vs_vwap_s),
                 }
             )
-        scheme_summaries_out = _niusan_scheme_summaries_for_report(conn, report_end)
+        scheme_summaries_out = _niusan_scheme_summaries_for_report(conn)
     except Exception as e:
         logger.exception('牛散持股页查询失败: %s', e)
         err_msg = str(e)
@@ -929,8 +1068,36 @@ def _query_niusan_holdings_page_rows(for_scheme_id: str | None = None):
     }
 
 
+def _niusan_stock_latest_anchor_for_holders(
+    cur, ts_code: str, hw: str, hp: tuple
+) -> date | None:
+    """该股全市场最新已披露 end_date；仅当关联人仍在该期前十大时返回该日期，否则 None。"""
+    ts_norm = str(ts_code or '').strip()
+    if not ts_norm or not hp:
+        return None
+    cur.execute(
+        'SELECT MAX(end_date) FROM top10_floatholders WHERE ts_code = %s',
+        (ts_norm,),
+    )
+    mx = cur.fetchone()
+    stock_latest = mx[0] if mx and mx[0] is not None else None
+    if stock_latest is None:
+        return None
+    cur.execute(
+        f'''
+        SELECT 1 FROM top10_floatholders t
+        WHERE t.ts_code = %s AND t.end_date = %s AND {hw}
+        LIMIT 1
+        ''',
+        (ts_norm, stock_latest) + hp,
+    )
+    if cur.fetchone() is None:
+        return None
+    return stock_latest
+
+
 def _query_niusan_floatholder_history(ts_code: str, for_scheme_id: str | None = None) -> dict:
-    """单只股票：锚定报告期（该方案关联人在 top10 上的 MAX end_date）之前的各期合并持仓，按报告期从新到旧。
+    """单只股票：锚定该股最新已披露且关联人仍在前十大的报告期，列出更早各期合并持仓。
     for_scheme_id 与主表当前选中方案一致；空则使用启用方案（兼容旧请求）。"""
     ts_norm = (ts_code or '').strip().upper()
     if not re.match(r'^\d{6}\.(SH|SZ|BJ)$', ts_norm):
@@ -948,9 +1115,7 @@ def _query_niusan_floatholder_history(ts_code: str, for_scheme_id: str | None = 
     err_msg: str | None = None
     try:
         with conn.cursor() as cur:
-            cur.execute(f'SELECT MAX(end_date) FROM top10_floatholders t WHERE {hw}', hp)
-            mx = cur.fetchone()
-            anchor = mx[0] if mx and mx[0] is not None else None
+            anchor = _niusan_stock_latest_anchor_for_holders(cur, ts_norm, hw, hp)
         if anchor is None:
             return {'ok': True, 'error': None, 'anchor_end_date': None, 'periods': []}
 
@@ -1140,7 +1305,7 @@ def _query_niusan_floatholder_history(ts_code: str, for_scheme_id: str | None = 
 
 
 def _query_niusan_floatholder_detail(ts_code: str, for_scheme_id: str | None = None) -> dict:
-    """锚定报告期下该股各关联人明细行 + 与主表一致的合并口径 VWAP。
+    """该股最新已披露且关联人仍在前十大的报告期下：各关联人明细 + 合并口径 VWAP。
     for_scheme_id 与当前主表方案一致；空则启用方案。"""
     ts_norm = (ts_code or '').strip().upper()
     if not re.match(r'^\d{6}\.(SH|SZ|BJ)$', ts_norm):
@@ -1156,9 +1321,7 @@ def _query_niusan_floatholder_detail(ts_code: str, for_scheme_id: str | None = N
     err_msg: str | None = None
     try:
         with conn.cursor() as cur:
-            cur.execute(f'SELECT MAX(end_date) FROM top10_floatholders t WHERE {hw}', hp)
-            mx = cur.fetchone()
-            report_end = mx[0] if mx and mx[0] is not None else None
+            report_end = _niusan_stock_latest_anchor_for_holders(cur, ts_norm, hw, hp)
         if report_end is None:
             return {'ok': False, 'error': 'no_anchor'}
 
@@ -1213,7 +1376,7 @@ def _query_niusan_floatholder_detail(ts_code: str, for_scheme_id: str | None = N
             if nm_row and nm_row[0]:
                 name_s = nm_row[0] or '--'
 
-        scheme_summaries = _niusan_scheme_summaries_for_report(conn, report_end)
+        scheme_summaries = _niusan_scheme_summaries_for_report(conn)
 
         for dr in detail_rows:
             hn = dr[0] if dr[0] is not None else '--'
@@ -1286,29 +1449,30 @@ def _query_niusan_floatholder_detail(ts_code: str, for_scheme_id: str | None = N
 
 
 def _render_rt_monitor_niusan_no_cache():
-    """牛散持股单页：关联人 OR 合并；方案名与文案来自 niusan_holder_config.json。"""
-    payload = _query_niusan_holdings_page_rows()
+    """牛散页壳：不在 SSR 打重查询；主表/方案条由前端拉 /api/niusan_scheme_holdings。"""
     sch = _get_active_niusan_scheme()
     scheme_title = str(sch.get('schemeName') or '').strip() or '--'
     holders_for_display = sch.get('holders') if isinstance(sch, dict) else None
     if isinstance(holders_for_display, list):
-        related_join = ' / '.join(str(h).strip() for h in holders_for_display if isinstance(h, str) and h.strip())
+        related_join = ' / '.join(
+            str(h).strip() for h in holders_for_display if isinstance(h, str) and h.strip()
+        )
     else:
         related_join = ''
-    active_sch = _get_active_niusan_scheme()
-    active_scheme_id = str(active_sch.get('id') or '') if isinstance(active_sch, dict) else ''
+    active_scheme_id = str(sch.get('id') or '') if isinstance(sch, dict) else ''
     holder_cfg_embed = _niusan_holder_cfg_load()
     resp = make_response(
         render_template(
             'rt_monitor_niusan.html',
-            niusan_rows=payload['rows'],
-            niusan_error=payload['error'],
-            niusan_amt_yi_total=payload.get('amt_yi_total', '0.00'),
+            niusan_rows=[],
+            niusan_error=None,
+            niusan_amt_yi_total='--',
             niusan_scheme_title=scheme_title,
             niusan_related_join=related_join,
-            niusan_scheme_summaries=payload.get('scheme_summaries') or [],
+            niusan_scheme_summaries=[],
             niusan_active_scheme_id=active_scheme_id,
             niusan_holder_cfg_embed=holder_cfg_embed,
+            niusan_async_boot=True,
         )
     )
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -1318,5 +1482,43 @@ def _render_rt_monitor_niusan_no_cache():
     return resp
 
 
+def warmupNiusanCacheAsync() -> None:
+    """启动后台预热各方案持股缓存（先 active，再其余）。"""
 
-# 代码更新时间：2026-06-17 16:14
+    def _worker() -> None:
+        try:
+            time.sleep(2.0)
+            cfg = _niusan_holder_cfg_load()
+            schemes = [
+                s for s in (cfg.get('schemes') or []) if isinstance(s, dict) and s.get('id')
+            ]
+            activeId = str(cfg.get('activeId') or '').strip()
+            ordered: list[str] = []
+            if activeId:
+                ordered.append(activeId)
+            for s in schemes:
+                sid = str(s.get('id') or '').strip()
+                if sid and sid not in ordered:
+                    ordered.append(sid)
+            for sid in ordered:
+                t0 = time.perf_counter()
+                payload = queryNiusanHoldingsCached(sid)
+                n = len(payload.get('rows') or [])
+                err = payload.get('error')
+                logger.info(
+                    '牛散持股缓存已预热：scheme=%s rows=%s err=%s elapsed=%.2fs',
+                    sid,
+                    n,
+                    err or '-',
+                    time.perf_counter() - t0,
+                )
+        except Exception as e:
+            logger.warning('牛散持股预热失败（忽略不影响启动）: %s', e)
+
+    threading.Thread(target=_worker, daemon=True, name='warmup-niusan-holdings').start()
+
+
+# 代码更新时间：2026-06-23 06:01
+# 代码更新时间：2026-07-30 16:28 主表/方案卡按每股最新已披露前十大纳入（多报告期并存）
+# 代码更新时间：2026-07-30 16:32 方案汇总并行 + 聚合 SQL 拆步加速
+# 代码更新时间：2026-08-06 22:41 页面出壳+持股 API TTL 缓存/启动预热

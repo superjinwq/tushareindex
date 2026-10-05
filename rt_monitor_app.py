@@ -11,6 +11,12 @@
 """
 from __future__ import annotations
 
+if __name__ in ('__main__', '__mp_main__'):
+    # 作为服务运行时独占日志文件；被外部脚本 import 时不改动其日志。子进程（__mp_main__）单独一份避免抢轮转
+    from logger_config import useDedicatedLogFile
+
+    useDedicatedLogFile('rt_monitor_app' if __name__ == '__main__' else 'rt_monitor_app_worker')
+
 from rt_monitor.app_factory import create_app, run_server
 from rt_monitor.core.config import (
     DB_CONFIG,
@@ -33,3 +39,4 @@ if __name__ == '__main__':
     run_server()
 
 # 代码更新时间：2026-06-17 17:35
+# 代码更新时间：2026-10-04 17:42 服务运行独占 logs/rt_monitor_app.log

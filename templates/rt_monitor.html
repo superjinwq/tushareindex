@@ -217,10 +217,10 @@
                 <thead>
                     <tr>
                         <th>分类</th>
-                        <th>Pct</th>
-                        <th>Intra</th>
-                        <th>Gap</th>
-                        <th>Amp</th>
+                        <th title="当天涨跌幅%：(最新价 − 昨收) / 昨收 × 100。旁注为全历史分位；≤5 绿底，≥95 红底">Pct</th>
+                        <th title="开盘以后的涨跌%：(最新价 − 开盘) / 开盘 × 100。旁注为全历史分位；≤5 绿底，≥95 红底">Intra</th>
+                        <th title="跳空%：(开盘 − 昨收) / 昨收 × 100，开盘后不变。旁注为全历史分位；≤5 绿底，≥95 红底">Gap</th>
+                        <th title="振幅%：(最高 − 最低) / 昨收 × 100。旁注为完整交易日全历史分位；盘中振幅未走完，常偏低。≤5 绿底，≥95 红底">Amp</th>
                         <th>T-1</th>
                         <th>T-5</th>
                         <th>T-20</th>
@@ -284,11 +284,13 @@
                         <th>T-20</th>
                         <th>T-60</th>
                         <th>T-120</th>
+                        <th title="全历史成交额最大值（亿元，整数）。指数行取 index_daily，全部A股取 marketinfo">MAX</th>
+                        <th title="全历史成交额峰值所在交易日；同额并列取较新的交易日">峰值日</th>
                         <th>MAX T-60</th>
-                        <th>峰值日</th>
+                        <th title="近60个交易日成交额峰值所在交易日">峰值日(T-60)</th>
                         <th class="amount-shrink-pct-head" title="昨成交额(T-1) ÷ 近60交易日峰值(MAX T-60) × 100">缩量%</th>
                         <th>MIN T-60</th>
-                        <th>谷值日</th>
+                        <th title="近60个交易日成交额谷值所在交易日">谷值日(T-60)</th>
                     </tr>
                 </thead>
                 <tbody id="amount-table-body">
@@ -395,7 +397,7 @@
                         </label>
                         <label class="config-row interval-wrap">
                             <span>间隔</span>
-                            <input type="number" id="refresh-interval" name="rt_monitor_refresh_interval_sec" min="0" step="1" placeholder="秒" value="3" class="config-interval-input" inputmode="numeric" autocomplete="off" enterkeyhint="done">
+                            <input type="number" id="refresh-interval" min="0" step="1" placeholder="秒" value="1" class="config-interval-input" inputmode="numeric" autocomplete="off" enterkeyhint="done">
                             <span class="config-unit">秒</span>
                         </label>
                         <button type="button" id="btn-refresh" class="btn-refresh" aria-label="立即刷新盘中数据">立即刷新</button>
@@ -458,12 +460,12 @@
                         <th colspan="4" class="bias-th-freq">支撑与阻力</th>
                     </tr>
                     <tr>
-                        <th class="bias-th-col ma-signal-amt-col">AMT</th>
+                        <th class="bias-th-col ma-signal-amt-col" title="当日累计成交额（亿）。旁注为该 ETF etf_daily 全历史分位；≤5 绿底，≥95 红底。盘中未走完，常偏低">AMT</th>
                         <th class="bias-th-col">Last</th>
-                        <th class="bias-th-col">Pct</th>
-                        <th class="bias-th-col">Intra</th>
-                        <th class="bias-th-col">Gap</th>
-                        <th class="bias-th-col">Amp</th>
+                        <th class="bias-th-col" title="当天涨跌幅%：(最新价 − 昨收) / 昨收 × 100。旁注为全历史分位；≤5 绿底，≥95 红底">Pct</th>
+                        <th class="bias-th-col" title="开盘以后的涨跌%：(最新价 − 开盘) / 开盘 × 100。旁注为全历史分位；≤5 绿底，≥95 红底">Intra</th>
+                        <th class="bias-th-col" title="跳空%：(开盘 − 昨收) / 昨收 × 100。旁注为全历史分位；≤5 绿底，≥95 红底">Gap</th>
+                        <th class="bias-th-col" title="振幅%：(最高 − 最低) / 昨收 × 100。旁注为完整交易日全历史分位；盘中常偏低。≤5 绿底，≥95 红底">Amp</th>
                         <th class="bias-th-col">T-1</th>
                         <th class="bias-th-col">T-5</th>
                         <th class="bias-th-col">T-20</th>
