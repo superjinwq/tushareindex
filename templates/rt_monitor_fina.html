@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<!-- rt-monitor-fina-template: {{ rt_monitor_static_ver }} -->
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>window.__RT_MONITOR_API_PREFIX__ = {{ rt_monitor_api_prefix | tojson }};</script>
+    <title>财报筛选</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ rt_monitor_static_ver }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rt_monitor.css') }}?v={{ rt_monitor_static_ver }}">
+    <style id="rt-monitor-fina-layout">
+        /* 全高 flex 布局：页面不产生文档级滚动；
+           tbody-scroll 使用浏览器原生双向滚动条（compositor-thread 顺滑） */
+        html, body.rt-monitor.rt-monitor-fina-page {
+            height: 100vh;
+            max-height: 100vh;
+            overflow: hidden;
+            padding: 0 !important;
+        }
+        .rt-monitor-fina-page .container {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding: 0 !important;
+            max-width: 100%;
+        }
+        .fina-arturn-boot-hint {
+            margin: 0;
+            font-size: 13px;
+            color: var(--rt-monitor-text-muted, #666);
+            line-height: 1.35;
+        }
+        /* 进度条 DOM 保留、逻辑可开；默认不展示 */
+        #fina-render-progress {
+            display: none !important;
+        }
+        .fina-render-progress {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 10px 4px;
+            font-size: 12px;
+            color: var(--rt-monitor-text-muted, #555);
+        }
+        .fina-render-progress-track {
+            flex: 1;
+            max-width: 280px;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(0, 0, 0, 0.08);
+            overflow: hidden;
+        }
+        .fina-render-progress-fill {
+            height: 100%;
+            width: 0%;
+            border-radius: 3px;
+            background: linear-gradient(90deg, #1976d2, #42a5f5);
+            transition: width 0.15s ease-out;
+        }
+        .fina-render-progress-label {
+            white-space: nowrap;
+        }
+        /* 视口横滚条轨道与页面灰底一致，避免表体下缘与「第二条」灰带割裂 */
+        html {
+            scrollbar-color: #b4b9c2 var(--rt-monitor-bg-page, #e8eaed);
+        }
+        html::-webkit-scrollbar {
+            height: 11px;
+            width: 11px;
+        }
+        html::-webkit-scrollbar-track {
+            background: var(--rt-monitor-bg-page, #e8eaed);
+        }
+        html::-webkit-scrollbar-thumb {
+            background: #b4b9c2;
+            border-radius: 6px;
+        }
+    </style>
+</head>
+<body class="rt-monitor rt-monitor-fina-page">
+    <a href="#rt-monitor-fina-main" class="rt-monitor-skip-link">跳到主内容</a>
+    <main id="rt-monitor-fina-main" class="container">
+{% include '_rt_monitor_fina_arturn_section.html' %}
+    </main>
+{% include '_rt_monitor_fina_arturn_scheme_modal.html' %}
+    <div id="fina-fixed-assets-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="fina-fixed-assets-modal-topic">
+        <div class="bias-series-modal fina-fixed-assets-modal-shell">
+            <div class="bias-series-modal-header fina-fixed-assets-modal-header">
+                <div class="fina-fixed-assets-nav-btns" role="group" aria-label="按当前表顺序切换股票">
+                    <button type="button" id="fina-fixed-assets-nav-prev" class="fina-fixed-assets-nav-btn">上一个</button>
+                    <button type="button" id="fina-fixed-assets-nav-next" class="fina-fixed-assets-nav-btn">下一个</button>
+                    <button type="button" id="fina-fixed-assets-growth-config-btn" class="fina-fixed-assets-nav-btn fina-fixed-assets-config-btn" aria-expanded="false" aria-controls="fina-fixed-assets-growth-config-panel">配置</button>
+                    <div id="fina-fixed-assets-growth-config-panel" class="fina-fixed-assets-growth-config-panel" hidden aria-label="成长性指标显示配置"></div>
+                </div>
+                <div class="fina-fixed-assets-header-single-row">
+                    <div class="fina-fixed-assets-header-center" role="group">
+                        <input
+                            type="text"
+                            id="fina-fixed-assets-ts-input"
+                            class="fina-fixed-assets-ts-input"
+                            maxlength="16"
+                            placeholder="如 603223 或 603223.SH"
+                            autocomplete="off"
+                            spellcheck="false"
+                            title="6 位代码可自动补后缀；编辑后按 Enter 加载"
+                            aria-label="股票代码"
+                        />
+                        <span id="fina-fixed-assets-modal-sec-name" class="fina-fixed-assets-sec-name"></span>
+                        <span id="fina-fixed-assets-modal-topic" class="fina-fixed-assets-modal-topic" role="heading" aria-level="2">速览</span>
+                    </div>
+                </div>
+                <button type="button" id="fina-fixed-assets-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body">
+                <div id="fina-fixed-assets-modal-metrics" class="fina-fixed-assets-modal-metrics" aria-live="polite"></div>
+                <div id="fina-fixed-assets-mainbz-wrap" class="fina-fixed-assets-mainbz-wrap" aria-live="polite"></div>
+                {# bias-series-msg 须放在 position:relative 的 chart-wrap 内，否则 absolute 会相对 fixed 遮罩铺满全屏盖住弹窗 #}
+                <div id="fina-fixed-assets-chart-wrap" class="bias-series-chart-wrap fina-fixed-assets-chart-wrap">
+                    <div id="fina-fixed-assets-modal-msg" class="bias-series-msg" style="display: none;" aria-live="polite"></div>
+                    <canvas id="fina-fixed-assets-chart"></canvas>
+                </div>
+                <div id="fina-fixed-assets-operating-data-wrap" class="fina-fixed-assets-operating-data-wrap" aria-label="单季经营数据表"></div>
+            </div>
+        </div>
+    </div>
+    <div id="fina-top3-holders-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="fina-top3-holders-modal-title">
+        <div class="bias-series-modal fina-top3-holders-modal-shell">
+            <div class="bias-series-modal-header fina-top3-holders-modal-header">
+                <h2 id="fina-top3-holders-modal-title" class="bias-series-modal-title">前三持股明细</h2>
+                <button type="button" id="fina-top3-holders-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body fina-top3-holders-modal-body">
+                <p id="fina-top3-holders-modal-sub" class="fina-top3-holders-modal-sub" aria-live="polite"></p>
+                <div id="fina-top3-holders-modal-table-wrap" class="fina-top3-holders-modal-table-wrap"></div>
+            </div>
+        </div>
+    </div>
+    <div id="fina-float-holders-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="fina-float-holders-modal-title">
+        <div class="bias-series-modal fina-float-holders-modal-shell">
+            <div class="bias-series-modal-header fina-float-holders-modal-header">
+                <h2 id="fina-float-holders-modal-title" class="bias-series-modal-title">流通股东前十</h2>
+                <button type="button" id="fina-float-holders-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body fina-float-holders-modal-body">
+                <p id="fina-float-holders-modal-sub" class="fina-float-holders-modal-sub" aria-live="polite"></p>
+                <div id="fina-float-holders-modal-table-wrap" class="fina-float-holders-modal-table-wrap"></div>
+            </div>
+        </div>
+    </div>
+    <div id="fina-cash-create-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="fina-cash-create-modal-title">
+        <div class="bias-series-modal fina-cash-create-modal-shell">
+            <div class="bias-series-modal-header fina-cash-create-modal-header">
+                <h2 id="fina-cash-create-modal-title" class="bias-series-modal-title">现金创造能力</h2>
+                <button type="button" id="fina-cash-create-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body">
+                <div id="fina-cash-create-chart-wrap" class="bias-series-chart-wrap fina-cash-create-chart-wrap">
+                    <div id="fina-cash-create-modal-msg" class="bias-series-msg" style="display: none;" aria-live="polite"></div>
+                    <canvas id="fina-cash-create-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="fina-working-cap-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="fina-working-cap-modal-title">
+        <div class="bias-series-modal fina-working-cap-modal-shell">
+            <div class="bias-series-modal-header fina-working-cap-modal-header">
+                <h2 id="fina-working-cap-modal-title" class="bias-series-modal-title">营运资本周转天数</h2>
+                <button type="button" id="fina-working-cap-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body">
+                <div id="fina-working-cap-chart-wrap" class="bias-series-chart-wrap fina-working-cap-chart-wrap">
+                    <div id="fina-working-cap-modal-msg" class="bias-series-msg" style="display: none;" aria-live="polite"></div>
+                    <canvas id="fina-working-cap-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="fina-cap-eff-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="fina-cap-eff-modal-title">
+        <div class="bias-series-modal fina-cap-eff-modal-shell">
+            <div class="bias-series-modal-header fina-cap-eff-modal-header">
+                <h2 id="fina-cap-eff-modal-title" class="bias-series-modal-title">资本效率</h2>
+                <button type="button" id="fina-cap-eff-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body">
+                <div id="fina-cap-eff-chart-wrap" class="bias-series-chart-wrap fina-cap-eff-chart-wrap">
+                    <div id="fina-cap-eff-modal-msg" class="bias-series-msg" style="display: none;" aria-live="polite"></div>
+                    <canvas id="fina-cap-eff-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="fina-qfq-break-tip-his-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="fina-qfq-break-tip-his-title">
+        <div class="bias-series-modal fina-qfq-break-tip-modal-shell" data-tip-mode="his">
+            <div class="bias-series-modal-header fina-qfq-break-tip-modal-header">
+                <h2 id="fina-qfq-break-tip-his-title" class="bias-series-modal-title">首次历史新高 · 因子提示</h2>
+                <button type="button" id="fina-qfq-break-tip-his-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body fina-qfq-break-tip-modal-body" id="fina-qfq-break-tip-his-body"></div>
+        </div>
+    </div>
+    <div id="fina-qfq-break-tip-850-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="fina-qfq-break-tip-850-title">
+        <div class="bias-series-modal fina-qfq-break-tip-modal-shell" data-tip-mode="850">
+            <div class="bias-series-modal-header fina-qfq-break-tip-modal-header">
+                <h2 id="fina-qfq-break-tip-850-title" class="bias-series-modal-title">首次850新高 · 因子提示</h2>
+                <button type="button" id="fina-qfq-break-tip-850-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body fina-qfq-break-tip-modal-body" id="fina-qfq-break-tip-850-body"></div>
+        </div>
+    </div>
+    <script defer src="{{ url_for('static', filename='vendor/chart-stack.umd.js') }}?v={{ rt_monitor_static_ver }}"></script>
+    {# 财报专用瘦包（约 85KB），与主监控 rt_monitor.js 解耦，首屏解析量远小于全量脚本 #}
+    <script defer src="{{ url_for('static', filename='js/rt_monitor_fina.js') }}?v={{ rt_monitor_static_ver }}"></script>
+</body>
+</html>

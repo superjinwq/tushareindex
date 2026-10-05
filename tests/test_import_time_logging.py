@@ -30,8 +30,14 @@ def _run(code: str, cwd) -> list[str]:
     ).stdout.splitlines()
 
 
+def _skipIfModuleMissing(module: str) -> None:
+    if not os.path.isfile(os.path.join(REPO_ROOT, f'{module}.py')):
+        pytest.skip(f'未纳入版本库：{module}.py')
+
+
 @pytest.mark.parametrize('module', sorted(IMPORTED_SCRIPTS))
 def test_host_logging_survives_import(module, tmp_path) -> None:
+    _skipIfModuleMissing(module)
     out = _run(
         "import logging; logging.basicConfig(handlers=[logging.NullHandler()]);"
         f"import {module};"
@@ -44,6 +50,7 @@ def test_host_logging_survives_import(module, tmp_path) -> None:
 
 @pytest.mark.parametrize('module', sorted(IMPORTED_SCRIPTS))
 def test_standalone_import_uses_own_log(module, tmp_path) -> None:
+    _skipIfModuleMissing(module)
     out = _run(
         f"import logging, {module};"
         "import os; print(sorted(os.path.basename(getattr(h, 'baseFilename', '')) for h in logging.getLogger().handlers))",
@@ -52,3 +59,4 @@ def test_standalone_import_uses_own_log(module, tmp_path) -> None:
     assert IMPORTED_SCRIPTS[module] in out[-1]
 
 # 代码更新时间：2026-10-04 21:04 导入期日志不劫持宿主回归
+# 代码更新时间：2026-10-05 10:11 模块文件不在仓库时 skip

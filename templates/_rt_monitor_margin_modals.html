@@ -1,0 +1,34 @@
+{# 两融双图双击放大弹窗 #}
+    <!-- 净买入额 + 融资余额：双击主图放大约5年，Hammer 平移 + 滚轮缩放 -->
+    <div id="margin-daily-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="margin-daily-modal-title">
+        <div class="bias-series-modal margin-daily-modal-shell">
+            <div class="bias-series-modal-header">
+                <h2 id="margin-daily-modal-title" class="bias-series-modal-title">净买入额（亿） &amp; 融资余额（最近约5年交易日）</h2>
+                <button type="button" id="margin-daily-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body">
+                <div id="margin-daily-modal-chart-wrap" class="bias-series-chart-wrap margin-daily-modal-chart-wrap">
+                    <div id="margin-daily-modal-loading" class="bias-series-loading" style="display: none;">加载中…</div>
+                    <div id="margin-daily-modal-msg" class="bias-series-msg" style="display: none;"></div>
+                    <canvas id="margin-daily-modal-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 融资买入额占比 + 国证A指：双击主图放大约5年，Hammer 平移 + 滚轮缩放 -->
+    <div id="margin-rzmre-idx-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="margin-rzmre-idx-modal-title">
+        <div class="bias-series-modal margin-rzmre-idx-modal-shell">
+            <div class="bias-series-modal-header">
+                <h2 id="margin-rzmre-idx-modal-title" class="bias-series-modal-title">融资买入额占比 &amp; 国证A指（最近约5年交易日）</h2>
+                <button type="button" id="margin-rzmre-idx-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body">
+                <div id="margin-rzmre-idx-modal-chart-wrap" class="bias-series-chart-wrap margin-rzmre-idx-modal-chart-wrap">
+                    <div id="margin-rzmre-idx-modal-loading" class="bias-series-loading" style="display: none;">加载中…</div>
+                    <div id="margin-rzmre-idx-modal-msg" class="bias-series-msg" style="display: none;"></div>
+                    <canvas id="margin-rzmre-idx-modal-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>

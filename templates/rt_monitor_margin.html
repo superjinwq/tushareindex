@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<!-- rt-monitor-margin-template: {{ rt_monitor_static_ver }} -->
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>window.__RT_MONITOR_API_PREFIX__ = {{ rt_monitor_api_prefix | tojson }};</script>
+    <script>window.__RT_MONITOR_MARGIN_ONLY__ = true;</script>
+    <title>两融</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ rt_monitor_static_ver }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rt_monitor.css') }}?v={{ rt_monitor_static_ver }}">
+    <style id="rt-monitor-margin-layout">
+        body.rt-monitor.rt-monitor-margin-page {
+            padding: 3px !important;
+        }
+        .rt-monitor-margin-page .container {
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch;
+        }
+    </style>
+</head>
+<body class="rt-monitor rt-monitor-margin-page">
+    <a href="#rt-monitor-margin-main" class="rt-monitor-skip-link">跳到主内容</a>
+    <main id="rt-monitor-margin-main" class="container">
+{% include '_rt_monitor_margin_pair.html' %}
+        <section class="message-section" id="message-section" style="display: none;">
+            <div class="message message-error" id="message-text"></div>
+        </section>
+    </main>
+{% include '_rt_monitor_margin_modals.html' %}
+    {# 单文件 chart-stack + defer：并行下载、一次解析三库，避免 Promise 串行与 373KB rt_monitor 阻塞同一任务队列 #}
+    <script defer src="{{ url_for('static', filename='vendor/chart-stack.umd.js') }}?v={{ rt_monitor_static_ver }}"></script>
+    <script defer src="{{ url_for('static', filename='js/rt_monitor.js') }}?v={{ rt_monitor_static_ver }}"></script>
+</body>
+</html>

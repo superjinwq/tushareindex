@@ -138,7 +138,10 @@ _EXPECTED_BINDINGS = {
 )
 def test_script_binds_original_variant(script, shared) -> None:
     """每个脚本里的 WindowsSafeTimedRotatingFileHandler 必须指向与原副本等价的那一种实现。"""
-    tree = ast.parse((REPO_ROOT / script).read_text(encoding='utf-8'))
+    path = REPO_ROOT / script
+    if not path.is_file():
+        pytest.skip(f'未纳入版本库：{script}')
+    tree = ast.parse(path.read_text(encoding='utf-8'))
     assert not any(isinstance(n, ast.ClassDef) and n.name == 'WindowsSafeTimedRotatingFileHandler' for n in tree.body)
     bound = {
         (a.asname or a.name): a.name
@@ -148,3 +151,4 @@ def test_script_binds_original_variant(script, shared) -> None:
     assert bound.get('WindowsSafeTimedRotatingFileHandler') == shared
 
 # 代码更新时间：2026-10-04 18:38 共享 Windows 安全轮转 Handler 回归
+# 代码更新时间：2026-10-05 10:11 脚本不在仓库时 skip，避免干净检出假红

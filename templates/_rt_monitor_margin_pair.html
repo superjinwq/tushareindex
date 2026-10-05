@@ -1,0 +1,17 @@
+{# 融资融券双图（净买入&融资余额、融资买入额占比&国证A指）：与 rt_monitor_margin 单页共用 #}
+        <div class="idx-charts-pair-row rt-trend-row" id="margin-daily-pair-row" aria-label="融资融券：净买入与融资余额、融资买入额占比与国证A指">
+        <section class="median-table-wrap margin-daily-wrap" id="margin-daily-section">
+            <div class="median-table-title idx-minute-title-row">
+                <span>净买入额（亿） &amp; 融资余额（最近300交易日）</span>
+                <span id="margin-daily-latest" class="idx-minute-predict" aria-live="polite">--</span>
+            </div>
+            <div id="margin-daily-chart" class="rt-monitor-idx-chart" role="img" aria-label="净买入额柱状与融资余额折线，最近300个交易日"></div>
+        </section>
+        <section class="median-table-wrap margin-daily-wrap" id="margin-rzmre-idx-section">
+            <div class="median-table-title idx-minute-title-row">
+                <span>融资买入额占比 &amp; 国证A指（最近300交易日）</span>
+                <span id="margin-rzmre-idx-latest" class="idx-minute-predict" aria-live="polite">--</span>
+            </div>
+            <div id="margin-rzmre-idx-chart" class="rt-monitor-idx-chart" role="img" aria-label="融资买入额占比与国证A指收盘价双折线，最近300个交易日；双击可打开放大约5年"></div>
+        </section>
+        </div>

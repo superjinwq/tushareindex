@@ -1,0 +1,48 @@
+{# 牛散持股页：方案配置弹窗 + 关联人明细弹窗 #}
+<div id="niusan-scheme-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="niusan-scheme-modal-title">
+    <div id="niusan-scheme-modal-shell" class="bias-series-modal fina-arturn-scheme-modal-shell niusan-scheme-modal-extra">
+        <div class="bias-series-modal-header niusan-modal-drag-header">
+            <h2 id="niusan-scheme-modal-title" class="bias-series-modal-title">方案配置</h2>
+            <button type="button" id="niusan-scheme-modal-close" class="bias-series-modal-close">关闭</button>
+        </div>
+        <div class="bias-series-modal-body fina-arturn-scheme-modal-body niusan-scheme-modal-body-inner">
+            <div class="niusan-modal-scheme-toolbar niusan-cfg-toolbar">
+                <label class="niusan-modal-scheme-pick-wrap">方案名称
+                    <select id="niusan-modal-scheme-select" class="niusan-modal-scheme-select" aria-label="选择要编辑的方案"></select>
+                </label>
+                <button type="button" class="niusan-cfg-btn secondary" id="niusan-modal-add-scheme">新增方案</button>
+                <button type="button" class="niusan-cfg-btn secondary" id="niusan-modal-del-scheme">删除所选</button>
+                <button type="button" class="niusan-cfg-btn" id="niusan-modal-save">保存并刷新本页</button>
+            </div>
+            <div id="niusan-modal-cfg-msg" class="niusan-cfg-msg" aria-live="polite"></div>
+            <div id="niusan-modal-single-editor"></div>
+        </div>
+    </div>
+</div>
+<div id="niusan-detail-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="niusan-detail-modal-title">
+    <div id="niusan-detail-modal-shell" class="bias-series-modal niusan-detail-modal-shell">
+        <div class="bias-series-modal-header niusan-modal-drag-header">
+            <h2 id="niusan-detail-modal-title" class="bias-series-modal-title">关联人持股明细</h2>
+            <button type="button" id="niusan-detail-modal-close" class="bias-series-modal-close">关闭</button>
+        </div>
+        <div class="bias-series-modal-body niusan-detail-modal-body">
+            <div id="niusan-detail-modal-sub" class="niusan-detail-modal-sub"></div>
+            <div class="niusan-detail-table-wrap">
+                <table class="niusan-detail-table" aria-label="关联人明细">
+                    <thead>
+                        <tr>
+                            <th scope="col">关联人</th>
+                            <th scope="col">持股数(万股)</th>
+                            <th scope="col">持股比例(%)</th>
+                            <th scope="col">持仓变化</th>
+                            <th scope="col">持股金额(亿)</th>
+                            <th scope="col">VWAP</th>
+                        </tr>
+                    </thead>
+                    <tbody id="niusan-detail-tbody"></tbody>
+                </table>
+            </div>
+            <p id="niusan-detail-modal-foot" class="niusan-detail-modal-foot"></p>
+        </div>
+    </div>
+</div>

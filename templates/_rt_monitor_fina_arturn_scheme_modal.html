@@ -1,0 +1,59 @@
+{# 应收账款筛选方案弹窗 #}
+    <div id="fina-arturn-scheme-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="fina-arturn-scheme-modal-title">
+        <div class="bias-series-modal fina-arturn-scheme-modal-shell">
+            <div class="bias-series-modal-header">
+                <h2 id="fina-arturn-scheme-modal-title" class="bias-series-modal-title">筛选方案</h2>
+                <button type="button" id="fina-arturn-scheme-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body fina-arturn-scheme-modal-body">
+                <div id="fina-arturn-scheme-modal-msg" class="fina-arturn-scheme-modal-msg" aria-live="polite"></div>
+                <button type="button" id="fina-arturn-reset-filters-btn" class="btn-refresh fina-arturn-scheme-modal-btn" title="清空所有列筛选条件并重置排序" aria-label="重置筛选条件">重置筛选</button>
+                <div class="fina-arturn-scheme-modal-field fina-arturn-scheme-stock-scope" role="group" aria-label="列表股票范围">
+                    <span class="fina-arturn-scheme-modal-label">列表股票范围</span>
+                    <label class="fina-arturn-scheme-modal-checkline">
+                        <input type="checkbox" id="fina-arturn-exclude-bj" />
+                        去除北交所（代码后缀 .BJ）
+                    </label>
+                    <label class="fina-arturn-scheme-modal-checkline">
+                        <input type="checkbox" id="fina-arturn-exclude-st" />
+                        去除 ST（名称以 *ST、ST、退市等判定）
+                    </label>
+                </div>
+                <div class="fina-arturn-scheme-modal-field fina-arturn-custom-board-import" role="group" aria-label="自定义板块导入">
+                    <span class="fina-arturn-scheme-modal-label">自定义板块导入</span>
+                    <input id="fina-arturn-custom-board-file" class="fina-arturn-input fina-arturn-scheme-modal-input" type="file" accept=".txt,.csv,.xlsx,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" aria-label="选择含股票代码的 txt/csv/xlsx" />
+                    <input id="fina-arturn-custom-board-name" class="fina-arturn-input fina-arturn-scheme-modal-input" type="text" placeholder="板块名称（默认用文件名，可改）" autocomplete="off" />
+                    <button type="button" id="fina-arturn-custom-board-import-btn" class="btn-refresh fina-arturn-scheme-modal-btn">导入并保存板块</button>
+                </div>
+                <div class="fina-arturn-scheme-modal-field">
+                    <label for="fina-arturn-end-date-select" class="fina-arturn-scheme-modal-label">报告期</label>
+                    <select id="fina-arturn-end-date-select" class="fina-arturn-input fina-arturn-scheme-modal-input" aria-label="报告期"></select>
+                </div>
+                <input id="fina-arturn-scheme-name" class="fina-arturn-input fina-arturn-scheme-modal-input" type="text" placeholder="筛选方案名称（例如：高周转科技）" />
+                <button type="button" id="fina-arturn-save-scheme-btn" class="btn-refresh fina-arturn-scheme-modal-btn">保存方案</button>
+                <select id="fina-arturn-scheme-select" class="fina-arturn-input fina-arturn-scheme-modal-input" aria-label="已保存方案"></select>
+                <div id="fina-arturn-scheme-preview-wrap" class="fina-arturn-scheme-preview-wrap" hidden>
+                    <div class="fina-arturn-scheme-modal-label">方案筛选摘要</div>
+                    <div id="fina-arturn-scheme-preview-body" class="fina-arturn-scheme-preview-body" role="region" aria-label="所选方案的列条件"></div>
+                </div>
+                <div class="fina-arturn-scheme-modal-field">
+                    <label for="fina-arturn-apply-end-date-mode" class="fina-arturn-scheme-modal-label">调用方案时报告期</label>
+                    <select id="fina-arturn-apply-end-date-mode" class="fina-arturn-input fina-arturn-scheme-modal-input" aria-label="调用方案时报告期">
+                        <option value="current">使用当前报告期（默认）</option>
+                        <option value="scheme">使用方案保存报告期</option>
+                        <option value="manual">手动选择报告期</option>
+                    </select>
+                </div>
+                <div class="fina-arturn-scheme-modal-field" id="fina-arturn-apply-end-date-manual-wrap" hidden>
+                    <label for="fina-arturn-apply-end-date-select" class="fina-arturn-scheme-modal-label">手动报告期</label>
+                    <select id="fina-arturn-apply-end-date-select" class="fina-arturn-input fina-arturn-scheme-modal-input" aria-label="手动报告期"></select>
+                </div>
+                <label class="fina-arturn-scheme-modal-checkline">
+                    <input type="checkbox" id="fina-arturn-apply-end-date-remember" />
+                    记住本次报告期调用方式
+                </label>
+                <button type="button" id="fina-arturn-apply-scheme-btn" class="btn-refresh fina-arturn-scheme-modal-btn">调用方案</button>
+                <button type="button" id="fina-arturn-delete-scheme-btn" class="btn-refresh fina-arturn-scheme-modal-btn">删除方案</button>
+            </div>
+        </div>
+    </div>

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<!-- rt-monitor-market-status-template: {{ rt_monitor_static_ver }} -->
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>window.__RT_MONITOR_API_PREFIX__ = {{ rt_monitor_api_prefix | tojson }};</script>
+    <title>市场状态</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ rt_monitor_static_ver }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/rt_monitor.css') }}?v={{ rt_monitor_static_ver }}">
+</head>
+<body class="rt-monitor rt-monitor-market-status-page">
+    <a href="#rt-monitor-market-status-main" class="rt-monitor-skip-link">跳到主内容</a>
+    <main id="rt-monitor-market-status-main" class="container market-status-container">
+        <section class="market-status-section median-table-wrap" aria-label="市场状态历史表">
+            <header class="market-status-page-head">
+                <h1 class="market-status-page-title">市场状态</h1>
+                <div class="market-status-toolbar" role="group" aria-label="数据窗口">
+                    <button type="button" class="market-status-limit-btn" data-limit="300" aria-pressed="true">300</button>
+                    <button type="button" class="market-status-limit-btn" data-limit="1300">1300</button>
+                    <button type="button" class="market-status-limit-btn" data-limit="0">全量</button>
+                    <button type="button" id="market-status-refresh-btn" class="market-status-refresh-btn" aria-label="刷新表格">刷新</button>
+                </div>
+            </header>
+            <details id="market-status-health" class="market-status-health" hidden>
+                <summary id="market-status-health-summary" class="market-status-health-summary"></summary>
+                <ul id="market-status-health-list" class="market-status-health-list"></ul>
+            </details>
+            <div id="market-status-msg" class="market-status-msg" style="display: none;" aria-live="polite"></div>
+            <div class="market-status-table-wrap">
+                <table id="market-status-table" class="market-status-table">
+                    <thead>
+                        <tr>
+                            <th scope="col" class="market-status-th-sort" data-sort="trade_date" title="点击切换升序/降序">交易日期</th>
+                            <th scope="col">总市值</th>
+                            <th scope="col">流通市值</th>
+                            <th scope="col">自由市值</th>
+                            <th scope="col" class="market-status-th-chartable" data-metric="amount" title="点击查看序列图">成交额</th>
+                            <th scope="col">5%_Pct</th>
+                            <th scope="col">上涨家数</th>
+                            <th scope="col">下跌家数</th>
+                            <th scope="col" class="market-status-th-chartable" data-metric="up_pct" title="点击查看序列图">上涨比例</th>
+                            <th scope="col">A股家数</th>
+                            <th scope="col" class="market-status-th-chartable" data-metric="med_pct_chg" title="点击查看序列图">中位数</th>
+                            <th scope="col">振幅</th>
+                            <th scope="col">超跌</th>
+                            <th scope="col">涨停</th>
+                            <th scope="col">涨停开</th>
+                            <th scope="col">封板率</th>
+                            <th scope="col">跌停</th>
+                            <th scope="col">跌停开</th>
+                            <th scope="col" class="market-status-th-chartable" data-metric="hlhis" title="点击查看：左轴 HisHC/HisLC五日均值，右轴国证A指(399317.SZ)">HisHC</th>
+                            <th scope="col" title="marketinfo.HLhis_CL：当日收盘价创历史新低家数">HisLC</th>
+                            <th scope="col">5DHL</th>
+                            <th scope="col">10DHL</th>
+                            <th scope="col">20DHL</th>
+                            <th scope="col">60DHL</th>
+                            <th scope="col">120DHL</th>
+                            <th scope="col">200DHL</th>
+                            <th scope="col">250DHL</th>
+                            <th scope="col">850DHL</th>
+                            <th scope="col">HisHL</th>
+                            <th scope="col">5DHLC</th>
+                            <th scope="col">10DHLC</th>
+                            <th scope="col">20DHLC</th>
+                            <th scope="col">60DHLC</th>
+                            <th scope="col" class="market-status-th-chartable" data-metric="hl120_cccc" title="点击查看：左轴 HL120_CCCC五日均值，右轴国证A指(399317.SZ)">120DHLC</th>
+                            <th scope="col" class="market-status-th-chartable" data-metric="hl200_cccc" title="点击查看：左轴 HL200_CCCC五日均值，右轴国证A指(399317.SZ)">200DHLC</th>
+                            <th scope="col" class="market-status-th-chartable" data-metric="hl250_cccc" title="点击查看：左轴 HL250_CCCC五日均值，右轴国证A指(399317.SZ)">250DHLC</th>
+                            <th scope="col" class="market-status-th-chartable" data-metric="hl850_cccc" title="点击查看：左轴 HL850_CCCC五日均值，右轴国证A指(399317.SZ)">850DHLC</th>
+                            <th scope="col" class="market-status-th-chartable" data-metric="hlhis_cccc" title="点击查看：左轴 HLhis_CCCC五日均值，右轴国证A指(399317.SZ)">HisHLC</th>
+                        </tr>
+                    </thead>
+                    <tbody id="market-status-tbody">
+                        <tr><td colspan="38" class="market-status-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <div id="market-status-chart-modal-overlay" class="bias-series-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="market-status-chart-modal-title">
+        <div class="bias-series-modal up-num-ma5-modal-shell market-status-chart-modal-shell">
+            <div class="bias-series-modal-header">
+                <h2 id="market-status-chart-modal-title" class="bias-series-modal-title">市场状态序列</h2>
+                <button type="button" id="market-status-chart-modal-close" class="bias-series-modal-close">关闭</button>
+            </div>
+            <div class="bias-series-modal-body">
+                <div id="market-status-chart-modal-chart-wrap" class="bias-series-chart-wrap up-num-ma5-modal-chart-wrap market-status-chart-modal-chart-wrap">
+                    <div id="market-status-chart-modal-msg" class="bias-series-msg" style="display: none;"></div>
+                    <canvas id="market-status-chart-modal-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script defer src="{{ url_for('static', filename='vendor/chart-stack.umd.js') }}?v={{ rt_monitor_static_ver }}"></script>
+    <script defer src="{{ url_for('static', filename='js/rt_monitor_market_status.js') }}?v={{ rt_monitor_static_ver }}"></script>
+</body>
+</html>

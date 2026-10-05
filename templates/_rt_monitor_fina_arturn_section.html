@@ -1,0 +1,44 @@
+{# 应收账款周转天数筛选表：与 rt_monitor_fina 单页及旧版主监控共用片段 #}
+        <section class="median-table-wrap fina-arturn-wrap" id="fina-arturn-section" aria-label="应收账款周转天数筛选表">
+            <!-- 齿轮/更新/条数与分组标题在 JS 生成的 frozen-thead 第一行 colspan=5+1 内，勿在此处重复 -->
+            <p id="fina-boot-hint" class="fina-arturn-boot-hint">正在加载财报筛选表…（若长时间空白请 Ctrl+Shift+R 硬刷新并打开控制台查看报错）</p>
+            <div id="fina-render-progress" class="fina-render-progress" hidden aria-live="polite">
+                <div class="fina-render-progress-track" aria-hidden="true">
+                    <div id="fina-render-progress-fill" class="fina-render-progress-fill"></div>
+                </div>
+                <span id="fina-render-progress-label" class="fina-render-progress-label"></span>
+            </div>
+            <!-- 分栏架构：无 position:sticky;left，彻底消除横向卡顿
+                 冻结面板（左）：6 列，overflow:hidden，JS 同步 scrollTop
+                 可滚动面板（右）：163 列，overflow:auto，纯原生 compositor-thread 横向滚动 -->
+            <div class="fina-arturn-split-wrap" id="fina-arturn-tbody-scroll">
+                <!-- 冻结列面板：股票代码/名称/申万/总市值/自由市值/公告日 -->
+                <div class="fina-arturn-frozen-pane" id="fina-arturn-frozen-pane">
+                    <table class="median-table fina-arturn-table fina-arturn-frozen-table" id="fina-arturn-frozen-table">
+                        <colgroup id="fina-arturn-frozen-colgroup"></colgroup>
+                        <thead id="fina-arturn-frozen-thead"></thead>
+                        <tbody id="fina-arturn-frozen-tbody"></tbody>
+                    </table>
+                </div>
+                <!-- 可滚动面板：上市日及之后全部列，原生 overflow:auto 横向滚动 -->
+                <div class="fina-arturn-scroll-pane" id="fina-arturn-scroll-pane">
+                    <table class="median-table fina-arturn-table" id="fina-arturn-table">
+                        <colgroup id="fina-arturn-colgroup"></colgroup>
+                        <thead id="fina-arturn-thead"></thead>
+                        <tbody id="fina-arturn-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div id="fina-arturn-filter-popover" class="fina-arturn-filter-popover" hidden>
+                <div id="fina-filter-title" class="fina-filter-title">筛选</div>
+                <input id="fina-filter-popover-input" class="fina-arturn-input" type="text"
+                    list="fina-filter-popover-dl" autocomplete="off" spellcheck="false"
+                    autocorrect="off" autocapitalize="off" />
+                <datalist id="fina-filter-popover-dl"></datalist>
+                <div class="fina-filter-popover-actions">
+                    <button type="button" id="fina-filter-popover-apply" class="btn-refresh">确定</button>
+                    <button type="button" id="fina-filter-popover-clear" class="btn-refresh">清空</button>
+                    <button type="button" id="fina-filter-popover-close" class="btn-refresh">关闭</button>
+                </div>
+            </div>
+        </section>
