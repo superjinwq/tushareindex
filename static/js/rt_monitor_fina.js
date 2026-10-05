@@ -23,8 +23,151 @@ function hideFinaBootHint() {
     var el = document.getElementById('fina-boot-hint');
     if (el) el.style.display = 'none';
 }
+
+/** 首屏/渲染进度（API + 虚拟窗口）；调用点保留，UI 默认关闭避免轮询闪烁 */
+var FINA_RENDER_PROGRESS_UI_VISIBLE = false;
+
+function updateFinaRenderProgress(phase, done, total) {
+    if (!FINA_RENDER_PROGRESS_UI_VISIBLE) return;
+    var bar = document.getElementById('fina-render-progress');
+    var fill = document.getElementById('fina-render-progress-fill');
+    var label = document.getElementById('fina-render-progress-label');
+    if (!bar || !fill || !label) return;
+    if (!phase || phase === 'done') {
+        bar.hidden = true;
+        fill.style.width = '0%';
+        label.textContent = '';
+        return;
+    }
+    bar.hidden = false;
+    var safeTotal = total > 0 ? total : 1;
+    var safeDone = done >= 0 ? done : 0;
+    var pct = Math.min(100, Math.round((safeDone / safeTotal) * 100));
+    fill.style.width = pct + '%';
+    label.textContent = phase + ' ' + safeDone + ' / ' + safeTotal + '（' + pct + '%）';
+}
+
+/** 虚拟滚动：仅渲染视口附近行，避免 5400×266 全量 DOM */
+var FINA_VIRTUAL_ROW_HEIGHT_PX = 28;
+var FINA_VIRTUAL_OVERSCAN_ROWS = 12;
+var _finaTheadSyncRaf = 0;
+var _finaVirtualScrollTicking = false;
+
+function finaVirtualSpacerHtml(colspan, heightPx) {
+    if (heightPx <= 0) return '';
+    return (
+        '<tr class="fina-virtual-spacer" aria-hidden="true"><td colspan="' +
+        String(colspan) +
+        '" style="height:0;padding:0;border:0;line-height:0">' +
+        '<div style="height:' +
+        String(Math.round(heightPx)) +
+        'px;width:1px"></div></td></tr>'
+    );
+}
+
+function scheduleSyncFinaArturnTheadStickyHeights() {
+    if (_finaTheadSyncRaf) cancelAnimationFrame(_finaTheadSyncRaf);
+    _finaTheadSyncRaf = requestAnimationFrame(function () {
+        _finaTheadSyncRaf = 0;
+        syncFinaArturnTheadStickyHeights();
+    });
+}
+
+function buildFinaVirtualViewKey(st) {
+    return [
+        String(st._rowsVersion || 0),
+        String(st.sortKey || ''),
+        st.sortDir === 'desc' ? 'desc' : 'asc',
+        String(st._filterMatcherKey || ''),
+        st.excludeBj ? '1' : '0',
+        st.excludeSt ? '1' : '0'
+    ].join('|');
+}
+
+function renderFinaVirtualWindow(buildRowHtml, filtered, opts) {
+    opts = opts || {};
+    var scrollPane = document.getElementById('fina-arturn-scroll-pane');
+    var frozenTbody = document.getElementById('fina-arturn-frozen-tbody');
+    var scrollTbody = document.getElementById('fina-arturn-tbody');
+    if (!scrollPane || !frozenTbody || !scrollTbody || !Array.isArray(filtered)) return;
+
+    var st = _finaMetricState();
+    var total = filtered.length;
+    if (opts.resetScroll) scrollPane.scrollTop = 0;
+
+    var rowH = st._virtualRowHeight || FINA_VIRTUAL_ROW_HEIGHT_PX;
+    var scrollTop = scrollPane.scrollTop || 0;
+    var viewH = scrollPane.clientHeight || 640;
+    var startIdx = Math.max(0, Math.floor(scrollTop / rowH) - FINA_VIRTUAL_OVERSCAN_ROWS);
+    var visibleCount = Math.ceil(viewH / rowH) + 2 * FINA_VIRTUAL_OVERSCAN_ROWS;
+    var endIdx = Math.min(total, startIdx + visibleCount);
+    var topH = startIdx * rowH;
+    var bottomH = Math.max(0, (total - endIdx) * rowH);
+
+    updateFinaRenderProgress('渲染可见行', endIdx, total);
+
+    var fParts = [];
+    var sParts = [];
+    if (topH > 0) {
+        fParts.push(finaVirtualSpacerHtml(6, topH));
+        sParts.push(finaVirtualSpacerHtml(266, topH));
+    }
+    for (var vi = startIdx; vi < endIdx; vi++) {
+        var row = filtered[vi];
+        if (!row) continue;
+        var origIdx = row._origIdx != null ? row._origIdx : vi;
+        var built = buildRowHtml(row, origIdx, vi);
+        fParts.push(built.f);
+        sParts.push(built.s);
+    }
+    if (bottomH > 0) {
+        fParts.push(finaVirtualSpacerHtml(6, bottomH));
+        sParts.push(finaVirtualSpacerHtml(266, bottomH));
+    }
+
+    frozenTbody.innerHTML = fParts.join('');
+    scrollTbody.innerHTML = sParts.join('');
+
+    if (opts.measureRowHeight) {
+        var sample = frozenTbody.querySelector('tr:not(.fina-virtual-spacer)');
+        if (sample) {
+            var measured = Math.ceil(sample.getBoundingClientRect().height);
+            if (measured >= 18 && measured <= 96) st._virtualRowHeight = measured;
+        }
+    }
+
+    st._filteredView = filtered;
+    st._virtualRowBuilder = buildRowHtml;
+    st._virtualViewKey = buildFinaVirtualViewKey(st);
+    st._frozenTrMap = null;
+    st._scrollTrMap = null;
+    st._domBuiltRowsVersion = st._rowsVersion;
+    updateFinaRenderProgress('done');
+}
+
+function refreshFinaVirtualWindowFromScroll() {
+    if (_finaVirtualScrollTicking) return;
+    _finaVirtualScrollTicking = true;
+    requestAnimationFrame(function () {
+        _finaVirtualScrollTicking = false;
+        var st = _finaMetricState();
+        if (!Array.isArray(st._filteredView) || !st._filteredView.length) return;
+        if (typeof st._virtualRowBuilder !== 'function') return;
+        renderFinaVirtualWindow(st._virtualRowBuilder, st._filteredView, { measureRowHeight: false });
+    });
+}
+
+function ensureFinaVirtualScrollListener() {
+    var scrollPane = document.getElementById('fina-arturn-scroll-pane');
+    if (!scrollPane || scrollPane.dataset.finaVirtualScroll === '1') return;
+    scrollPane.dataset.finaVirtualScroll = '1';
+    scrollPane.addEventListener('scroll', refreshFinaVirtualWindowFromScroll, { passive: true });
+}
 /** 主表 API 无默认超时，慢库会长期 pending；到点 abort 以便走 catch 并收起首屏提示 */
 var FINA_METRIC_TABLE_FETCH_TIMEOUT_MS = 240000;
+/** 切报告期时取消上一请求，避免叠打；过期响应不清空当前表 */
+var _finaMetricFetchSeqByPanel = {};
+var _finaMetricAbortByPanel = {};
 var FINA_ARTURN_SCHEME_STORAGE_KEY = 'rt_monitor_fina_arturn_filter_schemes_v1';
 var FINA_ARTURN_VIEW_STATE_STORAGE_KEY = 'rt_monitor_fina_arturn_view_state_v1';
 var FINA_ARTURN_SCHEME_APPLY_PREF_KEY = 'rt_monitor_fina_arturn_scheme_apply_pref_v1';
@@ -33,6 +176,12 @@ var FINA_SYSTEM_SCHEME_H850 = '__system_h850_latest__';
 var FINA_SYSTEM_SCHEME_HH = '__system_h_high_latest__';
 /** 财报系统方案：宽基单指数成分（value 前缀 + index_code，与后端 INDEX_MONITOR_CODES 一致） */
 var FINA_SYSTEM_INDEX_WEIGHT_PREFIX = '__system_index_weight__';
+/** 自定义板块：localStorage 持久化（与筛选方案同级，长期保留至清站点数据/换浏览器） */
+var FINA_ARTURN_CUSTOM_BOARD_STORAGE_KEY = 'rt_monitor_fina_arturn_custom_boards_v1';
+/** 感兴趣股票标记：按 ts_code 持久化，与报告期无关 */
+var FINA_ARTURN_INTEREST_MARKS_KEY = 'rt_monitor_fina_arturn_interest_marks_v1';
+var _finaArturnInterestMarksCache = null;
+var FINA_CUSTOM_BOARD_PREFIX = '__custom_board__';
 var FINA_INDEX_WEIGHT_SYSTEM_SCHEMES = [
     { code: '000510.SH', name: 'A500' },
     { code: '000300.SH', name: '沪深300' },
@@ -46,6 +195,165 @@ var FINA_INDEX_WEIGHT_SYSTEM_SCHEMES = [
     { code: '399006.SZ', name: '创业板指' },
     { code: '399102.SZ', name: '创业板综' },
 ];
+
+function loadFinaArturnInterestMarks() {
+    if (_finaArturnInterestMarksCache) return _finaArturnInterestMarksCache;
+    var set = new Set();
+    try {
+        if (typeof localStorage !== 'undefined') {
+            var raw = localStorage.getItem(FINA_ARTURN_INTEREST_MARKS_KEY);
+            var arr = raw ? JSON.parse(raw) : [];
+            if (Array.isArray(arr)) {
+                for (var i = 0; i < arr.length; i++) {
+                    var tc = String(arr[i] || '').trim().toUpperCase();
+                    if (tc) set.add(tc);
+                }
+            }
+        }
+    } catch (eLoadMark) {
+        /* ignore corrupt localStorage */
+    }
+    _finaArturnInterestMarksCache = set;
+    return set;
+}
+
+function applyFinaArturnInterestMarksCodes(codes) {
+    var set = new Set();
+    if (Array.isArray(codes)) {
+        for (var i = 0; i < codes.length; i++) {
+            var tc = String(codes[i] || '').trim().toUpperCase();
+            if (tc) set.add(tc);
+        }
+    }
+    _finaArturnInterestMarksCache = set;
+    try {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(
+                FINA_ARTURN_INTEREST_MARKS_KEY,
+                JSON.stringify(Array.from(set))
+            );
+        }
+    } catch (eCache) {
+        /* ignore */
+    }
+    return set;
+}
+
+function saveFinaArturnInterestMarksLocal() {
+    try {
+        if (typeof localStorage === 'undefined') return;
+        localStorage.setItem(
+            FINA_ARTURN_INTEREST_MARKS_KEY,
+            JSON.stringify(Array.from(loadFinaArturnInterestMarks()))
+        );
+    } catch (eSaveMark) {
+        /* ignore quota / private mode */
+    }
+}
+
+/** 写回服务端工程目录 fina_interest_marks.json（长期保留；失败仅打日志） */
+function persistFinaArturnInterestMarksToServer(extraBody) {
+    var body = extraBody && typeof extraBody === 'object' ? extraBody : {
+        codes: Array.from(loadFinaArturnInterestMarks())
+    };
+    var url = typeof rtMonitorApiUrl === 'function'
+        ? rtMonitorApiUrl('/api/fina_interest_marks')
+        : '/api/fina_interest_marks';
+    return fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify(body)
+    }).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+    }).then(function (data) {
+        if (data && Array.isArray(data.codes)) {
+            applyFinaArturnInterestMarksCodes(data.codes);
+        }
+        return data;
+    }).catch(function (err) {
+        if (typeof logError === 'function') {
+            logError('fina_interest_marks 保存失败', err);
+        }
+        return null;
+    });
+}
+
+/**
+ * 启动时从服务端拉取标记；服务端为空且本地有缓存则一次性迁入落盘。
+ * 之后以服务端为准，清站点数据/换浏览器仍可恢复。
+ */
+function syncFinaArturnInterestMarksFromServer() {
+    var url = typeof rtMonitorApiUrl === 'function'
+        ? rtMonitorApiUrl('/api/fina_interest_marks')
+        : '/api/fina_interest_marks';
+    var localCodes = Array.from(loadFinaArturnInterestMarks());
+    return fetch(url, { cache: 'no-store' })
+        .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(function (data) {
+            var serverCodes = data && Array.isArray(data.codes) ? data.codes : [];
+            if (serverCodes.length) {
+                applyFinaArturnInterestMarksCodes(serverCodes);
+                return data;
+            }
+            if (localCodes.length) {
+                /* 首次升级：把已有 localStorage 标记迁到工程目录 */
+                return persistFinaArturnInterestMarksToServer({ codes: localCodes });
+            }
+            applyFinaArturnInterestMarksCodes([]);
+            return data;
+        })
+        .catch(function (err) {
+            if (typeof logError === 'function') {
+                logError('fina_interest_marks 拉取失败（沿用本地缓存）', err);
+            }
+            return null;
+        });
+}
+
+function finaArturnIsInterestMarked(tsCode) {
+    var tc = String(tsCode || '').trim().toUpperCase();
+    return !!(tc && loadFinaArturnInterestMarks().has(tc));
+}
+
+/** 切换标记；返回切换后是否已标记（先本地再异步落盘） */
+function toggleFinaArturnInterestMark(tsCode) {
+    var tc = String(tsCode || '').trim().toUpperCase();
+    if (!tc || tc === '--') return false;
+    var set = loadFinaArturnInterestMarks();
+    if (set.has(tc)) set.delete(tc);
+    else set.add(tc);
+    saveFinaArturnInterestMarksLocal();
+    persistFinaArturnInterestMarksToServer({ ts_code: tc, marked: set.has(tc) });
+    return set.has(tc);
+}
+
+/** 同步冻结/滚动两面板同行的标记高亮（不整表重绘） */
+function syncFinaArturnInterestMarkRows(tsCode, isMarked) {
+    var tc = String(tsCode || '').trim().toUpperCase();
+    if (!tc) return;
+    var bodies = [
+        document.getElementById('fina-arturn-frozen-tbody'),
+        document.getElementById('fina-arturn-tbody'),
+    ];
+    for (var b = 0; b < bodies.length; b++) {
+        var tb = bodies[b];
+        if (!tb) continue;
+        var trs = tb.querySelectorAll('tr[data-ts-code]');
+        for (var i = 0; i < trs.length; i++) {
+            var rowTc = String(trs[i].getAttribute('data-ts-code') || '')
+                .trim()
+                .toUpperCase();
+            if (rowTc === tc) {
+                trs[i].classList.toggle('fina-arturn-row-marked', !!isMarked);
+            }
+        }
+    }
+}
 
 function finaIndexWeightSystemSchemeOptionValue(indexCode) {
     return FINA_SYSTEM_INDEX_WEIGHT_PREFIX + String(indexCode || '').trim().toUpperCase();
@@ -123,6 +431,13 @@ var finaTop3HoldersModalSaveTimer = null;
 var FINA_FLOAT_HOLDERS_MODAL_LAYOUT_STORAGE_KEY = 'rt_monitor_fina_float_holders_modal_layout_v1';
 var finaFloatHoldersModalLayoutOpenTs = 0;
 var finaFloatHoldersModalSaveTimer = null;
+/** 首次 his/850 新高因子提示弹窗：几何持久化（两窗独立） */
+var FINA_QFQ_BREAK_TIP_LAYOUT_KEYS = {
+    his: 'rt_monitor_fina_qfq_break_tip_his_layout_v1',
+    '850': 'rt_monitor_fina_qfq_break_tip_850_layout_v1',
+};
+var finaQfqBreakTipLayoutOpenTs = { his: 0, '850': 0 };
+var finaQfqBreakTipSaveTimers = { his: null, '850': null };
 var _finaModalOpenCount = 0;
 function _modalOpened() {
     _finaModalOpenCount += 1;
@@ -172,6 +487,72 @@ var finaArturnState = {
         money_cap_ratio_pct: '',
         fqm_debt_to_assets: '',
         fqm_interestdebt_ratio: '',
+        last_his_high: '',
+        last_his_peak_age_days: '',
+        last_850_high: '',
+        last_850_peak_age_days: '',
+        cur_price: '',
+        pct_since_ann: '',
+        pct_vs_h_high: '',
+        pct_vs_high_850: '',
+        pct_vs_high_250: '',
+        mult_vs_h_low: '',
+        pct_vs_low_850: '',
+        pct_vs_low_250: '',
+        first_his_break_date: '',
+        first_his_break_free_mv_yi: '',
+        first_his_prior_max_throwback_5d: '',
+        first_his_post5_ret_pct: '',
+        first_his_post10_ret_pct: '',
+        first_his_post20_ret_pct: '',
+        first_his_post60_ret_pct: '',
+        first_his_peak_age_days: '',
+        first_his_prior_max_qfq: '',
+        first_his_gap_to_peak_pct: '',
+        first_his_break_pct: '',
+        first_his_upper_shadow_pct: '',
+        first_his_pct_chg: '',
+        first_his_vol_ratio20: '',
+        first_his_ff_tn5_60_ratio: '',
+        first_his_pre5_ret_pct: '',
+        first_his_pre120_ret_pct: '',
+        first_his_pre120_range_pct: '',
+        first_his_ma120_bias_pct: '',
+        first_his_avg_amt_5_yi: '',
+        first_his_avg_amt_20_yi: '',
+        first_his_avg_amt_60_yi: '',
+        first_his_ff_tn5_pct: '',
+        first_his_ff_tn20_pct: '',
+        first_his_ff_tn60_pct: '',
+        first_his_pre120_up7_cnt: '',
+        first_his_pre120_dn7_cnt: '',
+        first_850_break_date: '',
+        first_850_break_free_mv_yi: '',
+        first_850_prior_max_throwback_5d: '',
+        first_850_post5_ret_pct: '',
+        first_850_post10_ret_pct: '',
+        first_850_post20_ret_pct: '',
+        first_850_post60_ret_pct: '',
+        first_850_peak_age_days: '',
+        first_850_prior_max_qfq: '',
+        first_850_gap_to_peak_pct: '',
+        first_850_break_pct: '',
+        first_850_upper_shadow_pct: '',
+        first_850_pct_chg: '',
+        first_850_vol_ratio20: '',
+        first_850_ff_tn5_60_ratio: '',
+        first_850_pre5_ret_pct: '',
+        first_850_pre120_ret_pct: '',
+        first_850_pre120_range_pct: '',
+        first_850_ma120_bias_pct: '',
+        first_850_avg_amt_5_yi: '',
+        first_850_avg_amt_20_yi: '',
+        first_850_avg_amt_60_yi: '',
+        first_850_ff_tn5_pct: '',
+        first_850_ff_tn20_pct: '',
+        first_850_ff_tn60_pct: '',
+        first_850_pre120_up7_cnt: '',
+        first_850_pre120_dn7_cnt: '',
         ttm_revenue_yi: '',
         pe_ttm: '',
         ar_pct: '',
@@ -266,7 +647,10 @@ var FINA_METRIC_PANEL = {
             schemePreviewWrap: 'fina-arturn-scheme-preview-wrap',
             schemePreviewBody: 'fina-arturn-scheme-preview-body',
             excludeBj: 'fina-arturn-exclude-bj',
-            excludeSt: 'fina-arturn-exclude-st'
+            excludeSt: 'fina-arturn-exclude-st',
+            customBoardFile: 'fina-arturn-custom-board-file',
+            customBoardName: 'fina-arturn-custom-board-name',
+            customBoardImport: 'fina-arturn-custom-board-import-btn'
         }
     }
 };
@@ -288,10 +672,14 @@ var FINA_FILTER_TYPE = {
     tsCode: 'text', secName: 'text', swName: 'text',
     province: 'text', city: 'text',
     act_ent_type: 'text',
-    a0: 'date', listDate: 'date',
+    a0: 'date', listDate: 'date', first_his_break_date: 'date', first_850_break_date: 'date',
     s_high: 'binary01', cf_high: 'binary01', oi_high: 'binary01',
     dtp_high: 'binary01', fst_high: 'binary01', ocs_high: 'binary01',
-    inv_high: 'binary01', k_high: 'binary01'
+    inv_high: 'binary01', k_high: 'binary01',
+    last_his_high: 'binary01',
+    last_850_high: 'binary01',
+    first_his_prior_max_throwback_5d: 'binary01',
+    first_850_prior_max_throwback_5d: 'binary01'
 };
 function finaMetricFilterKeyType(key) {
     return FINA_FILTER_TYPE[key] || 'number';
@@ -353,11 +741,36 @@ function getFinaFilterHistoryFor(filterKey) {
  *  - 重置 DOM 构建版本
  *  - 给每个 row 打 _origIdx 标记（供 filter/sort 快路径按原始索引定位 tr）
  */
+
+var FINA_METRIC_RENDER_DEBOUNCE_MS = 200;
+var _finaMetricRenderDebounceByPanel = {};
+
+function scheduleFinaMetricTableRender(panelKey, immediate) {
+    if (immediate) {
+        if (_finaMetricRenderDebounceByPanel[panelKey]) {
+            clearTimeout(_finaMetricRenderDebounceByPanel[panelKey]);
+            _finaMetricRenderDebounceByPanel[panelKey] = null;
+        }
+        renderFinaMetricTable(panelKey);
+        return;
+    }
+    if (_finaMetricRenderDebounceByPanel[panelKey]) {
+        clearTimeout(_finaMetricRenderDebounceByPanel[panelKey]);
+    }
+    _finaMetricRenderDebounceByPanel[panelKey] = setTimeout(function () {
+        _finaMetricRenderDebounceByPanel[panelKey] = null;
+        renderFinaMetricTable(panelKey);
+    }, FINA_METRIC_RENDER_DEBOUNCE_MS);
+}
+
 function markFinaMetricRowsChanged(st) {
     st._rowsVersion = (st._rowsVersion || 0) + 1;
     st._domBuiltRowsVersion = -1;
     st._frozenTrMap = null;
     st._scrollTrMap = null;
+    st._virtualViewKey = '';
+    st._virtualRowBuilder = null;
+    st._filteredView = null;
     if (Array.isArray(st.rows)) {
         for (var i = 0; i < st.rows.length; i++) {
             if (st.rows[i] && typeof st.rows[i] === 'object') {
@@ -688,14 +1101,22 @@ function renderFinaFixedAssetsMainbzTable(payload) {
             var totProfitYi = sec && sec.tot_profit_yi != null ? sec.tot_profit_yi : null;
             /* 同比口径（与行序/排名无关）：
              * 仅在本 secKey（P/I/D）内，用当前行 bz_item 名称在 curMetrics、prevMetrics 中做字典查找；
-             * 上年对照值来自「次新年报 + 同区块 + 同名分项」，与上年该分项在收入榜第几名无关。
-             * revenue_top3 下标只决定「展示哪三个名称」，不参与跨年配对。缺匹配或缺数则 --。 */
+             * 对照值来自「上年同期同月日 yoy_base + 同区块 + 同名分项」（非右侧上一期表）；
+             * revenue_top3 下标只决定「展示哪三个名称」，不参与配对。缺同期/同名/缺数则 --。 */
+            function lookupMainbzMetrics(metricsMap, itemName, metricsKey) {
+                if (!metricsMap) return null;
+                if (itemName && metricsMap[itemName]) return metricsMap[itemName];
+                if (metricsKey && metricsMap[metricsKey]) return metricsMap[metricsKey];
+                return null;
+            }
             var i = 0;
             for (; i < 3; i += 1) {
                 var rr = rowAt(rev, i);
                 var itemName = rr && rr.bz_item ? String(rr.bz_item).trim() : '';
-                var m = itemName && curMetrics[itemName] ? curMetrics[itemName] : null;
-                /* 金额与占比均按分项名取自 item_metrics；仅当聚合映射缺失时用本行收入 Top3 的 amount_yi（仍为同一 bz_item） */
+                var metricsKey = rr && rr.metrics_key ? String(rr.metrics_key).trim() : '';
+                var m = lookupMainbzMetrics(curMetrics, itemName, metricsKey);
+                /* 金额与占比均按分项名取自 item_metrics；仅当聚合映射缺失时用本行收入 Top3 的 amount_yi（仍为同一 bz_item）
+                 * 占比分母 tot_*_yi：后端优先用分类汇总行，否则为近义去重后分项合计 */
                 var revYi = m && m.revenue_yi != null ? m.revenue_yi : (rr && rr.amount_yi != null ? rr.amount_yi : null);
                 var costYi = m && m.cost_yi != null ? m.cost_yi : null;
                 var profitYi = m && m.profit_yi != null ? m.profit_yi : null;
@@ -710,8 +1131,8 @@ function renderFinaFixedAssetsMainbzTable(payload) {
                         gmStr = fmtGrossMargin(m.profit_yi, m.revenue_yi);
                     }
                 }
-                var curItem = itemName ? (curMetrics[itemName] || {}) : {};
-                var prevItem = itemName ? (prevMetrics[itemName] || {}) : {};
+                var curItem = m || {};
+                var prevItem = lookupMainbzMetrics(prevMetrics, itemName, metricsKey) || {};
                 var revYoy = calcGrowth(curItem.revenue_yi, prevItem.revenue_yi);
                 var profitYoy = calcGrowth(curItem.profit_yi, prevItem.profit_yi);
                 var gmDiff = calcDiff(curItem.gross_margin, prevItem.gross_margin);
@@ -781,9 +1202,11 @@ function renderFinaFixedAssetsMainbzTable(payload) {
 
     var currentSnapshot = p && p.current ? p.current : null;
     var previousSnapshot = p && p.previous ? p.previous : null;
+    /* 同比三列对照上年同期；左右表仍用 current/previous（最近两期） */
+    var yoyBaseSnapshot = p && p.yoy_base && p.yoy_base.end_date ? p.yoy_base : null;
     var leftHtml = '';
     var rightHtml = '';
-    if (currentSnapshot) leftHtml = buildSnapshotTable(currentSnapshot, previousSnapshot && previousSnapshot.end_date ? previousSnapshot : null);
+    if (currentSnapshot) leftHtml = buildSnapshotTable(currentSnapshot, yoyBaseSnapshot);
     if (previousSnapshot && previousSnapshot.end_date) rightHtml = buildSnapshotTable(previousSnapshot, null);
     if (!leftHtml && p && p.sections) {
         /* 兼容旧接口结构（仅一张表） */
@@ -4312,6 +4735,14 @@ function finaArturnNegClass(v) {
     return n < 0 ? ' fina-arturn-neg' : '';
 }
 
+/** T5/T10/T20 信号日后涨跌：正红负绿（td 直接加 rise/fall） */
+function finaArturnRiseFallClass(v) {
+    if (v === null || v === undefined || v === '') return '';
+    var n = parseFloat(v);
+    if (isNaN(n) || n === 0) return '';
+    return n > 0 ? ' rise' : ' fall';
+}
+
 function buildNumericFilterMatcher(exprRaw) {
     var expr = String(exprRaw || '').trim();
     if (!expr) return null;
@@ -4406,6 +4837,18 @@ function renderFinaMetricSchemeOptions(panelKey) {
                 + '（index_weight 最新交易日成分，重置后应用）</option>'
         );
     }
+    if (panelKey === 'arturn') {
+        var boards = loadFinaCustomBoards();
+        Object.keys(boards).sort().forEach(function (boardName) {
+            var board = boards[boardName] || {};
+            var nCodes = Array.isArray(board.ts_codes) ? board.ts_codes.length : (Number(board.count) || 0);
+            var optVal = finaCustomBoardOptionValue(boardName);
+            html.push(
+                '<option value="' + escapeHtmlAttr(optVal) + '">自定义板块：'
+                    + escapeHtmlAttr(boardName) + '（' + String(nCodes) + '只）</option>'
+            );
+        });
+    }
     names.forEach(function (name) {
         html.push('<option value="' + escapeHtmlAttr(name) + '">' + escapeHtmlAttr(name) + '</option>');
     });
@@ -4420,6 +4863,80 @@ function renderFinaArturnSchemeOptions() {
 function isFinaSystemSchemeName(name) {
     var n = String(name || '').trim();
     return n === FINA_SYSTEM_SCHEME_ZT_T1 || n === FINA_SYSTEM_SCHEME_H850 || n === FINA_SYSTEM_SCHEME_HH || isFinaIndexWeightSystemSchemeName(n);
+}
+
+function finaCustomBoardOptionValue(boardName) {
+    return FINA_CUSTOM_BOARD_PREFIX + String(boardName || '').trim();
+}
+
+function parseFinaCustomBoardOptionValue(optionValue) {
+    var n = String(optionValue || '').trim();
+    if (n.indexOf(FINA_CUSTOM_BOARD_PREFIX) !== 0) {
+        return '';
+    }
+    return n.slice(FINA_CUSTOM_BOARD_PREFIX.length).trim();
+}
+
+function isFinaCustomBoardOptionValue(optionValue) {
+    return !!parseFinaCustomBoardOptionValue(optionValue);
+}
+
+function loadFinaCustomBoards() {
+    try {
+        var raw = localStorage.getItem(FINA_ARTURN_CUSTOM_BOARD_STORAGE_KEY);
+        if (!raw) return {};
+        var obj = JSON.parse(raw);
+        return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function saveFinaCustomBoards(boards) {
+    try {
+        localStorage.setItem(FINA_ARTURN_CUSTOM_BOARD_STORAGE_KEY, JSON.stringify(boards || {}));
+    } catch (e) {
+        throw new Error('保存自定义板块失败（localStorage 可能已满或被禁用）');
+    }
+}
+
+function applyTsCodePoolKeepFilters(panelKey, tsCodes, sourceLabel) {
+    /* 方案 A：只换股票池（tsCode OR），保留其它列筛选与排序 */
+    var codes = Array.isArray(tsCodes) ? tsCodes : [];
+    var f = getFinaMetricFilters(panelKey);
+    f.tsCode = codes.join(' or ');
+    setFinaMetricFilters(panelKey, f);
+    renderFinaMetricTable(panelKey);
+    saveFinaMetricViewState(panelKey);
+    var st = _finaMetricState();
+    var summ = st._lastTableFilterSummary || { hit: 0, universe: 0 };
+    return {
+        ok: true,
+        count: codes.length,
+        sourceLabel: sourceLabel,
+        tableHit: summ.hit,
+        tableUniverse: summ.universe
+    };
+}
+
+function fetchFinaCustomBoardResolveFromFile(file, nameHint) {
+    var fd = new FormData();
+    fd.append('file', file);
+    if (nameHint) {
+        fd.append('name', String(nameHint));
+    }
+    return fetch(rtMonitorApiUrl('/api/fina_custom_board_resolve'), {
+        method: 'POST',
+        body: fd,
+        cache: 'no-store'
+    }).then(function (res) {
+        return res.json().then(function (data) {
+            if (!res.ok || !data || data.ok === false) {
+                throw new Error((data && data.error) ? String(data.error) : ('HTTP ' + res.status));
+            }
+            return data;
+        });
+    });
 }
 
 function fetchLimitStatsRowsByKind(kind, label) {
@@ -4547,6 +5064,64 @@ function buildFinaMetricFilterShapeFrom(src) {
         money_cap_ratio_pct: String(s.money_cap_ratio_pct || ''),
         fqm_debt_to_assets: String(s.fqm_debt_to_assets || ''),
         fqm_interestdebt_ratio: String(s.fqm_interestdebt_ratio || ''),
+        last_his_high: String(s.last_his_high || ''),
+        last_his_peak_age_days: String(s.last_his_peak_age_days || ''),
+        last_850_high: String(s.last_850_high || ''),
+        last_850_peak_age_days: String(s.last_850_peak_age_days || ''),
+        cur_price: String(s.cur_price || ''),
+        pct_since_ann: String(s.pct_since_ann || ''),
+        pct_vs_h_high: String(s.pct_vs_h_high || ''),
+        pct_vs_high_850: String(s.pct_vs_high_850 || ''),
+        pct_vs_high_250: String(s.pct_vs_high_250 || ''),
+        mult_vs_h_low: String(s.mult_vs_h_low || ''),
+        pct_vs_low_850: String(s.pct_vs_low_850 || ''),
+        pct_vs_low_250: String(s.pct_vs_low_250 || ''),
+        first_his_break_date: String(s.first_his_break_date || ''),
+        first_his_break_free_mv_yi: String(s.first_his_break_free_mv_yi || ''),
+        first_his_prior_max_throwback_5d: String(s.first_his_prior_max_throwback_5d || ''),
+        first_his_peak_age_days: String(s.first_his_peak_age_days || ''),
+        first_his_prior_max_qfq: String(s.first_his_prior_max_qfq || ''),
+        first_his_gap_to_peak_pct: String(s.first_his_gap_to_peak_pct || ''),
+        first_his_break_pct: String(s.first_his_break_pct || ''),
+        first_his_upper_shadow_pct: String(s.first_his_upper_shadow_pct || ''),
+        first_his_pct_chg: String(s.first_his_pct_chg || ''),
+        first_his_vol_ratio20: String(s.first_his_vol_ratio20 || ''),
+        first_his_ff_tn5_60_ratio: String(s.first_his_ff_tn5_60_ratio || ''),
+        first_his_pre5_ret_pct: String(s.first_his_pre5_ret_pct || ''),
+        first_his_pre120_ret_pct: String(s.first_his_pre120_ret_pct || ''),
+        first_his_pre120_range_pct: String(s.first_his_pre120_range_pct || ''),
+        first_his_ma120_bias_pct: String(s.first_his_ma120_bias_pct || ''),
+        first_his_avg_amt_5_yi: String(s.first_his_avg_amt_5_yi || ''),
+        first_his_avg_amt_20_yi: String(s.first_his_avg_amt_20_yi || ''),
+        first_his_avg_amt_60_yi: String(s.first_his_avg_amt_60_yi || ''),
+        first_his_ff_tn5_pct: String(s.first_his_ff_tn5_pct || ''),
+        first_his_ff_tn20_pct: String(s.first_his_ff_tn20_pct || ''),
+        first_his_ff_tn60_pct: String(s.first_his_ff_tn60_pct || ''),
+        first_his_pre120_up7_cnt: String(s.first_his_pre120_up7_cnt || ''),
+        first_his_pre120_dn7_cnt: String(s.first_his_pre120_dn7_cnt || ''),
+        first_850_break_date: String(s.first_850_break_date || ''),
+        first_850_break_free_mv_yi: String(s.first_850_break_free_mv_yi || ''),
+        first_850_prior_max_throwback_5d: String(s.first_850_prior_max_throwback_5d || ''),
+        first_850_peak_age_days: String(s.first_850_peak_age_days || ''),
+        first_850_prior_max_qfq: String(s.first_850_prior_max_qfq || ''),
+        first_850_gap_to_peak_pct: String(s.first_850_gap_to_peak_pct || ''),
+        first_850_break_pct: String(s.first_850_break_pct || ''),
+        first_850_upper_shadow_pct: String(s.first_850_upper_shadow_pct || ''),
+        first_850_pct_chg: String(s.first_850_pct_chg || ''),
+        first_850_vol_ratio20: String(s.first_850_vol_ratio20 || ''),
+        first_850_ff_tn5_60_ratio: String(s.first_850_ff_tn5_60_ratio || ''),
+        first_850_pre5_ret_pct: String(s.first_850_pre5_ret_pct || ''),
+        first_850_pre120_ret_pct: String(s.first_850_pre120_ret_pct || ''),
+        first_850_pre120_range_pct: String(s.first_850_pre120_range_pct || ''),
+        first_850_ma120_bias_pct: String(s.first_850_ma120_bias_pct || ''),
+        first_850_avg_amt_5_yi: String(s.first_850_avg_amt_5_yi || ''),
+        first_850_avg_amt_20_yi: String(s.first_850_avg_amt_20_yi || ''),
+        first_850_avg_amt_60_yi: String(s.first_850_avg_amt_60_yi || ''),
+        first_850_ff_tn5_pct: String(s.first_850_ff_tn5_pct || ''),
+        first_850_ff_tn20_pct: String(s.first_850_ff_tn20_pct || ''),
+        first_850_ff_tn60_pct: String(s.first_850_ff_tn60_pct || ''),
+        first_850_pre120_up7_cnt: String(s.first_850_pre120_up7_cnt || ''),
+        first_850_pre120_dn7_cnt: String(s.first_850_pre120_dn7_cnt || ''),
         ttm_revenue_yi: String(s.ttm_revenue_yi || ''),
         pe_ttm: String(s.pe_ttm || ''),
         ar_pct: String(s.ar_pct || ''),
@@ -4979,6 +5554,72 @@ function finaArturnGetSortCell(row, key) {
     if (key === 'money_cap_ratio_pct') return row.money_cap_ratio_pct;
     if (key === 'fqm_debt_to_assets') return row.fqm_debt_to_assets;
     if (key === 'fqm_interestdebt_ratio') return row.fqm_interestdebt_ratio;
+    if (key === 'last_his_high') return row.last_his_high;
+    if (key === 'last_his_peak_age_days') return row.last_his_peak_age_days;
+    if (key === 'last_850_high') return row.last_850_high;
+    if (key === 'last_850_peak_age_days') return row.last_850_peak_age_days;
+    if (key === 'cur_price') return row.cur_price;
+    if (key === 'pct_since_ann') return row.pct_since_ann;
+    if (key === 'pct_vs_h_high') return row.pct_vs_h_high;
+    if (key === 'pct_vs_high_850') return row.pct_vs_high_850;
+    if (key === 'pct_vs_high_250') return row.pct_vs_high_250;
+    if (key === 'mult_vs_h_low') return row.mult_vs_h_low;
+    if (key === 'pct_vs_low_850') return row.pct_vs_low_850;
+    if (key === 'pct_vs_low_250') return row.pct_vs_low_250;
+    if (key === 'first_his_break_date') return row.first_his_break_date;
+    if (key === 'first_his_break_free_mv_yi') return row.first_his_break_free_mv_yi;
+    if (key === 'first_his_prior_max_throwback_5d') return row.first_his_prior_max_throwback_5d;
+    if (key === 'first_his_post5_ret_pct') return row.first_his_post5_ret_pct;
+    if (key === 'first_his_post10_ret_pct') return row.first_his_post10_ret_pct;
+    if (key === 'first_his_post20_ret_pct') return row.first_his_post20_ret_pct;
+    if (key === 'first_his_post60_ret_pct') return row.first_his_post60_ret_pct;
+    if (key === 'first_his_peak_age_days') return row.first_his_peak_age_days;
+    if (key === 'first_his_prior_max_qfq') return row.first_his_prior_max_qfq;
+    if (key === 'first_his_gap_to_peak_pct') return row.first_his_gap_to_peak_pct;
+    if (key === 'first_his_break_pct') return row.first_his_break_pct;
+    if (key === 'first_his_upper_shadow_pct') return row.first_his_upper_shadow_pct;
+    if (key === 'first_his_pct_chg') return row.first_his_pct_chg;
+    if (key === 'first_his_vol_ratio20') return row.first_his_vol_ratio20;
+    if (key === 'first_his_ff_tn5_60_ratio') return row.first_his_ff_tn5_60_ratio;
+    if (key === 'first_his_pre5_ret_pct') return row.first_his_pre5_ret_pct;
+    if (key === 'first_his_pre120_ret_pct') return row.first_his_pre120_ret_pct;
+    if (key === 'first_his_pre120_range_pct') return row.first_his_pre120_range_pct;
+    if (key === 'first_his_ma120_bias_pct') return row.first_his_ma120_bias_pct;
+    if (key === 'first_his_avg_amt_5_yi') return row.first_his_avg_amt_5_yi;
+    if (key === 'first_his_avg_amt_20_yi') return row.first_his_avg_amt_20_yi;
+    if (key === 'first_his_avg_amt_60_yi') return row.first_his_avg_amt_60_yi;
+    if (key === 'first_his_ff_tn5_pct') return row.first_his_ff_tn5_pct;
+    if (key === 'first_his_ff_tn20_pct') return row.first_his_ff_tn20_pct;
+    if (key === 'first_his_ff_tn60_pct') return row.first_his_ff_tn60_pct;
+    if (key === 'first_his_pre120_up7_cnt') return row.first_his_pre120_up7_cnt;
+    if (key === 'first_his_pre120_dn7_cnt') return row.first_his_pre120_dn7_cnt;
+    if (key === 'first_850_break_date') return row.first_850_break_date;
+    if (key === 'first_850_break_free_mv_yi') return row.first_850_break_free_mv_yi;
+    if (key === 'first_850_prior_max_throwback_5d') return row.first_850_prior_max_throwback_5d;
+    if (key === 'first_850_post5_ret_pct') return row.first_850_post5_ret_pct;
+    if (key === 'first_850_post10_ret_pct') return row.first_850_post10_ret_pct;
+    if (key === 'first_850_post20_ret_pct') return row.first_850_post20_ret_pct;
+    if (key === 'first_850_post60_ret_pct') return row.first_850_post60_ret_pct;
+    if (key === 'first_850_peak_age_days') return row.first_850_peak_age_days;
+    if (key === 'first_850_prior_max_qfq') return row.first_850_prior_max_qfq;
+    if (key === 'first_850_gap_to_peak_pct') return row.first_850_gap_to_peak_pct;
+    if (key === 'first_850_break_pct') return row.first_850_break_pct;
+    if (key === 'first_850_upper_shadow_pct') return row.first_850_upper_shadow_pct;
+    if (key === 'first_850_pct_chg') return row.first_850_pct_chg;
+    if (key === 'first_850_vol_ratio20') return row.first_850_vol_ratio20;
+    if (key === 'first_850_ff_tn5_60_ratio') return row.first_850_ff_tn5_60_ratio;
+    if (key === 'first_850_pre5_ret_pct') return row.first_850_pre5_ret_pct;
+    if (key === 'first_850_pre120_ret_pct') return row.first_850_pre120_ret_pct;
+    if (key === 'first_850_pre120_range_pct') return row.first_850_pre120_range_pct;
+    if (key === 'first_850_ma120_bias_pct') return row.first_850_ma120_bias_pct;
+    if (key === 'first_850_avg_amt_5_yi') return row.first_850_avg_amt_5_yi;
+    if (key === 'first_850_avg_amt_20_yi') return row.first_850_avg_amt_20_yi;
+    if (key === 'first_850_avg_amt_60_yi') return row.first_850_avg_amt_60_yi;
+    if (key === 'first_850_ff_tn5_pct') return row.first_850_ff_tn5_pct;
+    if (key === 'first_850_ff_tn20_pct') return row.first_850_ff_tn20_pct;
+    if (key === 'first_850_ff_tn60_pct') return row.first_850_ff_tn60_pct;
+    if (key === 'first_850_pre120_up7_cnt') return row.first_850_pre120_up7_cnt;
+    if (key === 'first_850_pre120_dn7_cnt') return row.first_850_pre120_dn7_cnt;
     if (key === 'ttm_revenue_yi') return row.ttm_revenue_yi;
     if (key === 'pe_ttm') return row.pe_ttm;
     if (key === 'ar_pct') return row.ar_pct;
@@ -5196,13 +5837,42 @@ function finaArturnCompareRows(a, b, key, dir) {
         var sb = String(finaArturnGetSortCell(b, key) || '');
         return mult * sa.localeCompare(sb, 'zh-CN', { numeric: true, sensitivity: 'base' });
     }
-    if (key === 'a0' || key === 'listDate') {
+    if (key === 'a0' || key === 'listDate' || key === 'first_his_break_date' || key === 'first_850_break_date') {
         var da = String(finaArturnGetSortCell(a, key) || '');
         var db = String(finaArturnGetSortCell(b, key) || '');
         return mult * da.localeCompare(db, 'zh-CN', { numeric: true, sensitivity: 'base' });
     }
     if (key === 'ar_pct' || key === 'holders_top3_pct' || key === 'free_float_ratio_pct' || key === 'money_cap_ratio_pct' || key === 'fqm_debt_to_assets' ||
-            key === 'fqm_interestdebt_ratio' || key === 'ttm_revenue_yi' || key === 'pe_ttm' ||
+            key === 'fqm_interestdebt_ratio' ||
+            key === 'last_his_high' ||
+            key === 'last_his_peak_age_days' ||
+            key === 'last_850_high' ||
+            key === 'last_850_peak_age_days' ||
+            key === 'cur_price' ||
+            key === 'pct_since_ann' ||
+            key === 'pct_vs_h_high' || key === 'pct_vs_high_850' || key === 'pct_vs_high_250' ||
+            key === 'mult_vs_h_low' || key === 'pct_vs_low_850' || key === 'pct_vs_low_250' ||
+            key === 'first_his_break_date' || key === 'first_his_break_free_mv_yi' ||
+            key === 'first_his_prior_max_throwback_5d' ||
+            key === 'first_his_vol_ratio20' || key === 'first_his_peak_age_days' || key === 'first_his_prior_max_qfq' || key === 'first_his_gap_to_peak_pct' || key === 'first_his_break_pct' ||
+            key === 'first_his_upper_shadow_pct' || key === 'first_his_pct_chg' || key === 'first_his_ff_tn5_60_ratio' ||
+            key === 'first_his_post5_ret_pct' || key === 'first_his_post10_ret_pct' || key === 'first_his_post20_ret_pct' || key === 'first_his_post60_ret_pct' ||
+            key === 'first_his_pre5_ret_pct' || key === 'first_his_pre120_ret_pct' ||
+            key === 'first_his_pre120_range_pct' || key === 'first_his_ma120_bias_pct' ||
+            key === 'first_his_avg_amt_5_yi' || key === 'first_his_avg_amt_20_yi' || key === 'first_his_avg_amt_60_yi' ||
+            key === 'first_his_ff_tn5_pct' || key === 'first_his_ff_tn20_pct' || key === 'first_his_ff_tn60_pct' ||
+            key === 'first_his_pre120_up7_cnt' || key === 'first_his_pre120_dn7_cnt' ||
+            key === 'first_850_break_date' || key === 'first_850_break_free_mv_yi' ||
+            key === 'first_850_prior_max_throwback_5d' ||
+            key === 'first_850_vol_ratio20' || key === 'first_850_peak_age_days' || key === 'first_850_prior_max_qfq' || key === 'first_850_gap_to_peak_pct' || key === 'first_850_break_pct' ||
+            key === 'first_850_upper_shadow_pct' || key === 'first_850_pct_chg' || key === 'first_850_ff_tn5_60_ratio' ||
+            key === 'first_850_post5_ret_pct' || key === 'first_850_post10_ret_pct' || key === 'first_850_post20_ret_pct' || key === 'first_850_post60_ret_pct' ||
+            key === 'first_850_pre5_ret_pct' || key === 'first_850_pre120_ret_pct' ||
+            key === 'first_850_pre120_range_pct' || key === 'first_850_ma120_bias_pct' ||
+            key === 'first_850_avg_amt_5_yi' || key === 'first_850_avg_amt_20_yi' || key === 'first_850_avg_amt_60_yi' ||
+            key === 'first_850_ff_tn5_pct' || key === 'first_850_ff_tn20_pct' || key === 'first_850_ff_tn60_pct' ||
+            key === 'first_850_pre120_up7_cnt' || key === 'first_850_pre120_dn7_cnt' ||
+            key === 'ttm_revenue_yi' || key === 'pe_ttm' ||
             key === 'total_mv_yi' || key === 'free_mv_yi' ||
             key === 'roe0' || key === 'roe1' || key === 'roe2' || key === 'roe3' ||
             key === 'p0' || key === 'p1' || key === 'p2' || key === 'p3' ||
@@ -5288,6 +5958,68 @@ function finaArturnIsSortableColumnKey(key) {
         key === 'money_cap_ratio_pct' ||
         key === 'fqm_debt_to_assets' ||
         key === 'fqm_interestdebt_ratio' ||
+        key === 'last_his_high' ||
+        key === 'last_his_peak_age_days' ||
+        key === 'last_850_high' ||
+        key === 'last_850_peak_age_days' ||
+        key === 'cur_price' ||
+        key === 'pct_since_ann' ||
+        key === 'pct_vs_h_high' || key === 'pct_vs_high_850' || key === 'pct_vs_high_250' ||
+        key === 'mult_vs_h_low' || key === 'pct_vs_low_850' || key === 'pct_vs_low_250' ||
+        key === 'first_his_break_date' ||
+        key === 'first_his_break_free_mv_yi' ||
+        key === 'first_his_prior_max_throwback_5d' ||
+        key === 'first_his_post5_ret_pct' ||
+        key === 'first_his_post10_ret_pct' ||
+        key === 'first_his_post20_ret_pct' ||
+        key === 'first_his_post60_ret_pct' ||
+        key === 'first_his_peak_age_days' ||
+        key === 'first_his_prior_max_qfq' ||
+        key === 'first_his_gap_to_peak_pct' ||
+        key === 'first_his_break_pct' ||
+        key === 'first_his_upper_shadow_pct' ||
+        key === 'first_his_pct_chg' ||
+        key === 'first_his_vol_ratio20' ||
+        key === 'first_his_ff_tn5_60_ratio' ||
+        key === 'first_his_pre5_ret_pct' ||
+        key === 'first_his_pre120_ret_pct' ||
+        key === 'first_his_pre120_range_pct' ||
+        key === 'first_his_ma120_bias_pct' ||
+        key === 'first_his_avg_amt_5_yi' ||
+        key === 'first_his_avg_amt_20_yi' ||
+        key === 'first_his_avg_amt_60_yi' ||
+        key === 'first_his_ff_tn5_pct' ||
+        key === 'first_his_ff_tn20_pct' ||
+        key === 'first_his_ff_tn60_pct' ||
+        key === 'first_his_pre120_up7_cnt' ||
+        key === 'first_his_pre120_dn7_cnt' ||
+        key === 'first_850_break_date' ||
+        key === 'first_850_break_free_mv_yi' ||
+        key === 'first_850_prior_max_throwback_5d' ||
+        key === 'first_850_post5_ret_pct' ||
+        key === 'first_850_post10_ret_pct' ||
+        key === 'first_850_post20_ret_pct' ||
+        key === 'first_850_post60_ret_pct' ||
+        key === 'first_850_peak_age_days' ||
+        key === 'first_850_prior_max_qfq' ||
+        key === 'first_850_gap_to_peak_pct' ||
+        key === 'first_850_break_pct' ||
+        key === 'first_850_upper_shadow_pct' ||
+        key === 'first_850_pct_chg' ||
+        key === 'first_850_vol_ratio20' ||
+        key === 'first_850_ff_tn5_60_ratio' ||
+        key === 'first_850_pre5_ret_pct' ||
+        key === 'first_850_pre120_ret_pct' ||
+        key === 'first_850_pre120_range_pct' ||
+        key === 'first_850_ma120_bias_pct' ||
+        key === 'first_850_avg_amt_5_yi' ||
+        key === 'first_850_avg_amt_20_yi' ||
+        key === 'first_850_avg_amt_60_yi' ||
+        key === 'first_850_ff_tn5_pct' ||
+        key === 'first_850_ff_tn20_pct' ||
+        key === 'first_850_ff_tn60_pct' ||
+        key === 'first_850_pre120_up7_cnt' ||
+        key === 'first_850_pre120_dn7_cnt' ||
         key === 'ttm_revenue_yi' ||
         key === 'pe_ttm' ||
         key === 'ar_pct' ||
@@ -5475,7 +6207,8 @@ function initFinaArturnHorizScrollHelpers() {
     var scrollPane = document.getElementById('fina-arturn-scroll-pane');
     if (!scrollPane) return;
     if (scrollPane.dataset.finaHorizHelpers === '1') {
-        syncFinaArturnTheadStickyHeights();
+        scheduleSyncFinaArturnTheadStickyHeights();
+        ensureFinaVirtualScrollListener();
         return;
     }
     scrollPane.dataset.finaHorizHelpers = '1';
@@ -5494,26 +6227,14 @@ function initFinaArturnHorizScrollHelpers() {
        与「DOM 永不销毁、仅 display + 节点重排」的新渲染方案配套 */
     function syncRowHover(srcTbody, ev, isEnter) {
         var tr = ev.target.closest ? ev.target.closest('tr') : null;
-        if (!tr || tr.parentElement !== srcTbody) return;
-        var origAttr = tr.getAttribute('data-row-index');
-        var st = _finaMetricState();
-        var fTr = null;
-        var sTr = null;
-        if (origAttr != null && st._frozenTrMap && st._scrollTrMap) {
-            var idxNum = parseInt(origAttr, 10);
-            if (idxNum >= 0) {
-                fTr = st._frozenTrMap[idxNum] || null;
-                sTr = st._scrollTrMap[idxNum] || null;
-            }
-        }
-        if (!fTr && !sTr) {
-            /* 兜底：trMap 尚未建立（极早期初始化阶段），按 sectionRowIndex 回退 */
-            var idx = tr.sectionRowIndex;
-            fTr = frozenTbody && frozenTbody.rows[idx];
-            sTr = scrollTbody && scrollTbody.rows[idx];
-        }
-        if (fTr) fTr.classList.toggle('fina-arturn-row-hover', isEnter);
-        if (sTr) sTr.classList.toggle('fina-arturn-row-hover', isEnter);
+        if (!tr || tr.parentElement !== srcTbody || tr.classList.contains('fina-virtual-spacer')) return;
+        var otherTbody = srcTbody === frozenTbody ? scrollTbody : frozenTbody;
+        if (!otherTbody) return;
+        var idx = tr.sectionRowIndex;
+        var otherTr = otherTbody.rows[idx];
+        if (!otherTr || otherTr.classList.contains('fina-virtual-spacer')) return;
+        tr.classList.toggle('fina-arturn-row-hover', isEnter);
+        otherTr.classList.toggle('fina-arturn-row-hover', isEnter);
     }
     if (frozenTbody) {
         frozenTbody.addEventListener('mouseover', function (ev) { syncRowHover(frozenTbody, ev, true); }, { passive: true });
@@ -5555,11 +6276,444 @@ function initFinaArturnHorizScrollHelpers() {
         if (resizeTimer) clearTimeout(resizeTimer);
         resizeTimer = setTimeout(function () {
             resizeTimer = null;
-            syncFinaArturnTheadStickyHeights();
+            scheduleSyncFinaArturnTheadStickyHeights();
             syncFinaArturnColumnWidths();
         }, 150);
     });
-    syncFinaArturnTheadStickyHeights();
+    ensureFinaVirtualScrollListener();
+    scheduleSyncFinaArturnTheadStickyHeights();
+}
+
+/** 突破首次信号列（his/850 共用表头文案与字段后缀；第三元=单元格格式 date|int|signed2|num2） */
+var FINAA_QFQ_BREAK_FIRST_TH_SPECS = [
+    ['突破日', 'break_date', 'date'],
+    ['自由市值', 'break_free_mv_yi', 'num2'],
+    ['5日回踩', 'prior_max_throwback_5d', 'int'],
+    ['T5', 'post5_ret_pct', 'postRet2'],
+    ['T10', 'post10_ret_pct', 'postRet2'],
+    ['T20', 'post20_ret_pct', 'postRet2'],
+    ['T60', 'post60_ret_pct', 'postRet2'],
+    ['前高Age', 'peak_age_days', 'int'],
+    ['前高价', 'prior_max_qfq', 'num2'],
+    ['距前高', 'gap_to_peak_pct', 'signed2'],
+    ['突破幅度', 'break_pct', 'signed2'],
+    ['上影线', 'upper_shadow_pct', 'num2'],
+    ['涨跌幅', 'pct_chg', 'signed2'],
+    ['T/20量比', 'vol_ratio20', 'num2'],
+    ['5/60换手比', 'ff_tn5_60_ratio', 'num2'],
+    ['5日涨幅', 'pre5_ret_pct', 'signed2'],
+    ['120日涨幅', 'pre120_ret_pct', 'signed2'],
+    ['120日振幅', 'pre120_range_pct', 'num2'],
+    ['MA120 BIAS', 'ma120_bias_pct', 'signed2'],
+    ['5日额', 'avg_amt_5_yi', 'num2'],
+    ['20日额', 'avg_amt_20_yi', 'num2'],
+    ['60日额', 'avg_amt_60_yi', 'num2'],
+    ['5日换手', 'ff_tn5_pct', 'num2'],
+    ['20日换手', 'ff_tn20_pct', 'num2'],
+    ['60日换手', 'ff_tn60_pct', 'num2'],
+    ['120日>7%', 'pre120_up7_cnt', 'int'],
+    ['120日<-7%', 'pre120_dn7_cnt', 'int'],
+];
+
+/** 回测参考指标：表头/单元格浅黄底（首次历史新高与首次850 共用字段后缀） */
+var FINAA_QFQ_BREAK_REF_SUFFIXES = {
+    break_free_mv_yi: 1,
+    peak_age_days: 1,
+    gap_to_peak_pct: 1,
+    pre5_ret_pct: 1,
+    ff_tn20_pct: 1,
+    ff_tn60_pct: 1,
+};
+
+/** 20日换手信号色（A股红关注/绿警惕）：≤7% 红，≥14% 绿；5/60 暂不着字色，待回测确认 */
+var FINAA_QFQ_FF_TN20_HOT_MAX = 7;
+var FINAA_QFQ_FF_TN20_COOL_MIN = 14;
+/** 距前高信号色：≥-2% 贴前高偏红关注，≤-10% 深跳空偏绿警惕 */
+var FINAA_QFQ_GAP_HOT_MIN = -2;
+var FINAA_QFQ_GAP_COOL_MAX = -10;
+
+function finaQfqBreakRefColClass(suffix) {
+    return FINAA_QFQ_BREAK_REF_SUFFIXES[suffix] ? ' fina-qfq-break-ref-col' : '';
+}
+
+function finaQfqFfTn20SignalClass(v) {
+    if (v === null || v === undefined || v === '') return '';
+    var n = parseFloat(v);
+    if (isNaN(n)) return '';
+    if (n <= FINAA_QFQ_FF_TN20_HOT_MAX) return ' rise';
+    if (n >= FINAA_QFQ_FF_TN20_COOL_MIN) return ' fall';
+    return '';
+}
+
+function finaQfqGapToPeakSignalClass(v) {
+    if (v === null || v === undefined || v === '') return '';
+    var n = parseFloat(v);
+    if (isNaN(n)) return '';
+    if (n >= FINAA_QFQ_GAP_HOT_MIN) return ' rise';
+    if (n <= FINAA_QFQ_GAP_COOL_MAX) return ' fall';
+    return '';
+}
+
+/* 「当前价位置」6 个百分比列的表头说明：分母取 stk_factor_ma 最新交易日的前复权盘中极值
+   （h_high/h_low 为截至当日累计，850/250 为 rolling「最近 N 条」而非日历窗口，min_periods=1 →
+   次新股窗口不足时会退化为其上市以来极值，此时三档数值可能相同）。 */
+var finaPriceGapTitleMap = {
+    pct_vs_h_high: '距历史高%（当前价÷历史最高(前复权盘中)−1×100；≥-2%淡红贴前高、≤-10%淡绿）',
+    pct_vs_high_850: '距850高%（当前价÷最近850条最高(前复权盘中)−1×100；≥-2%淡红、≤-10%淡绿）',
+    pct_vs_high_250: '距250高%（当前价÷最近250条最高(前复权盘中)−1×100；≥-2%淡红、≤-10%淡绿）',
+    mult_vs_h_low: '历史低倍（当前价÷历史最低(前复权盘中)，倍数非百分比：369 表示当前价为历史最低的 369 倍。老股票前复权历史低点为上市初期几毛钱，用百分比会到数万故改倍数）',
+    pct_vs_low_850: '距850低%（当前价÷最近850条最低(前复权盘中)−1×100）',
+    pct_vs_low_250: '距250低%（当前价÷最近250条最低(前复权盘中)−1×100）'
+  };
+  var finaPctSinceAnnTitle =
+    '自公告%（当前价 rt_k.close ÷ 所选报告期主行公告日 a0 之前最近交易日 stk_factor_pro.close_qfq − 1×100；' +
+    '正红负绿。切换报告期后公告日变化，基数随之变化；无公告日或取不到基数则为空）';
+
+/** 距高点单元格：复用距前高信号色（≥-2% 贴高点偏红关注、≤-10% 偏绿），其余负值仅走 neg 灰度 */
+function finaPriceGapCellHtml(v) {
+    var cls = 'median-table-num';
+    var sig = finaQfqGapToPeakSignalClass(v);
+    return '<td class="' + cls + (sig || finaArturnNegClass(v)) + '">' + formatFinaArturnValue(v, 2) + '</td>';
+}
+
+function finaQfqBreakFirstKey(prefix, suffix) {
+    return prefix + '_' + suffix;
+}
+
+function buildFinaQfqBreakFirstThHtml(prefix, buildThFn) {
+    var html = '';
+    for (var i = 0; i < FINAA_QFQ_BREAK_FIRST_TH_SPECS.length; i += 1) {
+        var spec = FINAA_QFQ_BREAK_FIRST_TH_SPECS[i];
+        var refCls = finaQfqBreakRefColClass(spec[1]).trim();
+        html += buildThFn(spec[0], finaQfqBreakFirstKey(prefix, spec[1]), refCls || undefined);
+    }
+    return html;
+}
+
+function finaQfqBreakFirstCellHtml(row, prefix, spec) {
+    var fmt = spec[2] || 'num2';
+    var suffix = spec[1];
+    var key = finaQfqBreakFirstKey(prefix, suffix);
+    var val = row[key];
+    var cls = 'median-table-num' + finaQfqBreakRefColClass(suffix);
+    if (fmt === 'date') {
+        return '<td class="' + cls + '">' + escapeHtmlAttr(formatFinaArturnAnnDate(val)) + '</td>';
+    }
+    if (fmt === 'int') {
+        return '<td class="' + cls + '">' + formatFinaArturnValue(val, 0) + '</td>';
+    }
+    if (suffix === 'gap_to_peak_pct') {
+        var gapSig = finaQfqGapToPeakSignalClass(val);
+        var gapExtra = gapSig || finaArturnNegClass(val);
+        return '<td class="' + cls + gapExtra + '">' + formatFinaArturnValue(val, 2) + '</td>';
+    }
+    if (fmt === 'signed2') {
+        return '<td class="' + cls + finaArturnNegClass(val) + '">' + formatFinaArturnValue(val, 2) + '</td>';
+    }
+    if (fmt === 'postRet2') {
+        return '<td class="' + cls + finaArturnRiseFallClass(val) + '">' + formatFinaArturnValue(val, 2) + '</td>';
+    }
+    if (suffix === 'ff_tn20_pct') {
+        return '<td class="' + cls + finaQfqFfTn20SignalClass(val) + '">' + formatFinaArturnValue(val, 2) + '</td>';
+    }
+    return '<td class="' + cls + '">' + formatFinaArturnValue(val, 2) + '</td>';
+}
+
+function buildFinaQfqBreakFirstCellsHtml(row, prefix) {
+    var html = '';
+    for (var i = 0; i < FINAA_QFQ_BREAK_FIRST_TH_SPECS.length; i += 1) {
+        html += finaQfqBreakFirstCellHtml(row, prefix, FINAA_QFQ_BREAK_FIRST_TH_SPECS[i]);
+    }
+    return html;
+}
+
+function buildFinaMetricFilterMatcherBundle(filters) {
+    return {
+        codeOrKws: finaArturnSplitTsCodeOrKeywords(filters.tsCode),
+        nameKw: filters.secName.toLowerCase(),
+        swOrKws: finaArturnSplitSwNameOrKeywords(filters.swName),
+        ma0: String(filters.a0 || '').trim().toLowerCase(),
+        listDateKw: String(filters.listDate || '').trim().toLowerCase(),
+        firstHisBreakDateKw: String(filters.first_his_break_date || '').trim().toLowerCase(),
+        first850BreakDateKw: String(filters.first_850_break_date || '').trim().toLowerCase(),
+        provinceKw: String(filters.province || '').trim().toLowerCase(),
+        cityKw: String(filters.city || '').trim().toLowerCase(),
+        actEntKw: String(filters.act_ent_type || '').trim().toLowerCase(),
+        mHoldersTop3: buildNumericFilterMatcher(filters.holders_top3_pct),
+        mFreeFloatRatio: buildNumericFilterMatcher(filters.free_float_ratio_pct),
+        mTotalMv: buildNumericFilterMatcher(filters.total_mv_yi),
+        mFreeMv: buildNumericFilterMatcher(filters.free_mv_yi),
+        mMoneyCapRatio: buildNumericFilterMatcher(filters.money_cap_ratio_pct),
+        mFqmDebtToAssets: buildNumericFilterMatcher(filters.fqm_debt_to_assets),
+        mFqmInterestdebtRatio: buildNumericFilterMatcher(filters.fqm_interestdebt_ratio),
+        mLastHisHigh: buildNumericFilterMatcher(filters.last_his_high),
+        mLastHisPeakAge: buildNumericFilterMatcher(filters.last_his_peak_age_days),
+        mLast850High: buildNumericFilterMatcher(filters.last_850_high),
+        mLast850PeakAge: buildNumericFilterMatcher(filters.last_850_peak_age_days),
+        mCurPrice: buildNumericFilterMatcher(filters.cur_price),
+        mPctSinceAnn: buildNumericFilterMatcher(filters.pct_since_ann),
+        mPctVsHHigh: buildNumericFilterMatcher(filters.pct_vs_h_high),
+        mPctVsHigh850: buildNumericFilterMatcher(filters.pct_vs_high_850),
+        mPctVsHigh250: buildNumericFilterMatcher(filters.pct_vs_high_250),
+        mMultVsHLow: buildNumericFilterMatcher(filters.mult_vs_h_low),
+        mPctVsLow850: buildNumericFilterMatcher(filters.pct_vs_low_850),
+        mPctVsLow250: buildNumericFilterMatcher(filters.pct_vs_low_250),
+        mFirstHisBreakFreeMv: buildNumericFilterMatcher(filters.first_his_break_free_mv_yi),
+        mFirstHisPriorMaxTb5: buildNumericFilterMatcher(filters.first_his_prior_max_throwback_5d),
+        mFirstHisVolRatio20: buildNumericFilterMatcher(filters.first_his_vol_ratio20),
+        mFirstHisPeakAge: buildNumericFilterMatcher(filters.first_his_peak_age_days),
+        mFirstHisPriorMaxQfq: buildNumericFilterMatcher(filters.first_his_prior_max_qfq),
+        mFirstHisGapToPeak: buildNumericFilterMatcher(filters.first_his_gap_to_peak_pct),
+        mFirstHisBreakPct: buildNumericFilterMatcher(filters.first_his_break_pct),
+        mFirstHisUpperShadow: buildNumericFilterMatcher(filters.first_his_upper_shadow_pct),
+        mFirstHisPctChg: buildNumericFilterMatcher(filters.first_his_pct_chg),
+        mFirstHisFfTn560: buildNumericFilterMatcher(filters.first_his_ff_tn5_60_ratio),
+        mFirstHisPre5Ret: buildNumericFilterMatcher(filters.first_his_pre5_ret_pct),
+        mFirstHisPre120Ret: buildNumericFilterMatcher(filters.first_his_pre120_ret_pct),
+        mFirstHisPre120Range: buildNumericFilterMatcher(filters.first_his_pre120_range_pct),
+        mFirstHisMa120Bias: buildNumericFilterMatcher(filters.first_his_ma120_bias_pct),
+        mFirstHisAvgAmt5: buildNumericFilterMatcher(filters.first_his_avg_amt_5_yi),
+        mFirstHisAvgAmt20: buildNumericFilterMatcher(filters.first_his_avg_amt_20_yi),
+        mFirstHisAvgAmt60: buildNumericFilterMatcher(filters.first_his_avg_amt_60_yi),
+        mFirstHisFfTn5: buildNumericFilterMatcher(filters.first_his_ff_tn5_pct),
+        mFirstHisFfTn20: buildNumericFilterMatcher(filters.first_his_ff_tn20_pct),
+        mFirstHisFfTn60: buildNumericFilterMatcher(filters.first_his_ff_tn60_pct),
+        mFirstHisPre120Up7: buildNumericFilterMatcher(filters.first_his_pre120_up7_cnt),
+        mFirstHisPre120Dn7: buildNumericFilterMatcher(filters.first_his_pre120_dn7_cnt),
+        mFirst850BreakFreeMv: buildNumericFilterMatcher(filters.first_850_break_free_mv_yi),
+        mFirst850PriorMaxTb5: buildNumericFilterMatcher(filters.first_850_prior_max_throwback_5d),
+        mFirst850VolRatio20: buildNumericFilterMatcher(filters.first_850_vol_ratio20),
+        mFirst850PeakAge: buildNumericFilterMatcher(filters.first_850_peak_age_days),
+        mFirst850PriorMaxQfq: buildNumericFilterMatcher(filters.first_850_prior_max_qfq),
+        mFirst850GapToPeak: buildNumericFilterMatcher(filters.first_850_gap_to_peak_pct),
+        mFirst850BreakPct: buildNumericFilterMatcher(filters.first_850_break_pct),
+        mFirst850UpperShadow: buildNumericFilterMatcher(filters.first_850_upper_shadow_pct),
+        mFirst850PctChg: buildNumericFilterMatcher(filters.first_850_pct_chg),
+        mFirst850FfTn560: buildNumericFilterMatcher(filters.first_850_ff_tn5_60_ratio),
+        mFirst850Pre5Ret: buildNumericFilterMatcher(filters.first_850_pre5_ret_pct),
+        mFirst850Pre120Ret: buildNumericFilterMatcher(filters.first_850_pre120_ret_pct),
+        mFirst850Pre120Range: buildNumericFilterMatcher(filters.first_850_pre120_range_pct),
+        mFirst850Ma120Bias: buildNumericFilterMatcher(filters.first_850_ma120_bias_pct),
+        mFirst850AvgAmt5: buildNumericFilterMatcher(filters.first_850_avg_amt_5_yi),
+        mFirst850AvgAmt20: buildNumericFilterMatcher(filters.first_850_avg_amt_20_yi),
+        mFirst850AvgAmt60: buildNumericFilterMatcher(filters.first_850_avg_amt_60_yi),
+        mFirst850FfTn5: buildNumericFilterMatcher(filters.first_850_ff_tn5_pct),
+        mFirst850FfTn20: buildNumericFilterMatcher(filters.first_850_ff_tn20_pct),
+        mFirst850FfTn60: buildNumericFilterMatcher(filters.first_850_ff_tn60_pct),
+        mFirst850Pre120Up7: buildNumericFilterMatcher(filters.first_850_pre120_up7_cnt),
+        mFirst850Pre120Dn7: buildNumericFilterMatcher(filters.first_850_pre120_dn7_cnt),
+        mttmYi: buildNumericFilterMatcher(filters.ttm_revenue_yi),
+        mPe: buildNumericFilterMatcher(filters.pe_ttm),
+        mar_pct: buildNumericFilterMatcher(filters.ar_pct),
+        mr0: buildNumericFilterMatcher(filters.roe0),
+        mr1: buildNumericFilterMatcher(filters.roe1),
+        mr2: buildNumericFilterMatcher(filters.roe2),
+        mr3: buildNumericFilterMatcher(filters.roe3),
+        m0: buildNumericFilterMatcher(filters.p0),
+        m1: buildNumericFilterMatcher(filters.p1),
+        m2: buildNumericFilterMatcher(filters.p2),
+        m3: buildNumericFilterMatcher(filters.p3),
+        mg0: buildNumericFilterMatcher(filters.g0),
+        mg1: buildNumericFilterMatcher(filters.g1),
+        mg2: buildNumericFilterMatcher(filters.g2),
+        mg3: buildNumericFilterMatcher(filters.g3),
+        mc0: buildNumericFilterMatcher(filters.c0),
+        mc1: buildNumericFilterMatcher(filters.c1),
+        mc2: buildNumericFilterMatcher(filters.c2),
+        mc3: buildNumericFilterMatcher(filters.c3),
+        mo0: buildNumericFilterMatcher(filters.o0),
+        mo1: buildNumericFilterMatcher(filters.o1),
+        mo2: buildNumericFilterMatcher(filters.o2),
+        mo3: buildNumericFilterMatcher(filters.o3),
+        ms_high: buildNumericFilterMatcher(filters.s_high),
+        ms0: buildNumericFilterMatcher(filters.s0),
+        ms1: buildNumericFilterMatcher(filters.s1),
+        ms2: buildNumericFilterMatcher(filters.s2),
+        ms3: buildNumericFilterMatcher(filters.s3),
+        ms4: buildNumericFilterMatcher(filters.s4),
+        ms5: buildNumericFilterMatcher(filters.s5),
+        ms6: buildNumericFilterMatcher(filters.s6),
+        ms7: buildNumericFilterMatcher(filters.s7),
+        ms8: buildNumericFilterMatcher(filters.s8),
+        mcf_high: buildNumericFilterMatcher(filters.cf_high),
+        mcf0: buildNumericFilterMatcher(filters.cf0),
+        mcf1: buildNumericFilterMatcher(filters.cf1),
+        mcf2: buildNumericFilterMatcher(filters.cf2),
+        mcf3: buildNumericFilterMatcher(filters.cf3),
+        mcf4: buildNumericFilterMatcher(filters.cf4),
+        mcf5: buildNumericFilterMatcher(filters.cf5),
+        mcf6: buildNumericFilterMatcher(filters.cf6),
+        mcf7: buildNumericFilterMatcher(filters.cf7),
+        mcf8: buildNumericFilterMatcher(filters.cf8),
+        moi_high: buildNumericFilterMatcher(filters.oi_high),
+        moi0: buildNumericFilterMatcher(filters.oi0),
+        moi1: buildNumericFilterMatcher(filters.oi1),
+        moi2: buildNumericFilterMatcher(filters.oi2),
+        moi3: buildNumericFilterMatcher(filters.oi3),
+        moi4: buildNumericFilterMatcher(filters.oi4),
+        moi5: buildNumericFilterMatcher(filters.oi5),
+        moi6: buildNumericFilterMatcher(filters.oi6),
+        moi7: buildNumericFilterMatcher(filters.oi7),
+        moi8: buildNumericFilterMatcher(filters.oi8),
+        mdtp_high: buildNumericFilterMatcher(filters.dtp_high),
+        mocs_high: buildNumericFilterMatcher(filters.ocs_high),
+        mocs_wqcv: buildNumericFilterMatcher(filters.ocs_wqcv),
+        mdtp0: buildNumericFilterMatcher(filters.dtp0),
+        mdtp1: buildNumericFilterMatcher(filters.dtp1),
+        mdtp2: buildNumericFilterMatcher(filters.dtp2),
+        mdtp3: buildNumericFilterMatcher(filters.dtp3),
+        mdtp4: buildNumericFilterMatcher(filters.dtp4),
+        mdtp5: buildNumericFilterMatcher(filters.dtp5),
+        mdtp6: buildNumericFilterMatcher(filters.dtp6),
+        mdtp7: buildNumericFilterMatcher(filters.dtp7),
+        mdtp8: buildNumericFilterMatcher(filters.dtp8),
+        mfst_high: buildNumericFilterMatcher(filters.fst_high),
+        mfst0: buildNumericFilterMatcher(filters.fst0),
+        mfst1: buildNumericFilterMatcher(filters.fst1),
+        mfst2: buildNumericFilterMatcher(filters.fst2),
+        mfst3: buildNumericFilterMatcher(filters.fst3),
+        mfst4: buildNumericFilterMatcher(filters.fst4),
+        mfst5: buildNumericFilterMatcher(filters.fst5),
+        mfst6: buildNumericFilterMatcher(filters.fst6),
+        mfst7: buildNumericFilterMatcher(filters.fst7),
+        mfst8: buildNumericFilterMatcher(filters.fst8),
+        mocs0: buildNumericFilterMatcher(filters.ocs0),
+        mocs1: buildNumericFilterMatcher(filters.ocs1),
+        mocs2: buildNumericFilterMatcher(filters.ocs2),
+        mocs3: buildNumericFilterMatcher(filters.ocs3),
+        mocs4: buildNumericFilterMatcher(filters.ocs4),
+        mocs5: buildNumericFilterMatcher(filters.ocs5),
+        mocs6: buildNumericFilterMatcher(filters.ocs6),
+        mocs7: buildNumericFilterMatcher(filters.ocs7),
+        mocs8: buildNumericFilterMatcher(filters.ocs8),
+        moco0: buildNumericFilterMatcher(filters.oco0),
+        moco1: buildNumericFilterMatcher(filters.oco1),
+        moco2: buildNumericFilterMatcher(filters.oco2),
+        moco3: buildNumericFilterMatcher(filters.oco3),
+        moco4: buildNumericFilterMatcher(filters.oco4),
+        moco5: buildNumericFilterMatcher(filters.oco5),
+        moco6: buildNumericFilterMatcher(filters.oco6),
+        moco7: buildNumericFilterMatcher(filters.oco7),
+        moco8: buildNumericFilterMatcher(filters.oco8),
+        mrq0: buildNumericFilterMatcher(filters.r0),
+        mrq1: buildNumericFilterMatcher(filters.r1),
+        mrq2: buildNumericFilterMatcher(filters.r2),
+        mrq3: buildNumericFilterMatcher(filters.r3),
+        mrq4: buildNumericFilterMatcher(filters.r4),
+        mrq5: buildNumericFilterMatcher(filters.r5),
+        mrq6: buildNumericFilterMatcher(filters.r6),
+        mrq7: buildNumericFilterMatcher(filters.r7),
+        mrq8: buildNumericFilterMatcher(filters.r8),
+        mk0: buildNumericFilterMatcher(filters.k0),
+        mk1: buildNumericFilterMatcher(filters.k1),
+        mk2: buildNumericFilterMatcher(filters.k2),
+        mk3: buildNumericFilterMatcher(filters.k3),
+        mk4: buildNumericFilterMatcher(filters.k4),
+        mk5: buildNumericFilterMatcher(filters.k5),
+        mk6: buildNumericFilterMatcher(filters.k6),
+        mk7: buildNumericFilterMatcher(filters.k7),
+        mk8: buildNumericFilterMatcher(filters.k8),
+        mkchg: buildNumericFilterMatcher(filters.kchg),
+        mkRevPct: buildNumericFilterMatcher(filters.k_revenue_pct),
+        mk_high: buildNumericFilterMatcher(filters.k_high),
+        mf0: buildNumericFilterMatcher(filters.f0),
+        mf1: buildNumericFilterMatcher(filters.f1),
+        mf2: buildNumericFilterMatcher(filters.f2),
+        mf3: buildNumericFilterMatcher(filters.f3),
+        mf4: buildNumericFilterMatcher(filters.f4),
+        mf5: buildNumericFilterMatcher(filters.f5),
+        mf6: buildNumericFilterMatcher(filters.f6),
+        mf7: buildNumericFilterMatcher(filters.f7),
+        mf8: buildNumericFilterMatcher(filters.f8),
+        mhn0: buildNumericFilterMatcher(filters.hn0),
+        mhn1: buildNumericFilterMatcher(filters.hn1),
+        mhn2: buildNumericFilterMatcher(filters.hn2),
+        mhn3: buildNumericFilterMatcher(filters.hn3),
+        mhn4: buildNumericFilterMatcher(filters.hn4),
+        mhn5: buildNumericFilterMatcher(filters.hn5),
+        mhn6: buildNumericFilterMatcher(filters.hn6),
+        mhn7: buildNumericFilterMatcher(filters.hn7),
+        mhn8: buildNumericFilterMatcher(filters.hn8),
+        mhnchg: buildNumericFilterMatcher(filters.hnchg),
+        mhnQoq: buildNumericFilterMatcher(filters.hn_qoq),
+        mhnLow: buildNumericFilterMatcher(filters.hn_low),
+        mfchg: buildNumericFilterMatcher(filters.fchg),
+        mu0: buildNumericFilterMatcher(filters.u0),
+        mu1: buildNumericFilterMatcher(filters.u1),
+        mu2: buildNumericFilterMatcher(filters.u2),
+        mu3: buildNumericFilterMatcher(filters.u3),
+        mu4: buildNumericFilterMatcher(filters.u4),
+        mu5: buildNumericFilterMatcher(filters.u5),
+        mu6: buildNumericFilterMatcher(filters.u6),
+        mu7: buildNumericFilterMatcher(filters.u7),
+        mu8: buildNumericFilterMatcher(filters.u8),
+        mv0: buildNumericFilterMatcher(filters.v0),
+        mv1: buildNumericFilterMatcher(filters.v1),
+        mv2: buildNumericFilterMatcher(filters.v2),
+        mv3: buildNumericFilterMatcher(filters.v3),
+        mv4: buildNumericFilterMatcher(filters.v4),
+        mv5: buildNumericFilterMatcher(filters.v5),
+        mv6: buildNumericFilterMatcher(filters.v6),
+        mv7: buildNumericFilterMatcher(filters.v7),
+        mv8: buildNumericFilterMatcher(filters.v8),
+        mmHigh: buildNumericFilterMatcher(filters.m_high),
+        mmQoq: buildNumericFilterMatcher(filters.m_qoq),
+        mnHigh: buildNumericFilterMatcher(filters.n_high),
+        mnQoq: buildNumericFilterMatcher(filters.n_qoq),
+        mtHigh: buildNumericFilterMatcher(filters.t_high),
+        mtQoq: buildNumericFilterMatcher(filters.t_qoq),
+        mm0: buildNumericFilterMatcher(filters.m0),
+        mm1: buildNumericFilterMatcher(filters.m1),
+        mm2: buildNumericFilterMatcher(filters.m2),
+        mm3: buildNumericFilterMatcher(filters.m3),
+        mm4: buildNumericFilterMatcher(filters.m4),
+        mm5: buildNumericFilterMatcher(filters.m5),
+        mm6: buildNumericFilterMatcher(filters.m6),
+        mm7: buildNumericFilterMatcher(filters.m7),
+        mm8: buildNumericFilterMatcher(filters.m8),
+        mn0: buildNumericFilterMatcher(filters.n0),
+        mn1: buildNumericFilterMatcher(filters.n1),
+        mn2: buildNumericFilterMatcher(filters.n2),
+        mn3: buildNumericFilterMatcher(filters.n3),
+        mn4: buildNumericFilterMatcher(filters.n4),
+        mn5: buildNumericFilterMatcher(filters.n5),
+        mn6: buildNumericFilterMatcher(filters.n6),
+        mn7: buildNumericFilterMatcher(filters.n7),
+        mn8: buildNumericFilterMatcher(filters.n8),
+        mt0: buildNumericFilterMatcher(filters.t0),
+        mt1: buildNumericFilterMatcher(filters.t1),
+        mt2: buildNumericFilterMatcher(filters.t2),
+        mt3: buildNumericFilterMatcher(filters.t3),
+        mt4: buildNumericFilterMatcher(filters.t4),
+        mt5: buildNumericFilterMatcher(filters.t5),
+        mt6: buildNumericFilterMatcher(filters.t6),
+        mt7: buildNumericFilterMatcher(filters.t7),
+        mt8: buildNumericFilterMatcher(filters.t8),
+        minv0: buildNumericFilterMatcher(filters.inv0),
+        minv1: buildNumericFilterMatcher(filters.inv1),
+        minv2: buildNumericFilterMatcher(filters.inv2),
+        minv3: buildNumericFilterMatcher(filters.inv3),
+        minv4: buildNumericFilterMatcher(filters.inv4),
+        minv5: buildNumericFilterMatcher(filters.inv5),
+        minv6: buildNumericFilterMatcher(filters.inv6),
+        minv7: buildNumericFilterMatcher(filters.inv7),
+        minv8: buildNumericFilterMatcher(filters.inv8),
+        minvchg: buildNumericFilterMatcher(filters.invchg),
+        minvRevPct: buildNumericFilterMatcher(filters.inv_revenue_pct),
+        minv_high: buildNumericFilterMatcher(filters.inv_high),
+    };
+}
+
+function getFinaMetricFilterMatcherBundle(panelKey, filters) {
+    var st = _finaMetricState();
+    var key = JSON.stringify(normalizeFinaMetricFilterShape(filters));
+    if (st._filterMatcherKey === key && st._filterMatcherBundle) {
+        return st._filterMatcherBundle;
+    }
+    var bundle = buildFinaMetricFilterMatcherBundle(filters);
+    st._filterMatcherKey = key;
+    st._filterMatcherBundle = bundle;
+    return bundle;
 }
 
 function renderFinaMetricTable(panelKey) {
@@ -5590,7 +6744,7 @@ function renderFinaMetricTable(panelKey) {
     var q8 = finaArturnQuarterLabel(cps[8]);
     /* thead 缓存：只要 periods / contractPeriods 未变，跳过整块 thead.innerHTML 重建
        filter / sort 时通常 periods 不变，省去 187 列 HTML 拼接 + DOM 写入 + 强制 layout */
-    var theadKey = periods.join(',') + '|' + cps.join(',');
+    var theadKey = periods.join(',') + '|' + cps.join(',') + '|cols266g13tip1';
     var skipTheadRebuild = (theadKey === st._theadKey) &&
         !!document.getElementById('fina-arturn-frozen-thead') &&
         !!document.getElementById(cfg.ids.thead);
@@ -5599,7 +6753,7 @@ function renderFinaMetricTable(panelKey) {
     var prevU = '更新：--';
     var elU = document.getElementById(cfg.ids.headUpdated);
     if (elU && elU.textContent) prevU = elU.textContent;
-    function buildTh(label, key) {
+    function buildTh(label, key, optExtraClass) {
         var safeLabel = escapeHtmlAttr(label);
         if (key === 'tsCode' || key === 'secName') {
             return '<th><div class="fina-arturn-th-inner">' +
@@ -5616,14 +6770,18 @@ function renderFinaMetricTable(panelKey) {
         var sortGlyph = ascOn ? '▲' : descOn ? '▼' : '↕';
         var sortTitle = ascOn ? '当前升序，点击改为降序' : descOn ? '当前降序，点击取消排序' : '点击按升序排列';
         var sortAria = ascOn ? safeLabel + ' 升序' : descOn ? safeLabel + ' 降序' : safeLabel + ' 排序（未启用）';
-        var thExtraCls =
+        var thClsParts = [];
+        if (optExtraClass) thClsParts.push(String(optExtraClass).trim());
+        if (
             key === 'province' ||
             key === 'city' ||
             key === 'holders_top3_pct' ||
             key === 'free_float_ratio_pct' ||
             key === 'act_ent_type'
-                ? ' class="fina-arturn-loc-col"'
-                : '';
+        ) {
+            thClsParts.push('fina-arturn-loc-col');
+        }
+        var thExtraCls = thClsParts.length ? ' class="' + thClsParts.join(' ') + '"' : '';
         return '<th' + thExtraCls + '><div class="fina-arturn-th-inner">' +
             '<button type="button" class="' + sortCls + '" data-sort-key="' + key + '" title="' +
             escapeHtmlAttr(sortTitle) + '" aria-label="' + sortAria + '">' + sortGlyph + '</button>' +
@@ -5659,7 +6817,14 @@ function renderFinaMetricTable(panelKey) {
     /* 可滚动面板 thead：从上市日开始（原第3格起） */
     thead.innerHTML =
         '<tr class="fina-arturn-thead-group">' +
-        '<th colspan="9" class="fina-arturn-th-group" scope="colgroup"></th>' +
+        '<th colspan="13" class="fina-arturn-th-group" scope="colgroup"></th>' +
+        '<th colspan="8" class="fina-arturn-th-group" scope="colgroup">当前价位置</th>' +
+        '<th colspan="27" class="fina-arturn-th-group fina-qfq-break-tip-th" scope="colgroup">' +
+        '<button type="button" class="fina-qfq-break-tip-btn" data-qfq-break-tip="his" title="点击查看因子有效性提示（窗口可拖动、可改大小）">首次历史新高</button>' +
+        '</th>' +
+        '<th colspan="27" class="fina-arturn-th-group fina-qfq-break-tip-th" scope="colgroup">' +
+        '<button type="button" class="fina-qfq-break-tip-btn" data-qfq-break-tip="850" title="点击查看因子有效性提示（窗口可拖动、可改大小）">首次850新高</button>' +
+        '</th>' +
         '<th colspan="3" class="fina-arturn-th-group" scope="colgroup">TTM</th>' +
         '<th colspan="4" class="fina-arturn-th-group" scope="colgroup">ROE（扣非）</th>' +
         '<th colspan="4" class="fina-arturn-th-group" scope="colgroup">应收账款周转天数</th>' +
@@ -5694,6 +6859,20 @@ function renderFinaMetricTable(panelKey) {
         buildTh('市值/货币', 'money_cap_ratio_pct') +
         buildTh('资产负债率', 'fqm_debt_to_assets') +
         buildTh('带息负债率', 'fqm_interestdebt_ratio') +
+        buildTh('His新高', 'last_his_high') +
+        buildTh('前高age', 'last_his_peak_age_days') +
+        buildTh('850新高', 'last_850_high') +
+        buildTh('前高age', 'last_850_peak_age_days') +
+        buildTh('当前价', 'cur_price') +
+        buildTh('自公告%', 'pct_since_ann') +
+        buildTh('距历史高', 'pct_vs_h_high') +
+        buildTh('距850高', 'pct_vs_high_850') +
+        buildTh('距250高', 'pct_vs_high_250') +
+        buildTh('历史低倍', 'mult_vs_h_low') +
+        buildTh('距850低', 'pct_vs_low_850') +
+        buildTh('距250低', 'pct_vs_low_250') +
+        buildFinaQfqBreakFirstThHtml('first_his', buildTh) +
+        buildFinaQfqBreakFirstThHtml('first_850', buildTh) +
         buildTh('营收', 'ttm_revenue_yi') +
         buildTh('PE', 'pe_ttm') +
         buildTh('应收%', 'ar_pct') +
@@ -5914,220 +7093,279 @@ function renderFinaMetricTable(panelKey) {
     hideFinaBootHint();
 
     var filters = getFinaMetricFilters(panelKey);
-    var codeOrKws = finaArturnSplitTsCodeOrKeywords(filters.tsCode);
-    var nameKw = filters.secName.toLowerCase();
-    var swOrKws = finaArturnSplitSwNameOrKeywords(filters.swName);
-    var ma0 = String(filters.a0 || '').trim().toLowerCase();
-    var listDateKw = String(filters.listDate || '').trim().toLowerCase();
-    var provinceKw = String(filters.province || '').trim().toLowerCase();
-    var cityKw = String(filters.city || '').trim().toLowerCase();
-    var actEntKw = String(filters.act_ent_type || '').trim().toLowerCase();
-    var mHoldersTop3 = buildNumericFilterMatcher(filters.holders_top3_pct);
-    var mFreeFloatRatio = buildNumericFilterMatcher(filters.free_float_ratio_pct);
-    var mTotalMv = buildNumericFilterMatcher(filters.total_mv_yi);
-    var mFreeMv = buildNumericFilterMatcher(filters.free_mv_yi);
-    var mMoneyCapRatio = buildNumericFilterMatcher(filters.money_cap_ratio_pct);
-    var mFqmDebtToAssets = buildNumericFilterMatcher(filters.fqm_debt_to_assets);
-    var mFqmInterestdebtRatio = buildNumericFilterMatcher(filters.fqm_interestdebt_ratio);
-    var mttmYi = buildNumericFilterMatcher(filters.ttm_revenue_yi);
-    var mPe = buildNumericFilterMatcher(filters.pe_ttm);
-    var mar_pct = buildNumericFilterMatcher(filters.ar_pct);
-    var mr0 = buildNumericFilterMatcher(filters.roe0);
-    var mr1 = buildNumericFilterMatcher(filters.roe1);
-    var mr2 = buildNumericFilterMatcher(filters.roe2);
-    var mr3 = buildNumericFilterMatcher(filters.roe3);
-    var m0 = buildNumericFilterMatcher(filters.p0);
-    var m1 = buildNumericFilterMatcher(filters.p1);
-    var m2 = buildNumericFilterMatcher(filters.p2);
-    var m3 = buildNumericFilterMatcher(filters.p3);
-    var mg0 = buildNumericFilterMatcher(filters.g0);
-    var mg1 = buildNumericFilterMatcher(filters.g1);
-    var mg2 = buildNumericFilterMatcher(filters.g2);
-    var mg3 = buildNumericFilterMatcher(filters.g3);
-    var mc0 = buildNumericFilterMatcher(filters.c0);
-    var mc1 = buildNumericFilterMatcher(filters.c1);
-    var mc2 = buildNumericFilterMatcher(filters.c2);
-    var mc3 = buildNumericFilterMatcher(filters.c3);
-    var mo0 = buildNumericFilterMatcher(filters.o0);
-    var mo1 = buildNumericFilterMatcher(filters.o1);
-    var mo2 = buildNumericFilterMatcher(filters.o2);
-    var mo3 = buildNumericFilterMatcher(filters.o3);
-    var ms_high = buildNumericFilterMatcher(filters.s_high);
-    var ms0 = buildNumericFilterMatcher(filters.s0);
-    var ms1 = buildNumericFilterMatcher(filters.s1);
-    var ms2 = buildNumericFilterMatcher(filters.s2);
-    var ms3 = buildNumericFilterMatcher(filters.s3);
-    var ms4 = buildNumericFilterMatcher(filters.s4);
-    var ms5 = buildNumericFilterMatcher(filters.s5);
-    var ms6 = buildNumericFilterMatcher(filters.s6);
-    var ms7 = buildNumericFilterMatcher(filters.s7);
-    var ms8 = buildNumericFilterMatcher(filters.s8);
-    var mcf_high = buildNumericFilterMatcher(filters.cf_high);
-    var mcf0 = buildNumericFilterMatcher(filters.cf0);
-    var mcf1 = buildNumericFilterMatcher(filters.cf1);
-    var mcf2 = buildNumericFilterMatcher(filters.cf2);
-    var mcf3 = buildNumericFilterMatcher(filters.cf3);
-    var mcf4 = buildNumericFilterMatcher(filters.cf4);
-    var mcf5 = buildNumericFilterMatcher(filters.cf5);
-    var mcf6 = buildNumericFilterMatcher(filters.cf6);
-    var mcf7 = buildNumericFilterMatcher(filters.cf7);
-    var mcf8 = buildNumericFilterMatcher(filters.cf8);
-    var moi_high = buildNumericFilterMatcher(filters.oi_high);
-    var moi0 = buildNumericFilterMatcher(filters.oi0);
-    var moi1 = buildNumericFilterMatcher(filters.oi1);
-    var moi2 = buildNumericFilterMatcher(filters.oi2);
-    var moi3 = buildNumericFilterMatcher(filters.oi3);
-    var moi4 = buildNumericFilterMatcher(filters.oi4);
-    var moi5 = buildNumericFilterMatcher(filters.oi5);
-    var moi6 = buildNumericFilterMatcher(filters.oi6);
-    var moi7 = buildNumericFilterMatcher(filters.oi7);
-    var moi8 = buildNumericFilterMatcher(filters.oi8);
-    var mdtp_high = buildNumericFilterMatcher(filters.dtp_high);
-    var mocs_high = buildNumericFilterMatcher(filters.ocs_high);
-    var mocs_wqcv = buildNumericFilterMatcher(filters.ocs_wqcv);
-    var mdtp0 = buildNumericFilterMatcher(filters.dtp0);
-    var mdtp1 = buildNumericFilterMatcher(filters.dtp1);
-    var mdtp2 = buildNumericFilterMatcher(filters.dtp2);
-    var mdtp3 = buildNumericFilterMatcher(filters.dtp3);
-    var mdtp4 = buildNumericFilterMatcher(filters.dtp4);
-    var mdtp5 = buildNumericFilterMatcher(filters.dtp5);
-    var mdtp6 = buildNumericFilterMatcher(filters.dtp6);
-    var mdtp7 = buildNumericFilterMatcher(filters.dtp7);
-    var mdtp8 = buildNumericFilterMatcher(filters.dtp8);
-    var mfst_high = buildNumericFilterMatcher(filters.fst_high);
-    var mfst0 = buildNumericFilterMatcher(filters.fst0);
-    var mfst1 = buildNumericFilterMatcher(filters.fst1);
-    var mfst2 = buildNumericFilterMatcher(filters.fst2);
-    var mfst3 = buildNumericFilterMatcher(filters.fst3);
-    var mfst4 = buildNumericFilterMatcher(filters.fst4);
-    var mfst5 = buildNumericFilterMatcher(filters.fst5);
-    var mfst6 = buildNumericFilterMatcher(filters.fst6);
-    var mfst7 = buildNumericFilterMatcher(filters.fst7);
-    var mfst8 = buildNumericFilterMatcher(filters.fst8);
-    var mocs0 = buildNumericFilterMatcher(filters.ocs0);
-    var mocs1 = buildNumericFilterMatcher(filters.ocs1);
-    var mocs2 = buildNumericFilterMatcher(filters.ocs2);
-    var mocs3 = buildNumericFilterMatcher(filters.ocs3);
-    var mocs4 = buildNumericFilterMatcher(filters.ocs4);
-    var mocs5 = buildNumericFilterMatcher(filters.ocs5);
-    var mocs6 = buildNumericFilterMatcher(filters.ocs6);
-    var mocs7 = buildNumericFilterMatcher(filters.ocs7);
-    var mocs8 = buildNumericFilterMatcher(filters.ocs8);
-    var moco0 = buildNumericFilterMatcher(filters.oco0);
-    var moco1 = buildNumericFilterMatcher(filters.oco1);
-    var moco2 = buildNumericFilterMatcher(filters.oco2);
-    var moco3 = buildNumericFilterMatcher(filters.oco3);
-    var moco4 = buildNumericFilterMatcher(filters.oco4);
-    var moco5 = buildNumericFilterMatcher(filters.oco5);
-    var moco6 = buildNumericFilterMatcher(filters.oco6);
-    var moco7 = buildNumericFilterMatcher(filters.oco7);
-    var moco8 = buildNumericFilterMatcher(filters.oco8);
-    var mrq0 = buildNumericFilterMatcher(filters.r0);
-    var mrq1 = buildNumericFilterMatcher(filters.r1);
-    var mrq2 = buildNumericFilterMatcher(filters.r2);
-    var mrq3 = buildNumericFilterMatcher(filters.r3);
-    var mrq4 = buildNumericFilterMatcher(filters.r4);
-    var mrq5 = buildNumericFilterMatcher(filters.r5);
-    var mrq6 = buildNumericFilterMatcher(filters.r6);
-    var mrq7 = buildNumericFilterMatcher(filters.r7);
-    var mrq8 = buildNumericFilterMatcher(filters.r8);
-    var mk0 = buildNumericFilterMatcher(filters.k0);
-    var mk1 = buildNumericFilterMatcher(filters.k1);
-    var mk2 = buildNumericFilterMatcher(filters.k2);
-    var mk3 = buildNumericFilterMatcher(filters.k3);
-    var mk4 = buildNumericFilterMatcher(filters.k4);
-    var mk5 = buildNumericFilterMatcher(filters.k5);
-    var mk6 = buildNumericFilterMatcher(filters.k6);
-    var mk7 = buildNumericFilterMatcher(filters.k7);
-    var mk8 = buildNumericFilterMatcher(filters.k8);
-    var mkchg = buildNumericFilterMatcher(filters.kchg);
-    var mkRevPct = buildNumericFilterMatcher(filters.k_revenue_pct);
-    var mk_high = buildNumericFilterMatcher(filters.k_high);
-    var mf0 = buildNumericFilterMatcher(filters.f0);
-    var mf1 = buildNumericFilterMatcher(filters.f1);
-    var mf2 = buildNumericFilterMatcher(filters.f2);
-    var mf3 = buildNumericFilterMatcher(filters.f3);
-    var mf4 = buildNumericFilterMatcher(filters.f4);
-    var mf5 = buildNumericFilterMatcher(filters.f5);
-    var mf6 = buildNumericFilterMatcher(filters.f6);
-    var mf7 = buildNumericFilterMatcher(filters.f7);
-    var mf8 = buildNumericFilterMatcher(filters.f8);
-    var mhn0 = buildNumericFilterMatcher(filters.hn0);
-    var mhn1 = buildNumericFilterMatcher(filters.hn1);
-    var mhn2 = buildNumericFilterMatcher(filters.hn2);
-    var mhn3 = buildNumericFilterMatcher(filters.hn3);
-    var mhn4 = buildNumericFilterMatcher(filters.hn4);
-    var mhn5 = buildNumericFilterMatcher(filters.hn5);
-    var mhn6 = buildNumericFilterMatcher(filters.hn6);
-    var mhn7 = buildNumericFilterMatcher(filters.hn7);
-    var mhn8 = buildNumericFilterMatcher(filters.hn8);
-    var mhnchg = buildNumericFilterMatcher(filters.hnchg);
-    var mhnQoq = buildNumericFilterMatcher(filters.hn_qoq);
-    var mhnLow = buildNumericFilterMatcher(filters.hn_low);
-    var mfchg = buildNumericFilterMatcher(filters.fchg);
-    var mu0 = buildNumericFilterMatcher(filters.u0);
-    var mu1 = buildNumericFilterMatcher(filters.u1);
-    var mu2 = buildNumericFilterMatcher(filters.u2);
-    var mu3 = buildNumericFilterMatcher(filters.u3);
-    var mu4 = buildNumericFilterMatcher(filters.u4);
-    var mu5 = buildNumericFilterMatcher(filters.u5);
-    var mu6 = buildNumericFilterMatcher(filters.u6);
-    var mu7 = buildNumericFilterMatcher(filters.u7);
-    var mu8 = buildNumericFilterMatcher(filters.u8);
-    var mv0 = buildNumericFilterMatcher(filters.v0);
-    var mv1 = buildNumericFilterMatcher(filters.v1);
-    var mv2 = buildNumericFilterMatcher(filters.v2);
-    var mv3 = buildNumericFilterMatcher(filters.v3);
-    var mv4 = buildNumericFilterMatcher(filters.v4);
-    var mv5 = buildNumericFilterMatcher(filters.v5);
-    var mv6 = buildNumericFilterMatcher(filters.v6);
-    var mv7 = buildNumericFilterMatcher(filters.v7);
-    var mv8 = buildNumericFilterMatcher(filters.v8);
-    var mmHigh = buildNumericFilterMatcher(filters.m_high);
-    var mmQoq = buildNumericFilterMatcher(filters.m_qoq);
-    var mnHigh = buildNumericFilterMatcher(filters.n_high);
-    var mnQoq = buildNumericFilterMatcher(filters.n_qoq);
-    var mtHigh = buildNumericFilterMatcher(filters.t_high);
-    var mtQoq = buildNumericFilterMatcher(filters.t_qoq);
-    var mm0 = buildNumericFilterMatcher(filters.m0);
-    var mm1 = buildNumericFilterMatcher(filters.m1);
-    var mm2 = buildNumericFilterMatcher(filters.m2);
-    var mm3 = buildNumericFilterMatcher(filters.m3);
-    var mm4 = buildNumericFilterMatcher(filters.m4);
-    var mm5 = buildNumericFilterMatcher(filters.m5);
-    var mm6 = buildNumericFilterMatcher(filters.m6);
-    var mm7 = buildNumericFilterMatcher(filters.m7);
-    var mm8 = buildNumericFilterMatcher(filters.m8);
-    var mn0 = buildNumericFilterMatcher(filters.n0);
-    var mn1 = buildNumericFilterMatcher(filters.n1);
-    var mn2 = buildNumericFilterMatcher(filters.n2);
-    var mn3 = buildNumericFilterMatcher(filters.n3);
-    var mn4 = buildNumericFilterMatcher(filters.n4);
-    var mn5 = buildNumericFilterMatcher(filters.n5);
-    var mn6 = buildNumericFilterMatcher(filters.n6);
-    var mn7 = buildNumericFilterMatcher(filters.n7);
-    var mn8 = buildNumericFilterMatcher(filters.n8);
-    var mt0 = buildNumericFilterMatcher(filters.t0);
-    var mt1 = buildNumericFilterMatcher(filters.t1);
-    var mt2 = buildNumericFilterMatcher(filters.t2);
-    var mt3 = buildNumericFilterMatcher(filters.t3);
-    var mt4 = buildNumericFilterMatcher(filters.t4);
-    var mt5 = buildNumericFilterMatcher(filters.t5);
-    var mt6 = buildNumericFilterMatcher(filters.t6);
-    var mt7 = buildNumericFilterMatcher(filters.t7);
-    var mt8 = buildNumericFilterMatcher(filters.t8);
-    var minv0 = buildNumericFilterMatcher(filters.inv0);
-    var minv1 = buildNumericFilterMatcher(filters.inv1);
-    var minv2 = buildNumericFilterMatcher(filters.inv2);
-    var minv3 = buildNumericFilterMatcher(filters.inv3);
-    var minv4 = buildNumericFilterMatcher(filters.inv4);
-    var minv5 = buildNumericFilterMatcher(filters.inv5);
-    var minv6 = buildNumericFilterMatcher(filters.inv6);
-    var minv7 = buildNumericFilterMatcher(filters.inv7);
-    var minv8 = buildNumericFilterMatcher(filters.inv8);
-    var minvchg = buildNumericFilterMatcher(filters.invchg);
-    var minvRevPct = buildNumericFilterMatcher(filters.inv_revenue_pct);
-    var minv_high = buildNumericFilterMatcher(filters.inv_high);
+    var mb = getFinaMetricFilterMatcherBundle(panelKey, filters);
+    var codeOrKws = mb.codeOrKws;
+    var nameKw = mb.nameKw;
+    var swOrKws = mb.swOrKws;
+    var ma0 = mb.ma0;
+    var listDateKw = mb.listDateKw;
+    var firstHisBreakDateKw = mb.firstHisBreakDateKw;
+    var first850BreakDateKw = mb.first850BreakDateKw;
+    var provinceKw = mb.provinceKw;
+    var cityKw = mb.cityKw;
+    var actEntKw = mb.actEntKw;
+    var mHoldersTop3 = mb.mHoldersTop3;
+    var mFreeFloatRatio = mb.mFreeFloatRatio;
+    var mTotalMv = mb.mTotalMv;
+    var mFreeMv = mb.mFreeMv;
+    var mMoneyCapRatio = mb.mMoneyCapRatio;
+    var mFqmDebtToAssets = mb.mFqmDebtToAssets;
+    var mFqmInterestdebtRatio = mb.mFqmInterestdebtRatio;
+    var mLastHisHigh = mb.mLastHisHigh;
+    var mLastHisPeakAge = mb.mLastHisPeakAge;
+    var mLast850High = mb.mLast850High;
+    var mLast850PeakAge = mb.mLast850PeakAge;
+    var mCurPrice = mb.mCurPrice;
+    var mPctSinceAnn = mb.mPctSinceAnn;
+    var mPctVsHHigh = mb.mPctVsHHigh;
+    var mPctVsHigh850 = mb.mPctVsHigh850;
+    var mPctVsHigh250 = mb.mPctVsHigh250;
+    var mMultVsHLow = mb.mMultVsHLow;
+    var mPctVsLow850 = mb.mPctVsLow850;
+    var mPctVsLow250 = mb.mPctVsLow250;
+    var mFirstHisBreakFreeMv = mb.mFirstHisBreakFreeMv;
+    var mFirstHisPriorMaxTb5 = mb.mFirstHisPriorMaxTb5;
+    var mFirstHisVolRatio20 = mb.mFirstHisVolRatio20;
+    var mFirstHisPeakAge = mb.mFirstHisPeakAge;
+    var mFirstHisPriorMaxQfq = mb.mFirstHisPriorMaxQfq;
+    var mFirstHisGapToPeak = mb.mFirstHisGapToPeak;
+    var mFirstHisBreakPct = mb.mFirstHisBreakPct;
+    var mFirstHisUpperShadow = mb.mFirstHisUpperShadow;
+    var mFirstHisPctChg = mb.mFirstHisPctChg;
+    var mFirstHisFfTn560 = mb.mFirstHisFfTn560;
+    var mFirstHisPre5Ret = mb.mFirstHisPre5Ret;
+    var mFirstHisPre120Ret = mb.mFirstHisPre120Ret;
+    var mFirstHisPre120Range = mb.mFirstHisPre120Range;
+    var mFirstHisMa120Bias = mb.mFirstHisMa120Bias;
+    var mFirstHisAvgAmt5 = mb.mFirstHisAvgAmt5;
+    var mFirstHisAvgAmt20 = mb.mFirstHisAvgAmt20;
+    var mFirstHisAvgAmt60 = mb.mFirstHisAvgAmt60;
+    var mFirstHisFfTn5 = mb.mFirstHisFfTn5;
+    var mFirstHisFfTn20 = mb.mFirstHisFfTn20;
+    var mFirstHisFfTn60 = mb.mFirstHisFfTn60;
+    var mFirstHisPre120Up7 = mb.mFirstHisPre120Up7;
+    var mFirstHisPre120Dn7 = mb.mFirstHisPre120Dn7;
+    var mFirst850BreakFreeMv = mb.mFirst850BreakFreeMv;
+    var mFirst850PriorMaxTb5 = mb.mFirst850PriorMaxTb5;
+    var mFirst850VolRatio20 = mb.mFirst850VolRatio20;
+    var mFirst850PeakAge = mb.mFirst850PeakAge;
+    var mFirst850PriorMaxQfq = mb.mFirst850PriorMaxQfq;
+    var mFirst850GapToPeak = mb.mFirst850GapToPeak;
+    var mFirst850BreakPct = mb.mFirst850BreakPct;
+    var mFirst850UpperShadow = mb.mFirst850UpperShadow;
+    var mFirst850PctChg = mb.mFirst850PctChg;
+    var mFirst850FfTn560 = mb.mFirst850FfTn560;
+    var mFirst850Pre5Ret = mb.mFirst850Pre5Ret;
+    var mFirst850Pre120Ret = mb.mFirst850Pre120Ret;
+    var mFirst850Pre120Range = mb.mFirst850Pre120Range;
+    var mFirst850Ma120Bias = mb.mFirst850Ma120Bias;
+    var mFirst850AvgAmt5 = mb.mFirst850AvgAmt5;
+    var mFirst850AvgAmt20 = mb.mFirst850AvgAmt20;
+    var mFirst850AvgAmt60 = mb.mFirst850AvgAmt60;
+    var mFirst850FfTn5 = mb.mFirst850FfTn5;
+    var mFirst850FfTn20 = mb.mFirst850FfTn20;
+    var mFirst850FfTn60 = mb.mFirst850FfTn60;
+    var mFirst850Pre120Up7 = mb.mFirst850Pre120Up7;
+    var mFirst850Pre120Dn7 = mb.mFirst850Pre120Dn7;
+    var mttmYi = mb.mttmYi;
+    var mPe = mb.mPe;
+    var mar_pct = mb.mar_pct;
+    var mr0 = mb.mr0;
+    var mr1 = mb.mr1;
+    var mr2 = mb.mr2;
+    var mr3 = mb.mr3;
+    var m0 = mb.m0;
+    var m1 = mb.m1;
+    var m2 = mb.m2;
+    var m3 = mb.m3;
+    var mg0 = mb.mg0;
+    var mg1 = mb.mg1;
+    var mg2 = mb.mg2;
+    var mg3 = mb.mg3;
+    var mc0 = mb.mc0;
+    var mc1 = mb.mc1;
+    var mc2 = mb.mc2;
+    var mc3 = mb.mc3;
+    var mo0 = mb.mo0;
+    var mo1 = mb.mo1;
+    var mo2 = mb.mo2;
+    var mo3 = mb.mo3;
+    var ms_high = mb.ms_high;
+    var ms0 = mb.ms0;
+    var ms1 = mb.ms1;
+    var ms2 = mb.ms2;
+    var ms3 = mb.ms3;
+    var ms4 = mb.ms4;
+    var ms5 = mb.ms5;
+    var ms6 = mb.ms6;
+    var ms7 = mb.ms7;
+    var ms8 = mb.ms8;
+    var mcf_high = mb.mcf_high;
+    var mcf0 = mb.mcf0;
+    var mcf1 = mb.mcf1;
+    var mcf2 = mb.mcf2;
+    var mcf3 = mb.mcf3;
+    var mcf4 = mb.mcf4;
+    var mcf5 = mb.mcf5;
+    var mcf6 = mb.mcf6;
+    var mcf7 = mb.mcf7;
+    var mcf8 = mb.mcf8;
+    var moi_high = mb.moi_high;
+    var moi0 = mb.moi0;
+    var moi1 = mb.moi1;
+    var moi2 = mb.moi2;
+    var moi3 = mb.moi3;
+    var moi4 = mb.moi4;
+    var moi5 = mb.moi5;
+    var moi6 = mb.moi6;
+    var moi7 = mb.moi7;
+    var moi8 = mb.moi8;
+    var mdtp_high = mb.mdtp_high;
+    var mocs_high = mb.mocs_high;
+    var mocs_wqcv = mb.mocs_wqcv;
+    var mdtp0 = mb.mdtp0;
+    var mdtp1 = mb.mdtp1;
+    var mdtp2 = mb.mdtp2;
+    var mdtp3 = mb.mdtp3;
+    var mdtp4 = mb.mdtp4;
+    var mdtp5 = mb.mdtp5;
+    var mdtp6 = mb.mdtp6;
+    var mdtp7 = mb.mdtp7;
+    var mdtp8 = mb.mdtp8;
+    var mfst_high = mb.mfst_high;
+    var mfst0 = mb.mfst0;
+    var mfst1 = mb.mfst1;
+    var mfst2 = mb.mfst2;
+    var mfst3 = mb.mfst3;
+    var mfst4 = mb.mfst4;
+    var mfst5 = mb.mfst5;
+    var mfst6 = mb.mfst6;
+    var mfst7 = mb.mfst7;
+    var mfst8 = mb.mfst8;
+    var mocs0 = mb.mocs0;
+    var mocs1 = mb.mocs1;
+    var mocs2 = mb.mocs2;
+    var mocs3 = mb.mocs3;
+    var mocs4 = mb.mocs4;
+    var mocs5 = mb.mocs5;
+    var mocs6 = mb.mocs6;
+    var mocs7 = mb.mocs7;
+    var mocs8 = mb.mocs8;
+    var moco0 = mb.moco0;
+    var moco1 = mb.moco1;
+    var moco2 = mb.moco2;
+    var moco3 = mb.moco3;
+    var moco4 = mb.moco4;
+    var moco5 = mb.moco5;
+    var moco6 = mb.moco6;
+    var moco7 = mb.moco7;
+    var moco8 = mb.moco8;
+    var mrq0 = mb.mrq0;
+    var mrq1 = mb.mrq1;
+    var mrq2 = mb.mrq2;
+    var mrq3 = mb.mrq3;
+    var mrq4 = mb.mrq4;
+    var mrq5 = mb.mrq5;
+    var mrq6 = mb.mrq6;
+    var mrq7 = mb.mrq7;
+    var mrq8 = mb.mrq8;
+    var mk0 = mb.mk0;
+    var mk1 = mb.mk1;
+    var mk2 = mb.mk2;
+    var mk3 = mb.mk3;
+    var mk4 = mb.mk4;
+    var mk5 = mb.mk5;
+    var mk6 = mb.mk6;
+    var mk7 = mb.mk7;
+    var mk8 = mb.mk8;
+    var mkchg = mb.mkchg;
+    var mkRevPct = mb.mkRevPct;
+    var mk_high = mb.mk_high;
+    var mf0 = mb.mf0;
+    var mf1 = mb.mf1;
+    var mf2 = mb.mf2;
+    var mf3 = mb.mf3;
+    var mf4 = mb.mf4;
+    var mf5 = mb.mf5;
+    var mf6 = mb.mf6;
+    var mf7 = mb.mf7;
+    var mf8 = mb.mf8;
+    var mhn0 = mb.mhn0;
+    var mhn1 = mb.mhn1;
+    var mhn2 = mb.mhn2;
+    var mhn3 = mb.mhn3;
+    var mhn4 = mb.mhn4;
+    var mhn5 = mb.mhn5;
+    var mhn6 = mb.mhn6;
+    var mhn7 = mb.mhn7;
+    var mhn8 = mb.mhn8;
+    var mhnchg = mb.mhnchg;
+    var mhnQoq = mb.mhnQoq;
+    var mhnLow = mb.mhnLow;
+    var mfchg = mb.mfchg;
+    var mu0 = mb.mu0;
+    var mu1 = mb.mu1;
+    var mu2 = mb.mu2;
+    var mu3 = mb.mu3;
+    var mu4 = mb.mu4;
+    var mu5 = mb.mu5;
+    var mu6 = mb.mu6;
+    var mu7 = mb.mu7;
+    var mu8 = mb.mu8;
+    var mv0 = mb.mv0;
+    var mv1 = mb.mv1;
+    var mv2 = mb.mv2;
+    var mv3 = mb.mv3;
+    var mv4 = mb.mv4;
+    var mv5 = mb.mv5;
+    var mv6 = mb.mv6;
+    var mv7 = mb.mv7;
+    var mv8 = mb.mv8;
+    var mmHigh = mb.mmHigh;
+    var mmQoq = mb.mmQoq;
+    var mnHigh = mb.mnHigh;
+    var mnQoq = mb.mnQoq;
+    var mtHigh = mb.mtHigh;
+    var mtQoq = mb.mtQoq;
+    var mm0 = mb.mm0;
+    var mm1 = mb.mm1;
+    var mm2 = mb.mm2;
+    var mm3 = mb.mm3;
+    var mm4 = mb.mm4;
+    var mm5 = mb.mm5;
+    var mm6 = mb.mm6;
+    var mm7 = mb.mm7;
+    var mm8 = mb.mm8;
+    var mn0 = mb.mn0;
+    var mn1 = mb.mn1;
+    var mn2 = mb.mn2;
+    var mn3 = mb.mn3;
+    var mn4 = mb.mn4;
+    var mn5 = mb.mn5;
+    var mn6 = mb.mn6;
+    var mn7 = mb.mn7;
+    var mn8 = mb.mn8;
+    var mt0 = mb.mt0;
+    var mt1 = mb.mt1;
+    var mt2 = mb.mt2;
+    var mt3 = mb.mt3;
+    var mt4 = mb.mt4;
+    var mt5 = mb.mt5;
+    var mt6 = mb.mt6;
+    var mt7 = mb.mt7;
+    var mt8 = mb.mt8;
+    var minv0 = mb.minv0;
+    var minv1 = mb.minv1;
+    var minv2 = mb.minv2;
+    var minv3 = mb.minv3;
+    var minv4 = mb.minv4;
+    var minv5 = mb.minv5;
+    var minv6 = mb.minv6;
+    var minv7 = mb.minv7;
+    var minv8 = mb.minv8;
+    var minvchg = mb.minvchg;
+    var minvRevPct = mb.minvRevPct;
+    var minv_high = mb.minv_high;
 
     var rows = Array.isArray(st.rows) ? st.rows : [];
     var filtered = rows.filter(function (row) {
@@ -6167,6 +7405,66 @@ function renderFinaMetricTable(panelKey) {
         if (mMoneyCapRatio && !mMoneyCapRatio(row.money_cap_ratio_pct)) return false;
         if (mFqmDebtToAssets && !mFqmDebtToAssets(row.fqm_debt_to_assets)) return false;
         if (mFqmInterestdebtRatio && !mFqmInterestdebtRatio(row.fqm_interestdebt_ratio)) return false;
+        if (mLastHisHigh && !mLastHisHigh(row.last_his_high)) return false;
+        if (mLastHisPeakAge && !mLastHisPeakAge(row.last_his_peak_age_days)) return false;
+        if (mLast850High && !mLast850High(row.last_850_high)) return false;
+        if (mLast850PeakAge && !mLast850PeakAge(row.last_850_peak_age_days)) return false;
+        if (mCurPrice && !mCurPrice(row.cur_price)) return false;
+        if (mPctSinceAnn && !mPctSinceAnn(row.pct_since_ann)) return false;
+        if (mPctVsHHigh && !mPctVsHHigh(row.pct_vs_h_high)) return false;
+        if (mPctVsHigh850 && !mPctVsHigh850(row.pct_vs_high_850)) return false;
+        if (mPctVsHigh250 && !mPctVsHigh250(row.pct_vs_high_250)) return false;
+        if (mMultVsHLow && !mMultVsHLow(row.mult_vs_h_low)) return false;
+        if (mPctVsLow850 && !mPctVsLow850(row.pct_vs_low_850)) return false;
+        if (mPctVsLow250 && !mPctVsLow250(row.pct_vs_low_250)) return false;
+        var firstHisBreakDate = String(row.first_his_break_date || '');
+        if (firstHisBreakDateKw && !finaArturnDateTextMatch(firstHisBreakDate, firstHisBreakDateKw)) return false;
+        if (mFirstHisBreakFreeMv && !mFirstHisBreakFreeMv(row.first_his_break_free_mv_yi)) return false;
+        if (mFirstHisPriorMaxTb5 && !mFirstHisPriorMaxTb5(row.first_his_prior_max_throwback_5d)) return false;
+        if (mFirstHisPeakAge && !mFirstHisPeakAge(row.first_his_peak_age_days)) return false;
+        if (mFirstHisPriorMaxQfq && !mFirstHisPriorMaxQfq(row.first_his_prior_max_qfq)) return false;
+        if (mFirstHisGapToPeak && !mFirstHisGapToPeak(row.first_his_gap_to_peak_pct)) return false;
+        if (mFirstHisBreakPct && !mFirstHisBreakPct(row.first_his_break_pct)) return false;
+        if (mFirstHisUpperShadow && !mFirstHisUpperShadow(row.first_his_upper_shadow_pct)) return false;
+        if (mFirstHisPctChg && !mFirstHisPctChg(row.first_his_pct_chg)) return false;
+        if (mFirstHisVolRatio20 && !mFirstHisVolRatio20(row.first_his_vol_ratio20)) return false;
+        if (mFirstHisFfTn560 && !mFirstHisFfTn560(row.first_his_ff_tn5_60_ratio)) return false;
+        if (mFirstHisPre5Ret && !mFirstHisPre5Ret(row.first_his_pre5_ret_pct)) return false;
+        if (mFirstHisPre120Ret && !mFirstHisPre120Ret(row.first_his_pre120_ret_pct)) return false;
+        if (mFirstHisPre120Range && !mFirstHisPre120Range(row.first_his_pre120_range_pct)) return false;
+        if (mFirstHisMa120Bias && !mFirstHisMa120Bias(row.first_his_ma120_bias_pct)) return false;
+        if (mFirstHisAvgAmt5 && !mFirstHisAvgAmt5(row.first_his_avg_amt_5_yi)) return false;
+        if (mFirstHisAvgAmt20 && !mFirstHisAvgAmt20(row.first_his_avg_amt_20_yi)) return false;
+        if (mFirstHisAvgAmt60 && !mFirstHisAvgAmt60(row.first_his_avg_amt_60_yi)) return false;
+        if (mFirstHisFfTn5 && !mFirstHisFfTn5(row.first_his_ff_tn5_pct)) return false;
+        if (mFirstHisFfTn20 && !mFirstHisFfTn20(row.first_his_ff_tn20_pct)) return false;
+        if (mFirstHisFfTn60 && !mFirstHisFfTn60(row.first_his_ff_tn60_pct)) return false;
+        if (mFirstHisPre120Up7 && !mFirstHisPre120Up7(row.first_his_pre120_up7_cnt)) return false;
+        if (mFirstHisPre120Dn7 && !mFirstHisPre120Dn7(row.first_his_pre120_dn7_cnt)) return false;
+        var first850BreakDate = String(row.first_850_break_date || '');
+        if (first850BreakDateKw && !finaArturnDateTextMatch(first850BreakDate, first850BreakDateKw)) return false;
+        if (mFirst850BreakFreeMv && !mFirst850BreakFreeMv(row.first_850_break_free_mv_yi)) return false;
+        if (mFirst850PriorMaxTb5 && !mFirst850PriorMaxTb5(row.first_850_prior_max_throwback_5d)) return false;
+        if (mFirst850PeakAge && !mFirst850PeakAge(row.first_850_peak_age_days)) return false;
+        if (mFirst850PriorMaxQfq && !mFirst850PriorMaxQfq(row.first_850_prior_max_qfq)) return false;
+        if (mFirst850GapToPeak && !mFirst850GapToPeak(row.first_850_gap_to_peak_pct)) return false;
+        if (mFirst850BreakPct && !mFirst850BreakPct(row.first_850_break_pct)) return false;
+        if (mFirst850UpperShadow && !mFirst850UpperShadow(row.first_850_upper_shadow_pct)) return false;
+        if (mFirst850PctChg && !mFirst850PctChg(row.first_850_pct_chg)) return false;
+        if (mFirst850VolRatio20 && !mFirst850VolRatio20(row.first_850_vol_ratio20)) return false;
+        if (mFirst850FfTn560 && !mFirst850FfTn560(row.first_850_ff_tn5_60_ratio)) return false;
+        if (mFirst850Pre5Ret && !mFirst850Pre5Ret(row.first_850_pre5_ret_pct)) return false;
+        if (mFirst850Pre120Ret && !mFirst850Pre120Ret(row.first_850_pre120_ret_pct)) return false;
+        if (mFirst850Pre120Range && !mFirst850Pre120Range(row.first_850_pre120_range_pct)) return false;
+        if (mFirst850Ma120Bias && !mFirst850Ma120Bias(row.first_850_ma120_bias_pct)) return false;
+        if (mFirst850AvgAmt5 && !mFirst850AvgAmt5(row.first_850_avg_amt_5_yi)) return false;
+        if (mFirst850AvgAmt20 && !mFirst850AvgAmt20(row.first_850_avg_amt_20_yi)) return false;
+        if (mFirst850AvgAmt60 && !mFirst850AvgAmt60(row.first_850_avg_amt_60_yi)) return false;
+        if (mFirst850FfTn5 && !mFirst850FfTn5(row.first_850_ff_tn5_pct)) return false;
+        if (mFirst850FfTn20 && !mFirst850FfTn20(row.first_850_ff_tn20_pct)) return false;
+        if (mFirst850FfTn60 && !mFirst850FfTn60(row.first_850_ff_tn60_pct)) return false;
+        if (mFirst850Pre120Up7 && !mFirst850Pre120Up7(row.first_850_pre120_up7_cnt)) return false;
+        if (mFirst850Pre120Dn7 && !mFirst850Pre120Dn7(row.first_850_pre120_dn7_cnt)) return false;
         if (mttmYi && !mttmYi(row.ttm_revenue_yi)) return false;
         if (mPe && !mPe(row.pe_ttm)) return false;
         if (mar_pct && !mar_pct(row.ar_pct)) return false;
@@ -6388,22 +7686,29 @@ function renderFinaMetricTable(panelKey) {
         st._renderToken = (st._renderToken || 0) + 1;
         var _ftb = document.getElementById('fina-arturn-frozen-tbody');
         if (_ftb) _ftb.innerHTML = '<tr><td colspan="6" class="median-table-cat">无匹配数据</td></tr>';
-        tbody.innerHTML = '<tr><td colspan="208" class="median-table-cat">无匹配数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="266" class="median-table-cat">无匹配数据</td></tr>';
         /* 占位已写入 tbody，trMap 已失效；下次非空时必须走全量重建 */
         st._domBuiltRowsVersion = -1;
         st._frozenTrMap = null;
         st._scrollTrMap = null;
+        st._filteredView = null;
+        updateFinaRenderProgress('done');
     } else {
-        /* 终极方案：DOM 一次建好、永不销毁
-           - 首次按 st.rows 原始顺序全量 build（data-row-index=原始索引）
-           - 筛选：只切换 display + DocumentFragment 重排，不销毁任何节点
-           - 排序：同样是节点重排（appendChild = move）
-           fetch 新数据时 _rowsVersion++ → 触发下次全量重建 */
+        /* 虚拟滚动：仅渲染视口附近 filtered 行，避免 5400×266 全量 DOM */
         var buildRowHtml = function (row, origIdx, zebraPos) {
             var trClass = (zebraPos % 2 === 1) ? ' median-table-zebra' : '';
+            var rowTs = String(row.ts_code || '').trim();
+            if (finaArturnIsInterestMarked(rowTs)) trClass += ' fina-arturn-row-marked';
             var swRaw = row.sw_name != null ? String(row.sw_name) : '';
             var swTitle = swRaw ? ' title="' + escapeHtmlAttr(swRaw) + '"' : '';
-            var trOpen = '<tr class="median-table-row' + trClass + '" data-row-index="' + origIdx + '">';
+            var trOpen =
+                '<tr class="median-table-row' +
+                trClass +
+                '" data-row-index="' +
+                origIdx +
+                '" data-ts-code="' +
+                escapeHtmlAttr(rowTs) +
+                '">';
             var cpsFloat = Array.isArray(st.contractPeriods) ? st.contractPeriods : [];
             var rawFloatEnd = cpsFloat.length ? cpsFloat[0] : '';
             var floatHnEnd = '';
@@ -6425,7 +7730,11 @@ function renderFinaMetricTable(panelKey) {
                     : formatFinaArturnValue(row.hn0, 0);
             /* 冻结面板：前 6 列（股票代码/名称/申万/总市值/自由市值/公告日） */
             var fHtml = trOpen +
-                '<td class="median-table-cat">' + escapeHtmlAttr(row.ts_code || '--') + '</td>' +
+                '<td class="median-table-cat"><span class="fina-arturn-ts-mark-toggle" role="button" tabindex="0" data-ts-code="' +
+                escapeHtmlAttr(rowTs || '') +
+                '" title="点击标记/取消感兴趣（服务端长期保存，清浏览器/换浏览器仍保留）">' +
+                escapeHtmlAttr(rowTs || '--') +
+                '</span></td>' +
                 '<td class="median-table-cat"><span class="fina-fixed-assets-clickable" data-fixed-assets-ts-code="' + escapeHtmlAttr(row.ts_code || '') + '" data-fixed-assets-sec-name="' + escapeHtmlAttr(row.sec_name || '') + '" title="查看固定资产、在建工程与营收（最多25季）">' + escapeHtmlAttr(row.sec_name || '--') + '</span></td>' +
                 '<td class="median-table-cat fina-arturn-sw-cell"' + swTitle + '>' + escapeHtmlAttr(swRaw || '--') + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.total_mv_yi, 1) + '</td>' +
@@ -6507,6 +7816,21 @@ function renderFinaMetricTable(panelKey) {
                 '<td class="median-table-num">' + formatFinaArturnValue(row.money_cap_ratio_pct, 1) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.fqm_debt_to_assets, 2) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.fqm_interestdebt_ratio, 2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.last_his_high, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.last_his_peak_age_days, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.last_850_high, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.last_850_peak_age_days, 0) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.cur_price, 2) + '</td>' +
+                '<td class="median-table-num' + finaArturnRiseFallClass(row.pct_since_ann) + '">' +
+                formatFinaArturnValue(row.pct_since_ann, 2) + '</td>' +
+                finaPriceGapCellHtml(row.pct_vs_h_high) +
+                finaPriceGapCellHtml(row.pct_vs_high_850) +
+                finaPriceGapCellHtml(row.pct_vs_high_250) +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.mult_vs_h_low, 1) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.pct_vs_low_850, 2) + '</td>' +
+                '<td class="median-table-num">' + formatFinaArturnValue(row.pct_vs_low_250, 2) + '</td>' +
+                buildFinaQfqBreakFirstCellsHtml(row, 'first_his') +
+                buildFinaQfqBreakFirstCellsHtml(row, 'first_850') +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.ttm_revenue_yi, 1) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.pe_ttm, 1) + '</td>' +
                 '<td class="median-table-num">' + formatFinaArturnValue(row.ar_pct, 1) + '</td>' +
@@ -6713,137 +8037,13 @@ function renderFinaMetricTable(panelKey) {
             cancelAnimationFrame(st._renderChunkRaf);
             st._renderChunkRaf = 0;
         }
-        var renderToken = (st._renderToken || 0) + 1;
-        st._renderToken = renderToken;
-        var frozenTbody = document.getElementById('fina-arturn-frozen-tbody');
-        var totalAll = rows.length;
-        /* 判断是否需要全量重建 DOM：
-           - rows 已更新（_rowsVersion 不等于 _domBuiltRowsVersion）
-           - trMap 缺失
-           - tbody 容器状态异常（被"无匹配"占位替换过 / 初次加载） */
-        var hasPlaceholder = false;
-        var firstScrollTr = tbody.firstElementChild;
-        if (firstScrollTr && firstScrollTr.querySelector &&
-            firstScrollTr.querySelector('td[colspan]')) {
-            hasPlaceholder = true;
-        }
-        var needRebuild = (st._domBuiltRowsVersion !== st._rowsVersion) ||
-            !st._frozenTrMap || !st._scrollTrMap ||
-            !frozenTbody || frozenTbody.children.length === 0 ||
-            !firstScrollTr || hasPlaceholder;
-
-        /* 快路径：DOM 已就绪时，仅 display 切换 + DocumentFragment 重排，不创建/销毁任何节点 */
-        var applyFinaMetricFilterSort = function () {
-            if (st._renderToken !== renderToken) return;
-            var fMap = st._frozenTrMap;
-            var sMap = st._scrollTrMap;
-            if (!fMap || !sMap) return;
-            var fTb = document.getElementById('fina-arturn-frozen-tbody');
-            var sTb = document.getElementById(cfg.ids.tbody);
-            if (!fTb || !sTb) return;
-            var visible = Object.create(null);
-            var fFrag = document.createDocumentFragment();
-            var sFrag = document.createDocumentFragment();
-            for (var vi = 0; vi < filtered.length; vi++) {
-                var rv = filtered[vi];
-                var idx = rv && rv._origIdx;
-                if (idx == null) continue;
-                visible[idx] = 1;
-                var ftr = fMap[idx];
-                var str = sMap[idx];
-                var zebra = (vi % 2 === 1);
-                if (ftr) {
-                    if (ftr.style.display) ftr.style.display = '';
-                    ftr.classList.toggle('median-table-zebra', zebra);
-                    fFrag.appendChild(ftr);
-                }
-                if (str) {
-                    if (str.style.display) str.style.display = '';
-                    str.classList.toggle('median-table-zebra', zebra);
-                    sFrag.appendChild(str);
-                }
-            }
-            for (var hi = 0; hi < totalAll; hi++) {
-                if (visible[hi]) continue;
-                var fh = fMap[hi];
-                var sh = sMap[hi];
-                if (fh) {
-                    if (fh.style.display !== 'none') fh.style.display = 'none';
-                    fFrag.appendChild(fh);
-                }
-                if (sh) {
-                    if (sh.style.display !== 'none') sh.style.display = 'none';
-                    sFrag.appendChild(sh);
-                }
-            }
-            fTb.appendChild(fFrag);
-            sTb.appendChild(sFrag);
-        };
-
-        if (needRebuild) {
-            /* 全量重建：按 st.rows 原始顺序分块渲染（不做筛选/排序），
-               完成后一次性建立 tr Map，最后调用 applyFinaMetricFilterSort 应用当前筛选/排序 */
-            var CHUNK_FIRST = 60;
-            var CHUNK_NEXT = totalAll > 1000 ? 120 : 180;
-            var buildFinaRowsChunk = function (start, end) {
-                var fParts = new Array(end - start);
-                var sParts = new Array(end - start);
-                for (var bi = start; bi < end; bi++) {
-                    /* origIdx=bi（全量顺序），zebraPos=bi（重建后即刻被 apply 覆盖，临时值无视觉副作用） */
-                    var r = buildRowHtml(rows[bi], bi, bi);
-                    fParts[bi - start] = r.f;
-                    sParts[bi - start] = r.s;
-                }
-                return { f: fParts.join(''), s: sParts.join('') };
-            };
-            var firstEnd = Math.min(CHUNK_FIRST, totalAll);
-            var firstChunk = buildFinaRowsChunk(0, firstEnd);
-            if (frozenTbody) frozenTbody.innerHTML = firstChunk.f;
-            tbody.innerHTML = firstChunk.s;
-            var renderIdx = firstEnd;
-            var finalizeRebuild = function () {
-                if (st._renderToken !== renderToken) return;
-                var fMap = new Array(totalAll);
-                var sMap = new Array(totalAll);
-                if (frozenTbody) {
-                    var ftrs = frozenTbody.children;
-                    for (var fi = 0; fi < ftrs.length; fi++) {
-                        var origF = parseInt(ftrs[fi].getAttribute('data-row-index') || '-1', 10);
-                        if (origF >= 0) fMap[origF] = ftrs[fi];
-                    }
-                }
-                var strs = tbody.children;
-                for (var si = 0; si < strs.length; si++) {
-                    var origS = parseInt(strs[si].getAttribute('data-row-index') || '-1', 10);
-                    if (origS >= 0) sMap[origS] = strs[si];
-                }
-                st._frozenTrMap = fMap;
-                st._scrollTrMap = sMap;
-                st._domBuiltRowsVersion = st._rowsVersion;
-                st._renderChunkRaf = 0;
-                applyFinaMetricFilterSort();
-            };
-            var finaRenderStep = function () {
-                if (st._renderToken !== renderToken) return;
-                if (renderIdx >= totalAll) {
-                    finalizeRebuild();
-                    return;
-                }
-                var nextEnd = Math.min(renderIdx + CHUNK_NEXT, totalAll);
-                var chunk = buildFinaRowsChunk(renderIdx, nextEnd);
-                if (frozenTbody) frozenTbody.insertAdjacentHTML('beforeend', chunk.f);
-                tbody.insertAdjacentHTML('beforeend', chunk.s);
-                renderIdx = nextEnd;
-                st._renderChunkRaf = requestAnimationFrame(finaRenderStep);
-            };
-            if (renderIdx < totalAll) {
-                st._renderChunkRaf = requestAnimationFrame(finaRenderStep);
-            } else {
-                finalizeRebuild();
-            }
-        } else {
-            applyFinaMetricFilterSort();
-        }
+        var viewKey = buildFinaVirtualViewKey(st);
+        var viewChanged = viewKey !== st._virtualViewKey;
+        ensureFinaVirtualScrollListener();
+        renderFinaVirtualWindow(buildRowHtml, filtered, {
+            resetScroll: viewChanged || st._domBuiltRowsVersion !== st._rowsVersion,
+            measureRowHeight: viewChanged || !st._virtualRowHeight
+        });
     }
 
     /* 供 applyTsCodePoolWithReset 等回调区分「成分代码数」与「当前报告期宽表命中行数」 */
@@ -6857,11 +8057,9 @@ function renderFinaMetricTable(panelKey) {
     renderFinaMetricHeaderFilterButtons(panelKey);
     if (panelKey === 'arturn') {
         if (!skipTheadRebuild) {
+            scheduleSyncFinaArturnTheadStickyHeights();
             requestAnimationFrame(function () {
-                requestAnimationFrame(function () {
-                    syncFinaArturnTheadStickyHeights();
-                    syncFinaArturnColumnWidths();
-                });
+                syncFinaArturnColumnWidths();
             });
         }
         var faOv = document.getElementById('fina-fixed-assets-modal-overlay');
@@ -6880,11 +8078,23 @@ function fetchFinaMetricTable(panelKey, endDate) {
     if (!cfg) return Promise.resolve({ ok: false });
     var st = _finaMetricState();
     var msgEl = document.getElementById(cfg.ids.msg);
+    var prevAc = _finaMetricAbortByPanel[panelKey];
+    if (prevAc) {
+        try {
+            prevAc.abort();
+        } catch (ePrevAb) {
+            /* ignore */
+        }
+    }
+    var fetchSeq = (_finaMetricFetchSeqByPanel[panelKey] || 0) + 1;
+    _finaMetricFetchSeqByPanel[panelKey] = fetchSeq;
     if (msgEl) msgEl.textContent = '加载中...';
+    updateFinaRenderProgress('加载数据', 0, 1);
     var url = cfg.apiPath;
     if (endDate) url += '?end_date=' + encodeURIComponent(endDate);
     var fullUrl = rtMonitorApiUrl(url);
     var ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    _finaMetricAbortByPanel[panelKey] = ac;
     var to = null;
     if (ac && FINA_METRIC_TABLE_FETCH_TIMEOUT_MS > 0) {
         to = setTimeout(function () {
@@ -6897,6 +8107,9 @@ function fetchFinaMetricTable(panelKey, endDate) {
     }
     var fetchOpts = { cache: 'no-store' };
     if (ac) fetchOpts.signal = ac.signal;
+    function isCurrentFetch() {
+        return fetchSeq === _finaMetricFetchSeqByPanel[panelKey];
+    }
     return fetch(fullUrl, fetchOpts)
         .then(function (res) {
             if (!res.ok) {
@@ -6905,9 +8118,13 @@ function fetchFinaMetricTable(panelKey, endDate) {
             return res.json();
         })
         .then(function (data) {
+            if (!isCurrentFetch()) {
+                return { ok: false, stale: true };
+            }
             if (!data) {
                 throw new Error('加载失败');
             }
+            updateFinaRenderProgress('解析数据', 1, 1);
             st.endDates = Array.isArray(data.end_dates) ? data.end_dates : [];
             st.periods = Array.isArray(data.periods) ? data.periods : [];
             st.contractPeriods = Array.isArray(data.contract_periods) ? data.contract_periods : [];
@@ -6917,6 +8134,7 @@ function fetchFinaMetricTable(panelKey, endDate) {
             saveFinaMetricViewState(panelKey);
             if (data.error) {
                 st.rows = Array.isArray(data.rows) ? data.rows : [];
+                st._rowsDataVersion = '';
                 markFinaMetricRowsChanged(st);
                 renderFinaMetricTable(panelKey);
                 var updatedErr = document.getElementById(cfg.ids.headUpdated);
@@ -6925,33 +8143,62 @@ function fetchFinaMetricTable(panelKey, endDate) {
                 saveFinaMetricViewState(panelKey);
                 return { ok: false };
             }
+            var incomingVersion = String(data.data_version || '');
+            var sameVersion = incomingVersion && incomingVersion === String(st._rowsDataVersion || '');
+            if (sameVersion) {
+                if (msgEl) {
+                    msgEl.textContent = data.hint ? String(data.hint) : '';
+                }
+                var updatedSkip = document.getElementById(cfg.ids.headUpdated);
+                if (updatedSkip) updatedSkip.textContent = '更新：' + finaArturnFormatHeadDate(data.last_update);
+                saveFinaMetricViewState(panelKey);
+                return { ok: true, skippedDom: true };
+            }
             st.rows = Array.isArray(data.rows) ? data.rows : [];
+            st._rowsDataVersion = incomingVersion;
             markFinaMetricRowsChanged(st);
             renderFinaMetricTable(panelKey);
             var updatedEl = document.getElementById(cfg.ids.headUpdated);
             if (updatedEl) updatedEl.textContent = '更新：' + finaArturnFormatHeadDate(data.last_update);
+            if (msgEl && data.hint) {
+                msgEl.textContent = String(data.hint) + '；' + String(msgEl.textContent || '');
+            }
             saveFinaMetricViewState(panelKey);
             return { ok: true };
         })
         .catch(function (err) {
-            logError(cfg.logLabel + ' 请求失败', err);
-            st.rows = [];
-            markFinaMetricRowsChanged(st);
+            if (!isCurrentFetch()) {
+                return { ok: false, stale: true };
+            }
             var isAbort =
                 err &&
                 (err.name === 'AbortError' ||
                     (typeof err.message === 'string' && err.message.toLowerCase().indexOf('aborted') >= 0));
+            /* 被更新的切期请求取消：保留当前表，不显示失败 */
+            if (isAbort && _finaMetricFetchSeqByPanel[panelKey] !== fetchSeq) {
+                return { ok: false, stale: true };
+            }
+            logError(cfg.logLabel + ' 请求失败', err);
+            st.rows = [];
+            st._rowsDataVersion = '';
+            markFinaMetricRowsChanged(st);
             var errText = isAbort
                 ? '请求超时（' + String(FINA_METRIC_TABLE_FETCH_TIMEOUT_MS / 1000) + 's），请检查 MySQL/网络或稍后重试'
                 : String(err && err.message ? err.message : err);
             renderFinaMetricTable(panelKey);
             if (msgEl) msgEl.textContent = '加载失败：' + errText;
             saveFinaMetricViewState(panelKey);
+            updateFinaRenderProgress('done');
             return { ok: false };
         })
         .finally(function () {
             if (to !== null) clearTimeout(to);
-            hideFinaBootHint();
+            if (_finaMetricAbortByPanel[panelKey] === ac) {
+                _finaMetricAbortByPanel[panelKey] = null;
+            }
+            if (isCurrentFetch()) {
+                updateFinaRenderProgress('done');
+            }
         });
 }
 
@@ -7201,6 +8448,114 @@ function computeFinaMetricFilterKeyTitle(panelKey, filterKey) {
         title = '资产负债率（fina_quarter_metrics.debt_to_assets，与表头所选报告期 end_date 对齐）' + numHint;
     } else if (!title && filterKey === 'fqm_interestdebt_ratio') {
         title = '带息负债率（fina_quarter_metrics.interestdebt_ratio，与表头所选报告期 end_date 对齐）' + numHint;
+    } else if (!title && filterKey === 'first_his_break_date') {
+        title = '突破日（stk_qfq_close_break his/first，支持日期包含匹配）';
+    } else if (!title && filterKey === 'first_his_break_free_mv_yi') {
+        title = '自由市值（突破日 free_share×close_qfq÷10000，亿元，保留两位小数）' + numHint;
+    } else if (!title && filterKey === 'first_his_prior_max_throwback_5d') {
+        title = '5日回踩（T+1..T+5 最低价是否跌破 prior_max_qfq：1 是 0 否；不足 5 日按已有日）';
+    } else if (!title && filterKey === 'first_his_post5_ret_pct') {
+        title = 'T5涨跌（突破日后累计涨幅%，close[T+k]/close[T]-1，满5日定格；表内两位小数无%）' + numHint;
+    } else if (!title && filterKey === 'first_his_post10_ret_pct') {
+        title = 'T10涨跌（突破日后10日累计涨幅%，口径同 post5）' + numHint;
+    } else if (!title && filterKey === 'first_his_post20_ret_pct') {
+        title = 'T20涨跌（突破日后20日累计涨幅%，口径同 post5）' + numHint;
+    } else if (!title && filterKey === 'first_his_post60_ret_pct') {
+        title = 'T60涨跌（突破日后60日累计涨幅%，口径同 post5）' + numHint;
+    } else if (!title && filterKey === 'first_his_peak_age_days') {
+        title = '前高年龄（前高日至突破日间隔交易日数，不含两端，stk_qfq_close_break.peak_age_days）' + numHint;
+    } else if (!title && filterKey === 'first_his_prior_max_qfq') {
+        title = '前高价（被突破前高 prior_max_qfq，前复权，保留两位小数）' + numHint;
+    } else if (!title && filterKey === 'first_his_gap_to_peak_pct') {
+        title = '距前高%（突破日前一交易日收盘相对 prior_max_qfq：(prev_close/prior_max-1)×100；≥-2%淡红贴前高、≤-10%淡绿深跳空）' + numHint;
+    } else if (!title && filterKey === 'first_his_break_pct') {
+        title = '突破幅度（close÷前高-1×100%，stk_qfq_close_break.break_pct）' + numHint;
+    } else if (!title && filterKey === 'first_his_upper_shadow_pct') {
+        title = '上影线（high÷close-1×100%，stk_qfq_close_break.upper_shadow_pct）' + numHint;
+    } else if (!title && filterKey === 'first_his_pct_chg') {
+        title = '涨跌幅（突破日 stk_factor_pro.pct_chg，stk_qfq_close_break.pct_chg）' + numHint;
+    } else if (!title && filterKey === 'first_his_vol_ratio20') {
+        title = 'T/20量比（信号日成交量÷前20日均量，stk_qfq_close_break.vol_ratio20）' + numHint;
+    } else if (!title && filterKey === 'first_his_ff_tn5_60_ratio') {
+        title = '5/60换手比（前5日日均自由流通换手率÷前60日日均，保留2位小数）' + numHint;
+    } else if (!title && filterKey === 'first_his_pre5_ret_pct') {
+        title = '5日涨幅（突破日前5个交易日 T-5…T-1 累计，close[T-1]/close[T-6]-1，不含突破日）' + numHint;
+    } else if (!title && filterKey === 'first_his_pre120_ret_pct') {
+        title = '120日涨幅（突破日前120个交易日 T-120…T-1 累计，close[T-1]/close[T-121]-1，不含突破日）' + numHint;
+    } else if (!title && filterKey === 'first_his_pre120_range_pct') {
+        title = '120日振幅（突破日前120日 T-120…T-1 区间最高÷最低-1×100%，stk_qfq_close_break.pre120_range_pct）' + numHint;
+    } else if (!title && filterKey === 'first_his_ma120_bias_pct') {
+        title = 'MA120 BIAS（突破日收盘相对含突破日共120根MA120的乖离%，stk_qfq_close_break.ma120_bias_pct）' + numHint;
+    } else if (!title && filterKey === 'first_his_avg_amt_5_yi') {
+        title = '5日均额（突破日前5日日均成交额，亿元，不含突破日）' + numHint;
+    } else if (!title && filterKey === 'first_his_avg_amt_20_yi') {
+        title = '20日均额（突破日前20日日均成交额，亿元，不含突破日）' + numHint;
+    } else if (!title && filterKey === 'first_his_avg_amt_60_yi') {
+        title = '60日均额（突破日前60日日均成交额，亿元，不含突破日）' + numHint;
+    } else if (!title && filterKey === 'first_his_ff_tn5_pct') {
+        title = '5日换手率（前5日日均自由流通换手率%，不含突破日）' + numHint;
+    } else if (!title && filterKey === 'first_his_ff_tn20_pct') {
+        title = '20日换手率（前20日日均自由流通换手率%，不含突破日；≤7%红关注、≥14%绿警惕）' + numHint;
+    } else if (!title && filterKey === 'first_his_ff_tn60_pct') {
+        title = '60日换手率（前60日日均自由流通换手率%，不含突破日）' + numHint;
+    } else if (!title && filterKey === 'first_his_pre120_up7_cnt') {
+        title = '120日>7%（突破日前120交易日中单日涨幅>7%的天数，stk_qfq_close_break.pre120_up7_cnt）' + numHint;
+    } else if (!title && filterKey === 'first_his_pre120_dn7_cnt') {
+        title = '120日<-7%（突破日前120交易日中单日涨幅<-7%的天数，stk_qfq_close_break.pre120_dn7_cnt）' + numHint;
+    } else if (!title && filterKey === 'first_850_break_date') {
+        title = '突破日（stk_qfq_close_break 850/first，支持日期包含匹配）';
+    } else if (!title && filterKey === 'first_850_break_free_mv_yi') {
+        title = '自由市值（850/first 突破日 free_share×close_qfq÷10000，亿元，保留两位小数）' + numHint;
+    } else if (!title && filterKey === 'first_850_prior_max_throwback_5d') {
+        title = '5日回踩（850/first：T+1..T+5 最低价是否跌破 prior_max_qfq：1 是 0 否）';
+    } else if (!title && filterKey === 'first_850_post5_ret_pct') {
+        title = 'T5涨跌（850/first 突破日后累计涨幅%，两位小数无%）' + numHint;
+    } else if (!title && filterKey === 'first_850_post10_ret_pct') {
+        title = 'T10涨跌（850/first 突破日后10日累计涨幅%）' + numHint;
+    } else if (!title && filterKey === 'first_850_post20_ret_pct') {
+        title = 'T20涨跌（850/first 突破日后20日累计涨幅%）' + numHint;
+    } else if (!title && filterKey === 'first_850_post60_ret_pct') {
+        title = 'T60涨跌（850/first 突破日后60日累计涨幅%）' + numHint;
+    } else if (!title && filterKey === 'first_850_peak_age_days') {
+        title = '前高年龄（850/first 前高日至突破日间隔交易日数，不含两端）' + numHint;
+    } else if (!title && filterKey === 'first_850_prior_max_qfq') {
+        title = '前高价（850/first 被突破前高 prior_max_qfq，前复权，保留两位小数）' + numHint;
+    } else if (!title && filterKey === 'first_850_gap_to_peak_pct') {
+        title = '距前高%（850/first：突破日前一交易日收盘相对 prior_max_qfq；(prev_close/prior_max-1)×100；≥-2%淡红、≤-10%淡绿）' + numHint;
+    } else if (!title && filterKey === 'first_850_break_pct') {
+        title = '突破幅度（850/first close÷前高-1×100%）' + numHint;
+    } else if (!title && filterKey === 'first_850_upper_shadow_pct') {
+        title = '上影线（850/first high÷close-1×100%）' + numHint;
+    } else if (!title && filterKey === 'first_850_pct_chg') {
+        title = '涨跌幅（850/first 突破日 stk_factor_pro.pct_chg）' + numHint;
+    } else if (!title && filterKey === 'first_850_vol_ratio20') {
+        title = 'T/20量比（850/first 信号日成交量÷前20日均量）' + numHint;
+    } else if (!title && filterKey === 'first_850_ff_tn5_60_ratio') {
+        title = '5/60换手比（850/first 前5日÷前60日日均自由流通换手率，保留2位小数）' + numHint;
+    } else if (!title && filterKey === 'first_850_pre5_ret_pct') {
+        title = '5日涨幅（850/first 突破日前5日 T-5…T-1 累计，close[T-1]/close[T-6]-1）' + numHint;
+    } else if (!title && filterKey === 'first_850_pre120_ret_pct') {
+        title = '120日涨幅（850/first 突破日前120日 T-120…T-1 累计，close[T-1]/close[T-121]-1）' + numHint;
+    } else if (!title && filterKey === 'first_850_pre120_range_pct') {
+        title = '120日振幅（850/first 突破日前120日 T-120…T-1 区间振幅%）' + numHint;
+    } else if (!title && filterKey === 'first_850_ma120_bias_pct') {
+        title = 'MA120 BIAS（850/first 突破日相对MA120乖离%）' + numHint;
+    } else if (!title && filterKey === 'first_850_avg_amt_5_yi') {
+        title = '5日均额（850/first 突破日前5日日均成交额，亿元，不含突破日）' + numHint;
+    } else if (!title && filterKey === 'first_850_avg_amt_20_yi') {
+        title = '20日均额（850/first 突破日前20日日均成交额，亿元，不含突破日）' + numHint;
+    } else if (!title && filterKey === 'first_850_avg_amt_60_yi') {
+        title = '60日均额（850/first 突破日前60日日均成交额，亿元，不含突破日）' + numHint;
+    } else if (!title && filterKey === 'first_850_ff_tn5_pct') {
+        title = '5日换手率（850/first 前5日日均自由流通换手率%，不含突破日）' + numHint;
+    } else if (!title && filterKey === 'first_850_ff_tn20_pct') {
+        title = '20日换手率（850/first 前20日日均自由流通换手率%，不含突破日；≤7%红关注、≥14%绿警惕）' + numHint;
+    } else if (!title && filterKey === 'first_850_ff_tn60_pct') {
+        title = '60日换手率（850/first 前60日日均自由流通换手率%，不含突破日）' + numHint;
+    } else if (!title && filterKey === 'first_850_pre120_up7_cnt') {
+        title = '120日>7%（850/first 突破日前120交易日中单日涨幅>7%的天数）' + numHint;
+    } else if (!title && filterKey === 'first_850_pre120_dn7_cnt') {
+        title = '120日<-7%（850/first 突破日前120交易日中单日涨幅<-7%的天数）' + numHint;
     } else if (!title && filterKey === 'pe_ttm') {
         title = 'PE（stk_factor_pro.pe_ttm，最新 trade_date）' + numHint;
     } else if (!title && filterKey === 'ttm_revenue_yi') {
@@ -7245,6 +8600,20 @@ function computeFinaMetricFilterKeyTitle(panelKey, filterKey) {
         var isM = filterKey.charAt(0) === 'm';
         var isN = filterKey.charAt(0) === 'n';
         title = (isM ? '单季度毛利率·' : isN ? '单季度净利率·' : '单季度ROE(扣非)·') + finaArturnQuarterLabel(rawMn) + numHint;
+    } else if (!title && filterKey === 'last_his_high') {
+        title = 'His新高（1=stk_qfq_close_break his/last 最新 break_date 且 has_break=1，0=否）' + numHint;
+    } else if (!title && filterKey === 'last_his_peak_age_days') {
+        title = '前高age（his/last 最新 break_date 行 peak_age_days：前高日至突破日间隔交易日数，不含两端）' + numHint;
+    } else if (!title && filterKey === 'last_850_high') {
+        title = '850新高（1=stk_qfq_close_break 850/last 最新 break_date 且 has_break=1，0=否）' + numHint;
+    } else if (!title && filterKey === 'last_850_peak_age_days') {
+        title = '前高age（850/last 最新 break_date 行 peak_age_days：前高日至突破日间隔交易日数，不含两端）' + numHint;
+    } else if (!title && filterKey === 'cur_price') {
+        title = '当前价（stock_wind.rt_k 最新快照 close，未复权：盘中为实时价、盘后即当日收盘；受主表 5 分钟缓存影响最多滞后 5 分钟。退市/长停标的快照陈旧者整组置空）' + numHint;
+    } else if (!title && filterKey === 'pct_since_ann') {
+        title = finaPctSinceAnnTitle + numHint;
+    } else if (!title && finaPriceGapTitleMap[filterKey]) {
+        title = finaPriceGapTitleMap[filterKey] + numHint;
     } else if (!title && filterKey === 's_high') {
         title = '新高（1=最新季 s0 在已有值的展示季中为最大，0=否；不要求 9 季全有值）' + numHint;
     } else if (!title && filterKey === 'cf_high') {
@@ -7384,6 +8753,30 @@ function refreshFinaMetricSchemeSummary(panelKey) {
                 '<span class="fina-arturn-scheme-preview-field">调用行为</span>' +
                 '<span class="fina-arturn-scheme-preview-sep">：</span>' +
                 '<code class="fina-arturn-scheme-preview-val">重置列筛选/排序/股票范围，应用 tsCode OR，报告期切到最新</code>' +
+            '</div>';
+        return;
+    }
+    var customBoardName = parseFinaCustomBoardOptionValue(name);
+    if (customBoardName) {
+        var boards = loadFinaCustomBoards();
+        var board = boards[customBoardName];
+        if (!board) {
+            wrap.hidden = true;
+            body.innerHTML = '';
+            return;
+        }
+        var nCodes = Array.isArray(board.ts_codes) ? board.ts_codes.length : (Number(board.count) || 0);
+        wrap.hidden = false;
+        body.innerHTML =
+            '<div class="fina-arturn-scheme-preview-line">' +
+                '<span class="fina-arturn-scheme-preview-field">自定义板块</span>' +
+                '<span class="fina-arturn-scheme-preview-sep">：</span>' +
+                '<code class="fina-arturn-scheme-preview-val">' + escapeHtmlAttr(customBoardName) + '（' + String(nCodes) + '只）</code>' +
+            '</div>' +
+            '<div class="fina-arturn-scheme-preview-line fina-arturn-scheme-preview-meta">' +
+                '<span class="fina-arturn-scheme-preview-field">调用行为</span>' +
+                '<span class="fina-arturn-scheme-preview-sep">：</span>' +
+                '<code class="fina-arturn-scheme-preview-val">仅替换股票池（tsCode OR），保留现有列筛选与排序</code>' +
             '</div>';
         return;
     }
@@ -7634,7 +9027,7 @@ function initFinaMetricPanel(panelKey) {
         excludeBjCb.dataset.boundStockScope = '1';
         excludeBjCb.addEventListener('change', function () {
             _finaMetricState().excludeBj = !!this.checked;
-            renderFinaMetricTable(panelKey);
+            scheduleFinaMetricTableRender(panelKey, false);
             saveFinaMetricViewState(panelKey);
         });
     }
@@ -7642,7 +9035,7 @@ function initFinaMetricPanel(panelKey) {
         excludeStCb.dataset.boundStockScope = '1';
         excludeStCb.addEventListener('change', function () {
             _finaMetricState().excludeSt = !!this.checked;
-            renderFinaMetricTable(panelKey);
+            scheduleFinaMetricTableRender(panelKey, false);
             saveFinaMetricViewState(panelKey);
         });
     }
@@ -7655,7 +9048,7 @@ function initFinaMetricPanel(panelKey) {
                 var sk = t.getAttribute('data-sort-key') || '';
                 if (sk) {
                     finaMetricCycleSort(sk);
-                    renderFinaMetricTable(panelKey);
+                    scheduleFinaMetricTableRender(panelKey, true);
                     saveFinaMetricViewState(panelKey);
                 }
                 return;
@@ -7670,6 +9063,15 @@ function initFinaMetricPanel(panelKey) {
         splitWrap.addEventListener('click', function (ev) {
             var t = ev.target;
             if (!t || !t.closest) return;
+            var hitMark = t.closest('.fina-arturn-ts-mark-toggle');
+            if (hitMark) {
+                var tcMark = String(hitMark.getAttribute('data-ts-code') || '').trim();
+                if (tcMark && tcMark !== '--') {
+                    var nowMarked = toggleFinaArturnInterestMark(tcMark);
+                    syncFinaArturnInterestMarkRows(tcMark, nowMarked);
+                }
+                return;
+            }
             var hitFh = t.closest('.fina-float-holders-clickable');
             if (hitFh) {
                 var tcF = String(hitFh.getAttribute('data-fh-ts') || '').trim();
@@ -7702,6 +9104,23 @@ function initFinaMetricPanel(panelKey) {
             var secName = String(hit.getAttribute('data-fixed-assets-sec-name') || '').trim();
             openFinaFixedAssetsModal(tsCode, secName);
         });
+        /* 键盘：Enter/Space 切换感兴趣标记（与点击同逻辑） */
+        if (!splitWrap.dataset.tsMarkKeyBound) {
+            splitWrap.dataset.tsMarkKeyBound = '1';
+            splitWrap.addEventListener('keydown', function (ev) {
+                var t = ev.target;
+                if (!t || !t.closest) return;
+                if (ev.key !== 'Enter' && ev.key !== ' ') return;
+                var hitMark = t.closest('.fina-arturn-ts-mark-toggle');
+                if (!hitMark) return;
+                ev.preventDefault();
+                var tcMark = String(hitMark.getAttribute('data-ts-code') || '').trim();
+                if (tcMark && tcMark !== '--') {
+                    var nowMarked = toggleFinaArturnInterestMark(tcMark);
+                    syncFinaArturnInterestMarkRows(tcMark, nowMarked);
+                }
+            });
+        }
     }
     if (popApply) {
         popApply.addEventListener('click', function () {
@@ -7718,7 +9137,7 @@ function initFinaMetricPanel(panelKey) {
                 if (typeOk) pushFinaFilterHistory(k, val);
             }
             closeFinaMetricFilterPopover(panelKey);
-            renderFinaMetricTable(panelKey);
+            scheduleFinaMetricTableRender(panelKey, true);
             saveFinaMetricViewState(panelKey);
         });
     }
@@ -7730,7 +9149,7 @@ function initFinaMetricPanel(panelKey) {
             f[k] = '';
             setFinaMetricFilters(panelKey, f);
             closeFinaMetricFilterPopover(panelKey);
-            renderFinaMetricTable(panelKey);
+            scheduleFinaMetricTableRender(panelKey, true);
             saveFinaMetricViewState(panelKey);
         });
     }
@@ -7832,6 +9251,33 @@ function initFinaMetricPanel(panelKey) {
                     });
                 return;
             }
+            var customBoardName = parseFinaCustomBoardOptionValue(name);
+            if (customBoardName) {
+                var boards = loadFinaCustomBoards();
+                var board = boards[customBoardName];
+                if (!board || !Array.isArray(board.ts_codes) || !board.ts_codes.length) {
+                    setFinaMetricSchemeModalMsg(panelKey, '自定义板块不存在或无有效代码。');
+                    return;
+                }
+                var sourceLabel = '自定义板块：' + customBoardName;
+                try {
+                    var ret = applyTsCodePoolKeepFilters(panelKey, board.ts_codes, sourceLabel);
+                    var hitStr2 = typeof ret.tableHit === 'number' ? String(ret.tableHit) : '--';
+                    var uniStr2 = typeof ret.tableUniverse === 'number' ? String(ret.tableUniverse) : '--';
+                    setFinaMetricSchemeModalMsg(
+                        panelKey,
+                        '已调用' + sourceLabel +
+                            '：股票池 ' + String(ret.count || 0) + ' 只（保留列筛选）；表中命中 ' +
+                            hitStr2 + ' / ' + uniStr2 + ' 条'
+                    );
+                } catch (errCb) {
+                    setFinaMetricSchemeModalMsg(
+                        panelKey,
+                        '调用自定义板块失败：' + String(errCb && errCb.message ? errCb.message : errCb)
+                    );
+                }
+                return;
+            }
             var schemes = loadFinaMetricSchemes(panelKey);
             var scheme = schemes[name];
             if (!scheme) {
@@ -7876,11 +9322,10 @@ function initFinaMetricPanel(panelKey) {
             }
             if (targetEndDate && targetEndDate !== st.selectedEndDate) {
                 fetchFinaMetricTable(panelKey, targetEndDate).then(function () {
-                    renderFinaMetricTable(panelKey);
                     saveFinaMetricViewState(panelKey);
                 });
             } else {
-                renderFinaMetricTable(panelKey);
+                scheduleFinaMetricTableRender(panelKey, true);
                 saveFinaMetricViewState(panelKey);
             }
             setFinaMetricSchemeModalMsg(panelKey, '已调用筛选方案：' + name + fallbackHint);
@@ -7896,6 +9341,24 @@ function initFinaMetricPanel(panelKey) {
             }
             if (isFinaSystemSchemeName(name)) {
                 setFinaMetricSchemeModalMsg(panelKey, '系统方案不可删除。');
+                return;
+            }
+            var customBoardNameDel = parseFinaCustomBoardOptionValue(name);
+            if (customBoardNameDel) {
+                var boardsDel = loadFinaCustomBoards();
+                if (!boardsDel[customBoardNameDel]) {
+                    setFinaMetricSchemeModalMsg(panelKey, '自定义板块不存在。');
+                    return;
+                }
+                delete boardsDel[customBoardNameDel];
+                try {
+                    saveFinaCustomBoards(boardsDel);
+                } catch (eDel) {
+                    setFinaMetricSchemeModalMsg(panelKey, String(eDel && eDel.message ? eDel.message : eDel));
+                    return;
+                }
+                renderFinaMetricSchemeOptions(panelKey);
+                setFinaMetricSchemeModalMsg(panelKey, '已删除自定义板块：' + customBoardNameDel);
                 return;
             }
             var schemes = loadFinaMetricSchemes(panelKey);
@@ -7916,10 +9379,83 @@ function initFinaMetricPanel(panelKey) {
             _finaMetricState().sortDir = 'asc';
             closeFinaMetricFilterPopover(panelKey);
             setFinaMetricSchemeModalMsg(panelKey, '已清空所有列筛选条件并重置排序');
-            renderFinaMetricTable(panelKey);
+            scheduleFinaMetricTableRender(panelKey, true);
             saveFinaMetricViewState(panelKey);
         });
     }
+    (function bindFinaCustomBoardImport() {
+        if (!ids.customBoardFile || !ids.customBoardImport) return;
+        var fileEl = document.getElementById(ids.customBoardFile);
+        var nameEl = document.getElementById(ids.customBoardName);
+        var importBtn = document.getElementById(ids.customBoardImport);
+        if (!fileEl || !importBtn) return;
+        if (fileEl.dataset.boundCustomBoardFile) return;
+        fileEl.dataset.boundCustomBoardFile = '1';
+        fileEl.addEventListener('change', function () {
+            var f = fileEl.files && fileEl.files[0];
+            if (!f || !nameEl) return;
+            if (String(nameEl.value || '').trim()) return;
+            var base = String(f.name || '').replace(/\.(txt|csv|xlsx|xls)$/i, '').trim();
+            if (base) nameEl.value = base;
+        });
+        importBtn.addEventListener('click', function () {
+            var f = fileEl.files && fileEl.files[0];
+            if (!f) {
+                setFinaMetricSchemeModalMsg(panelKey, '请先选择 txt / csv / xlsx 文件。');
+                return;
+            }
+            var nameHint = nameEl ? String(nameEl.value || '').trim() : '';
+            if (!nameHint) {
+                nameHint = String(f.name || '').replace(/\.(txt|csv|xlsx|xls)$/i, '').trim();
+            }
+            if (!nameHint) {
+                setFinaMetricSchemeModalMsg(panelKey, '请填写板块名称。');
+                return;
+            }
+            setFinaMetricSchemeModalMsg(panelKey, '正在解析「' + nameHint + '」…');
+            importBtn.disabled = true;
+            fetchFinaCustomBoardResolveFromFile(f, nameHint)
+                .then(function (data) {
+                    var boardName = String((data && data.name) || nameHint).trim() || nameHint;
+                    var codes = (data && Array.isArray(data.ts_codes)) ? data.ts_codes : [];
+                    if (!codes.length) {
+                        throw new Error('未解析到有效 ts_code');
+                    }
+                    var boards = loadFinaCustomBoards();
+                    boards[boardName] = {
+                        ts_codes: codes,
+                        count: codes.length,
+                        input_count: Number(data.input_count) || codes.length,
+                        unresolved_count: Number(data.unresolved_count) || 0,
+                        updated_at: new Date().toISOString()
+                    };
+                    saveFinaCustomBoards(boards);
+                    renderFinaMetricSchemeOptions(panelKey);
+                    var sel = document.getElementById(ids.schemeSelect);
+                    if (sel) {
+                        sel.value = finaCustomBoardOptionValue(boardName);
+                        refreshFinaMetricSchemeSummary(panelKey);
+                    }
+                    if (nameEl) nameEl.value = boardName;
+                    var miss = Number(data.unresolved_count) || 0;
+                    var msg = '已保存自定义板块「' + boardName + '」：' + String(codes.length) + ' 只';
+                    if (miss > 0) {
+                        msg += '（有 ' + String(miss) + ' 个代码未解析，已忽略）';
+                    }
+                    msg += '。请点「调用方案」应用到表格（仅换股票池，保留列筛选）。';
+                    setFinaMetricSchemeModalMsg(panelKey, msg);
+                })
+                .catch(function (err) {
+                    setFinaMetricSchemeModalMsg(
+                        panelKey,
+                        '导入失败：' + String(err && err.message ? err.message : err)
+                    );
+                })
+                .then(function () {
+                    importBtn.disabled = false;
+                });
+        });
+    })();
     initFinaMetricSchemeModal(panelKey);
     (function initFixedAssetsModal() {
         var overlay = document.getElementById('fina-fixed-assets-modal-overlay');
@@ -8490,7 +10026,13 @@ function initFinaMetricPanel(panelKey) {
             }
         }
     })();
-    fetchFinaMetricTable(panelKey, _finaMetricState().selectedEndDate || '').then(function () {
+    var bootTable = function () {
+        return fetchFinaMetricTable(panelKey, _finaMetricState().selectedEndDate || '');
+    };
+    var bootPromise = panelKey === 'arturn'
+        ? syncFinaArturnInterestMarksFromServer().then(bootTable)
+        : bootTable();
+    bootPromise.then(function () {
         if (panelKey !== 'arturn') return;
         var payload = finaPendingImportPayload;
         if (!payload || !(payload.source === 'zt_t1' || payload.source === 'cnt_high_limit' || payload.source === 'cnt_h850' || payload.source === 'cnt_h_high')) return;
@@ -8538,7 +10080,245 @@ function initFinaArturnPanel() {
     finaPendingImportPayload = consumePendingFinaImportFromUrl();
     initFinaMetricPanel('arturn');
     initFinaArturnHorizScrollHelpers();
+    initFinaQfqBreakTipModals();
 }
+
+function finaQfqBreakTipOverlayId(mode) {
+    return mode === '850' ? 'fina-qfq-break-tip-850-overlay' : 'fina-qfq-break-tip-his-overlay';
+}
+
+function finaQfqBreakTipBodyHtml(mode) {
+    var is850 = mode === '850';
+    var titleMode = is850 ? '首次850新高' : '首次历史新高';
+    var twin = is850 ? '首次历史新高' : '首次850新高';
+    var note = is850
+        ? '与历史新高同一套心智；850 上低换手、上市年龄的区分度略更强。约 87% 样本与历史新高同日重合。'
+        : '与850新高因子方向一致；约 89% 样本与850同日重合。';
+    return (
+        '<p class="fina-qfq-break-tip-lead"><strong>' +
+        titleMode +
+        '</strong> · B类样本（去脏+剔A，分析用；表内不过滤）</p>' +
+        '<p class="fina-qfq-break-tip-note">' +
+        note +
+        ' 与「' +
+        twin +
+        '」可对照看。</p>' +
+        '<ol class="fina-qfq-break-tip-list">' +
+        '<li><strong>20日换手（主角）</strong>：越低越好。表内 ≤7% 红关注、≥14% 绿警惕；post20 胜率约 52–55% vs ~32%。</li>' +
+        '<li><strong>5/60日换手</strong>：方向同20日，暂不着字色，阈值待回测再定。</li>' +
+        '<li><strong>涨跌幅</strong>：突破日涨幅过大偏弱（≥12% 胜率约 35%）。</li>' +
+        '<li><strong>距前高</strong>：贴前高更好（≥−2% 淡红）；深跳空差（≤−10% 淡绿）。</li>' +
+        '<li><strong>上市年龄 list_age</strong>：越老略好；表上「前高Age」是前高→突破间隔，不是上市年龄。</li>' +
+        '<li><strong>弱/噪声</strong>：量比、突破幅度、上影线、前高Age 对 post20/60 信息弱。</li>' +
+        '</ol>' +
+        '<p class="fina-qfq-break-tip-foot">选股时请自行心算去脏（|涨跌幅|&gt;32 或 list_age≤0）与剔A（距前高≥−0.5 且 list_age≤250）。拖标题栏移动，右下角拉边改大小。</p>'
+    );
+}
+
+function loadFinaQfqBreakTipModalLayout(mode) {
+    try {
+        if (typeof localStorage === 'undefined') return null;
+        var key = FINA_QFQ_BREAK_TIP_LAYOUT_KEYS[mode];
+        if (!key) return null;
+        var raw = localStorage.getItem(key);
+        if (!raw) return null;
+        var o = JSON.parse(raw);
+        if (typeof o.w !== 'number' || typeof o.h !== 'number') return null;
+        if (o.w < 280 || o.h < 200) return null;
+        return {
+            w: o.w,
+            h: o.h,
+            l: typeof o.l === 'number' ? o.l : null,
+            t: typeof o.t === 'number' ? o.t : null,
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+function saveFinaQfqBreakTipModalLayout(mode, modalEl) {
+    try {
+        if (!modalEl || typeof localStorage === 'undefined') return;
+        var key = FINA_QFQ_BREAK_TIP_LAYOUT_KEYS[mode];
+        if (!key) return;
+        var rect = modalEl.getBoundingClientRect();
+        var w = Math.round(rect.width);
+        var h = Math.round(rect.height);
+        var l = Math.round(rect.left);
+        var t = Math.round(rect.top);
+        if (w < 280 || h < 200) return;
+        localStorage.setItem(key, JSON.stringify({ w: w, h: h, l: l, t: t }));
+    } catch (e) {
+        /* ignore */
+    }
+}
+
+function applyFinaQfqBreakTipModalSavedLayout(mode) {
+    var overlay = document.getElementById(finaQfqBreakTipOverlayId(mode));
+    var modal = overlay && overlay.querySelector('.fina-qfq-break-tip-modal-shell');
+    if (!modal) return;
+    var lay = loadFinaQfqBreakTipModalLayout(mode);
+    var vw = window.innerWidth || document.documentElement.clientWidth;
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    var minW = 320;
+    var minH = 260;
+    var w;
+    var h;
+    var l;
+    var t;
+    if (!lay) {
+        w = Math.min(440, Math.max(minW, vw - 48));
+        h = Math.min(480, Math.max(minH, vh - 48));
+        l = mode === '850' ? Math.max(24, vw - w - 40) : 40;
+        t = Math.max(40, Math.round((vh - h) / 2) - 20);
+    } else {
+        w = Math.min(Math.max(lay.w, minW), Math.max(minW, vw - 8));
+        h = Math.min(Math.max(lay.h, minH), Math.max(minH, vh - 8));
+        l = lay.l != null ? lay.l : (vw - w) / 2;
+        t = lay.t != null ? lay.t : (vh - h) / 2;
+        l = Math.max(0, Math.min(l, vw - w));
+        t = Math.max(0, Math.min(t, vh - h));
+    }
+    modal.style.width = w + 'px';
+    modal.style.height = h + 'px';
+    modal.style.transform = 'none';
+    modal.style.left = l + 'px';
+    modal.style.top = t + 'px';
+}
+
+function scheduleSaveFinaQfqBreakTipModalLayout(mode, modalEl) {
+    if (!modalEl) return;
+    clearTimeout(finaQfqBreakTipSaveTimers[mode]);
+    finaQfqBreakTipSaveTimers[mode] = setTimeout(function () {
+        if (Date.now() - (finaQfqBreakTipLayoutOpenTs[mode] || 0) < 700) return;
+        saveFinaQfqBreakTipModalLayout(mode, modalEl);
+    }, 400);
+}
+
+function openFinaQfqBreakTipModal(mode) {
+    var m = mode === '850' ? '850' : 'his';
+    var overlay = document.getElementById(finaQfqBreakTipOverlayId(m));
+    if (!overlay) return;
+    var body = document.getElementById(m === '850' ? 'fina-qfq-break-tip-850-body' : 'fina-qfq-break-tip-his-body');
+    if (body) body.innerHTML = finaQfqBreakTipBodyHtml(m);
+    finaQfqBreakTipLayoutOpenTs[m] = Date.now();
+    overlay.classList.add('is-open');
+    _modalOpened();
+    applyFinaQfqBreakTipModalSavedLayout(m);
+}
+
+function closeFinaQfqBreakTipModal(mode) {
+    var m = mode === '850' ? '850' : 'his';
+    var overlay = document.getElementById(finaQfqBreakTipOverlayId(m));
+    if (!overlay) return;
+    var wasOpen = overlay.classList.contains('is-open');
+    var modal = overlay.querySelector('.fina-qfq-break-tip-modal-shell');
+    if (wasOpen && modal) saveFinaQfqBreakTipModalLayout(m, modal);
+    overlay.classList.remove('is-open');
+    if (wasOpen) _modalClosed();
+}
+
+function bindFinaQfqBreakTipModalDrag(mode) {
+    var overlay = document.getElementById(finaQfqBreakTipOverlayId(mode));
+    var modal = overlay && overlay.querySelector('.fina-qfq-break-tip-modal-shell');
+    var header = overlay && overlay.querySelector('.fina-qfq-break-tip-modal-header');
+    if (!overlay || !modal || !header) return;
+    if (overlay.dataset.finaQfqTipLayoutBound === '1') return;
+    overlay.dataset.finaQfqTipLayoutBound = '1';
+    modal.style.position = 'fixed';
+    modal.style.left = '50%';
+    modal.style.top = '50%';
+    modal.style.transform = 'translate(-50%, -50%)';
+    var dragging = false;
+    var startX = 0;
+    var startY = 0;
+    var startLeft = 0;
+    var startTop = 0;
+    var dragW = 0;
+    var dragH = 0;
+    header.style.cursor = 'move';
+    header.addEventListener('mousedown', function (e) {
+        if (e.button !== 0) return;
+        var tg = e.target;
+        if (tg && tg.closest && tg.closest('input, button, label, select, textarea, a')) return;
+        dragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        var rect = modal.getBoundingClientRect();
+        startLeft = rect.left;
+        startTop = rect.top;
+        dragW = rect.width;
+        dragH = rect.height;
+        modal.style.transform = '';
+        e.preventDefault();
+    });
+    document.addEventListener('mousemove', function (e) {
+        if (!dragging) return;
+        var newLeft = startLeft + (e.clientX - startX);
+        var newTop = startTop + (e.clientY - startY);
+        var vw = window.innerWidth || document.documentElement.clientWidth;
+        var vh = window.innerHeight || document.documentElement.clientHeight;
+        var maxLeft = vw - dragW;
+        var maxTop = vh - dragH;
+        if (newLeft < 0) newLeft = 0;
+        if (newTop < 0) newTop = 0;
+        if (newLeft > maxLeft) newLeft = maxLeft;
+        if (newTop > maxTop) newTop = maxTop;
+        modal.style.left = newLeft + 'px';
+        modal.style.top = newTop + 'px';
+    });
+    document.addEventListener('mouseup', function () {
+        if (dragging) saveFinaQfqBreakTipModalLayout(mode, modal);
+        dragging = false;
+    });
+    if (typeof ResizeObserver !== 'undefined') {
+        var ro = new ResizeObserver(function () {
+            scheduleSaveFinaQfqBreakTipModalLayout(mode, modal);
+        });
+        ro.observe(modal);
+    }
+}
+
+function initFinaQfqBreakTipModals() {
+    ['his', '850'].forEach(function (mode) {
+        var closeId = mode === '850' ? 'fina-qfq-break-tip-850-close' : 'fina-qfq-break-tip-his-close';
+        var closeBtn = document.getElementById(closeId);
+        if (closeBtn && !closeBtn.dataset.boundQfqTipClose) {
+            closeBtn.dataset.boundQfqTipClose = '1';
+            closeBtn.addEventListener('click', function () {
+                closeFinaQfqBreakTipModal(mode);
+            });
+        }
+        bindFinaQfqBreakTipModalDrag(mode);
+    });
+    var thead = document.getElementById('fina-arturn-thead');
+    if (thead && !thead.dataset.boundQfqTipOpen) {
+        thead.dataset.boundQfqTipOpen = '1';
+        thead.addEventListener('click', function (e) {
+            var btn = e.target && e.target.closest ? e.target.closest('.fina-qfq-break-tip-btn') : null;
+            if (!btn) return;
+            e.preventDefault();
+            e.stopPropagation();
+            openFinaQfqBreakTipModal(btn.getAttribute('data-qfq-break-tip'));
+        });
+    }
+    if (!document.body.dataset.finaQfqBreakTipEscBound) {
+        document.body.dataset.finaQfqBreakTipEscBound = '1';
+        document.addEventListener('keydown', function (ev) {
+            if (!ev || ev.key !== 'Escape') return;
+            var ov850 = document.getElementById('fina-qfq-break-tip-850-overlay');
+            if (ov850 && ov850.classList.contains('is-open')) {
+                closeFinaQfqBreakTipModal('850');
+                return;
+            }
+            var ovHis = document.getElementById('fina-qfq-break-tip-his-overlay');
+            if (ovHis && ovHis.classList.contains('is-open')) {
+                closeFinaQfqBreakTipModal('his');
+            }
+        });
+    }
+}
+
 function escapeHtmlAttr(s) {
     return String(s)
         .replace(/&/g, '&amp;')
@@ -8713,3 +10493,26 @@ window.addEventListener('load', function () {
 /* 代码更新时间：2026-05-07 12:50 指标/业务逻辑 sticky 叠盖修复见 rt_monitor.css（RT_MONITOR_STATIC_VER 20260507-5） */
 /* 代码更新时间：2026-05-07 13:30 公告日 thead 首行+formatFinaFixedAssetsAnnDateCompact；RT_MONITOR_STATIC_VER 20260507-6 */
 /* 代码更新时间：2026-06-17 20:46 首页导入财报失败文案随 sourceLabel 动态展示；RT_MONITOR_STATIC_VER 20260617-2 */
+/* 代码更新时间：2026-06-19 21:43 pre5/pre120方案A窗口；RT_MONITOR_STATIC_VER 20260619-2 */
+/* 代码更新时间：2026-06-20 23:31 首次历史新高/850新高：突破日后 T5/T10/T20 涨跌(post5/10/20)；252 scroll 列竖线；RT_MONITOR_STATIC_VER 20260616-1 */
+/* 代码更新时间：2026-06-22 20:32 破前高5日表头改为5日回踩；RT_MONITOR_STATIC_VER 20260622-3 */
+/* 代码更新时间：2026-06-22 22:24 前高Age 后增前高价 prior_max_qfq（his/850）；RT_MONITOR_STATIC_VER 20260622-6 */
+/* 代码更新时间：2026-06-23 17:23 财报表 His新高 last_his_high（带息负债率右）；261 列竖线；RT_MONITOR_STATIC_VER 20260623-2 */
+/* 代码更新时间：2026-07-01 12:22 分组行首格 colspan 11→13 对齐 850 两列；theadKey cols264g13；RT_MONITOR_STATIC_VER 20260701-3 */
+/* 代码更新时间：2026-07-09 09:41 虚拟滚动+渲染进度条+thead sync 节流；RT_MONITOR_STATIC_VER 20260709-1 */
+/* 代码更新时间：2026-07-10 10:10 进度条逻辑保留、UI 默认关闭（FINA_RENDER_PROGRESS_UI_VISIBLE）；RT_MONITOR_STATIC_VER 20260710-2 */
+/* 代码更新时间：2026-07-12 22:51 自定义板块导入 txt/xlsx → localStorage → 方案下拉（仅换股票池）；RT_MONITOR_STATIC_VER 20260712-1 */
+/* 代码更新时间：2026-07-25 21:00 首次his/850增距前高 gap_to_peak_pct；colspan26→27；scroll 266；RT_MONITOR_STATIC_VER 20260725-1 */
+/* 代码更新时间：2026-07-25 21:17 修复 mFirstHis/850GapToPeak 未从 mb 解包致渲染 ReferenceError；RT_MONITOR_STATIC_VER 20260725-2 */
+/* 代码更新时间：2026-07-25 21:54 20日换手≤7红≥14绿；距前高浅黄+≥-2红≤-10绿；RT_MONITOR_STATIC_VER 20260725-3 */
+/* 代码更新时间：2026-07-25 22:11 首次his/850组头因子提示弹窗（可拖可缩）；RT_MONITOR_STATIC_VER 20260725-4 */
+/* 代码更新时间：2026-07-29 15:31 主营构成对照注释：上一期报告期（非仅次新年报） */
+/* 代码更新时间：2026-07-29 15:47 主营构成同比改用 yoy_base 上年同期；RT_MONITOR_STATIC_VER 20260729-1 */
+/* 代码更新时间：2026-08-04 15:03 新增「当前价位置」7 列（cur_price + 距历史/850/250 高低%）；距高点复用 ≥-2红/≤-10绿；scroll 273；RT_MONITOR_STATIC_VER 20260804-1 */
+/* 代码更新时间：2026-08-05 06:35 当前价后增「自公告%」pct_since_ann；colspan7→8；scroll273→274；RT_MONITOR_STATIC_VER 20260805-1 */
+/* 代码更新时间：2026-08-04 15:18 距历史低%→历史低倍 mult_vs_h_low（1位小数）；RT_MONITOR_STATIC_VER 20260804-2 */
+/* 代码更新时间：2026-08-05 07:04 修复 mPctSinceAnn 未从 mb 解包致渲染 ReferenceError→0 条；RT_MONITOR_STATIC_VER 20260805-2 */
+/* 代码更新时间：2026-08-05 07:13 自公告% 改用 finaArturnRiseFallClass（正红负绿同 T5/T10）；RT_MONITOR_STATIC_VER 20260805-3 */
+/* 代码更新时间：2026-08-05 09:01 点击股票代码切换感兴趣行标记（localStorage，跨报告期）；RT_MONITOR_STATIC_VER 20260805-4 */
+/* 代码更新时间：2026-08-05 09:11 感兴趣标记落盘 /api/fina_interest_marks（fina_interest_marks.json）；RT_MONITOR_STATIC_VER 20260805-5 */
+/* 代码更新时间：2026-08-08 21:59 主营构成：metrics_key 近义同比查找；占比分母注释；RT_MONITOR_STATIC_VER 20260808-1 */

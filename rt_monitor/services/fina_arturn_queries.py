@@ -1,6 +1,8 @@
 """财报 arturn / 固定资产序列查询（P4.2 自 monolith 迁出）。"""
 from __future__ import annotations
 
+import gzip
+import json
 import os
 import re
 import statistics
@@ -11,6 +13,7 @@ from collections import OrderedDict, defaultdict
 from contextlib import contextmanager
 from decimal import ROUND_HALF_UP, Decimal
 from datetime import date, datetime, timedelta
+from difflib import SequenceMatcher
 from typing import Any
 
 import pymysql
@@ -18,6 +21,7 @@ import numpy as np
 
 from logger_config import get_logger
 from rt_monitor.core.config import DB_CONFIG, DB_CONFIG_TUSHARE
+from rt_monitor.core.market_session import isAShareMarketActive
 from rt_monitor.core.numbers import toFloatOrNone
 
 logger = get_logger(__name__)
@@ -154,13 +158,263 @@ def _small_ttl_cache_put(cache_obj: OrderedDict, cache_key, payload: dict, ttl: 
         cache_obj.move_to_end(cache_key)
 
 
-FINA_ARTURN_TABLE_CACHE_TTL = 300.0  # 5 分钟：当期财报小时级以上才会变化，长 TTL 让启动预热 + 页面刷新稳定命中
+# 报告期级宽表小时级以上才变；TTL 过短会导致预热后很快冷击穿（大盘期可达数十秒）
+FINA_ARTURN_TABLE_CACHE_TTL = float(os.getenv('FINA_ARTURN_TABLE_CACHE_TTL', '1800'))
 # 最多同时保留多少个「报告期」的整包 payload（每键一份全市场宽表 dict，与预热条数无必然相等；见下 FINA_ARTURN_WARMUP_*）
 # 粗算单期内存：行数约 4k～5.5k × 每行百级字段，Python 侧常落在约 10～50MB/期；50 键为上限非必占满，超出 LRU 淘汰最久未用
 FINA_ARTURN_TABLE_CACHE_MAX = 50
-# 启动后台预热：按 end_dates 顺序预取前 N 个报告期（与 MAX 独立；增大 N 会拉长启动阶段 DB 负载）
-FINA_ARTURN_WARMUP_PREFETCH_N = 3
+# 启动/保活预热：按 end_dates 顺序预取前 N 个报告期（与 MAX 独立；增大 N 会拉长启动阶段 DB 负载）
+FINA_ARTURN_WARMUP_PREFETCH_N = int(os.getenv('FINA_ARTURN_WARMUP_PREFETCH_N', '6'))
+# 周期保活：在 TTL 过期前重刷最近 N 期，避免切期冷建
+FINA_ARTURN_KEEPALIVE_INTERVAL_SEC = float(os.getenv('FINA_ARTURN_KEEPALIVE_INTERVAL_SEC', '600'))
+FINA_ARTURN_ATTACH_PARALLEL_WORKERS = max(
+    1, min(6, int(os.getenv('FINA_ARTURN_ATTACH_PARALLEL_WORKERS', '4')))
+)
+# 休市冻结：休市时段宽表过期也继续送旧值、不保活重算；=0 恢复「全天按 TTL 重算」旧行为
+FINA_ARTURN_OFFHOURS_FREEZE = os.getenv('FINA_ARTURN_OFFHOURS_FREEZE', '1') != '0'
+# 每段收盘后顺延多久仍按交易时段处理，保证收盘快照（rt_k 收盘价）能进宽表
+FINA_ARTURN_CLOSE_GRACE_SEC = float(os.getenv('FINA_ARTURN_CLOSE_GRACE_SEC', '300'))
+# 开盘首轮保活完成前为 True：期间过期缓存照送旧值，避免开盘请求冷建 20～55s
+_finaServeStaleUntilRefreshed = False
+# 宽表 HTTP 热路径：31MB jsonify + gzip 每次约 3～4s；预编码后复用 gzip 字节
+# 值为 (过期时间, (payload.last_update, gzip 字节))：同键宽表重建后 last_update 变化即重编码
+_fina_arturn_wire_cache: OrderedDict[tuple, tuple[float, tuple[str, bytes]]] = OrderedDict()
+
+
+def isFinaArturnMarketActive(now: datetime | None = None) -> bool:
+    """宽表是否按交易时段保活；关闭休市冻结时恒为 True（旧行为）。"""
+    if not FINA_ARTURN_OFFHOURS_FREEZE:
+        return True
+    return isAShareMarketActive(now, closeGraceSec=FINA_ARTURN_CLOSE_GRACE_SEC)
+
+
+def setFinaServeStaleUntilRefreshed(flag: bool) -> None:
+    global _finaServeStaleUntilRefreshed
+    _finaServeStaleUntilRefreshed = bool(flag)
+
+
+def _finaCacheGetAllowStale(cache_obj: OrderedDict, cache_key, now_ts: float):
+    """未过期直接返回；休市或开盘首轮保活未完成时，已过期条目也返回（不冷建）。"""
+    hit = _small_ttl_cache_get(cache_obj, cache_key, now_ts)
+    if hit is not None:
+        return hit
+    if not _finaServeStaleUntilRefreshed and isFinaArturnMarketActive():
+        return None
+    with _finaCacheLock:
+        entry = cache_obj.get(cache_key)
+    return entry[1] if entry is not None else None
+
+
+def expireFinaArturnTableCache() -> int:
+    """把宽表缓存全部标记过期（条目保留可作旧值送出），供收盘定格重建。"""
+    with _finaCacheLock:
+        for k, (_, v) in list(_fina_indicator_metric_table_cache.items()):
+            _fina_indicator_metric_table_cache[k] = (0.0, v)
+        return len(_fina_indicator_metric_table_cache)
+
+
+def _finaArturnJsonDefault(o: Any):
+    if isinstance(o, Decimal):
+        try:
+            return float(o)
+        except (TypeError, ValueError):
+            return str(o)
+    if isinstance(o, np.generic):
+        return o.item()
+    if isinstance(o, datetime):
+        return o.strftime('%Y-%m-%d %H:%M:%S')
+    if isinstance(o, date):
+        return o.isoformat()
+    if isinstance(o, (bytes, bytearray)):
+        return o.decode('utf-8', errors='replace')
+    return str(o)
+
+
+def _finaArturnWireCacheKey(payload: dict) -> tuple:
+    ed = str(payload.get('selected_end_date') or '')
+    dv = str(payload.get('data_version') or '')
+    hint = str(payload.get('hint') or '')
+    ends = payload.get('end_dates') or []
+    endFp = ','.join(str(x) for x in ends[:12])
+    return ('arturn_wire_gz', ed, dv, endFp, hint)
+
+
+_finaArturnWireLocksGate = threading.Lock()
+_finaArturnWireLocks: dict[tuple, threading.Lock] = {}
+
+
+def _finaArturnWireLock(key: tuple) -> threading.Lock:
+    with _finaArturnWireLocksGate:
+        lock = _finaArturnWireLocks.get(key)
+        if lock is None:
+            if len(_finaArturnWireLocks) > 4 * FINA_ARTURN_TABLE_CACHE_MAX:
+                _finaArturnWireLocks.clear()
+            lock = _finaArturnWireLocks[key] = threading.Lock()
+        return lock
+
+
+def ensureFinaArturnWireGzip(payload: dict) -> bytes | None:
+    """把宽表 payload 编成 gzip JSON，同口径只编一次（按口径加锁：并发首请求/预热不重复编码约 1.5s）。"""
+    if not payload or payload.get('error'):
+        return None
+    key = _finaArturnWireCacheKey(payload)
+    stamp = str(payload.get('last_update') or '')
+    hit = _finaCacheGetAllowStale(_fina_arturn_wire_cache, key, time.time())
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    with _finaArturnWireLock(key):
+        hit = _finaCacheGetAllowStale(_fina_arturn_wire_cache, key, time.time())
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+        return _finaArturnEncodeWire(payload, key, stamp)
+
+
+def _finaArturnEncodeWire(payload: dict, key: tuple, stamp: str) -> bytes:
+    t0 = time.perf_counter()
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(',', ':'),
+        default=_finaArturnJsonDefault,
+        allow_nan=True,
+    ).encode('utf-8')
+    gz = gzip.compress(raw, compresslevel=6)
+    _small_ttl_cache_put(
+        _fina_arturn_wire_cache,
+        key,
+        (stamp, gz),
+        FINA_ARTURN_TABLE_CACHE_TTL,
+        FINA_ARTURN_TABLE_CACHE_MAX,
+    )
+    logger.info(
+        'fina_arturn wire gzip encoded end=%s rows=%s raw=%d gz=%d elapsed=%.3fs',
+        payload.get('selected_end_date'),
+        len(payload.get('rows') or []),
+        len(raw),
+        len(gz),
+        time.perf_counter() - t0,
+    )
+    return gz
 _fina_indicator_metric_table_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
+# 同报告期冷建去重：多请求并发只跑一次重查询
+_finaArturnBuildGate = threading.Lock()
+_finaArturnBuildWaiters: dict[str, threading.Event] = {}
+_finaArturnBuildCount = 0
+_FINA_ARTURN_BUILD_WAIT_TIMEOUT_SEC = 300.0
+
+
+def isFinaArturnBuilding() -> bool:
+    """保活/冷建宽表期间为 True，热路径可改送过期缓存避免抢库。"""
+    with _finaArturnBuildGate:
+        return _finaArturnBuildCount > 0
+
+
+def _fina_arturn_table_cache_key(end_date: str) -> tuple:
+    return ('arturn_days', str(end_date or '').strip(), 'sb_act_12')
+
+
+def getOrBuildFinaArturnTable(end_date: str, allowStale: bool = True) -> dict:
+    """取报告期宽表：命中缓存直接返回；未命中时同 end_date 并发请求合并为一次建表。
+
+    allowStale：HTTP 路径为 True（休市/开盘首轮保活前送旧值）；保活重建传 False。
+    """
+    global _finaArturnBuildCount
+    ed = str(end_date or '').strip()
+    if not ed:
+        return {'rows': [], 'periods': [], 'contract_periods': [], 'error': '缺少 end_date'}
+    cacheKey = _fina_arturn_table_cache_key(ed)
+    cacheGet = _finaCacheGetAllowStale if allowStale else _small_ttl_cache_get
+    nowTs = time.time()
+    hit = cacheGet(_fina_indicator_metric_table_cache, cacheKey, nowTs)
+    if hit is not None:
+        return hit
+
+    waitEvent: threading.Event | None = None
+    isBuilder = False
+    with _finaArturnBuildGate:
+        hit = cacheGet(
+            _fina_indicator_metric_table_cache, cacheKey, time.time()
+        )
+        if hit is not None:
+            return hit
+        existing = _finaArturnBuildWaiters.get(ed)
+        if existing is not None:
+            waitEvent = existing
+        else:
+            waitEvent = threading.Event()
+            _finaArturnBuildWaiters[ed] = waitEvent
+            isBuilder = True
+
+    if not isBuilder:
+        waitEvent.wait(timeout=_FINA_ARTURN_BUILD_WAIT_TIMEOUT_SEC)
+        hit2 = _small_ttl_cache_get(
+            _fina_indicator_metric_table_cache, cacheKey, time.time()
+        )
+        if hit2 is not None:
+            return hit2
+        return {
+            'rows': [],
+            'periods': [],
+            'contract_periods': [],
+            'error': f'等待报告期 {ed} 建表超时或失败',
+        }
+
+    with _finaArturnBuildGate:
+        _finaArturnBuildCount += 1
+    try:
+        payload = _query_fina_arturn_table(ed)
+        if payload and not payload.get('error'):
+            _small_ttl_cache_put(
+                _fina_indicator_metric_table_cache,
+                cacheKey,
+                payload,
+                FINA_ARTURN_TABLE_CACHE_TTL,
+                FINA_ARTURN_TABLE_CACHE_MAX,
+            )
+        return payload
+    finally:
+        with _finaArturnBuildGate:
+            _finaArturnBuildCount = max(0, _finaArturnBuildCount - 1)
+            ev = _finaArturnBuildWaiters.pop(ed, None)
+            if ev is not None:
+                ev.set()
+
+
+def _fina_arturn_build_data_version(selected_end_date: str, row_count: int) -> str:
+    """同报告期+行数+口径标识；前端用于跳过全量 DOM 重建。"""
+    return f'{selected_end_date}|sb_act_12|{row_count}'
+
+
+def _fina_arturn_parallel_attaches(
+    specs: list[tuple[str, Any, tuple, dict]],
+    *,
+    max_workers: int | None = None,
+) -> list[tuple[str, float]]:
+    """并行执行需独立 MySQL 连接的 attach；每个 fn 首参为 conn。"""
+    if not specs:
+        return []
+    workers = max_workers if max_workers is not None else FINA_ARTURN_ATTACH_PARALLEL_WORKERS
+
+    def _run_one(item: tuple[str, Any, tuple, dict]) -> tuple[str, float]:
+        label, fn, args, kwargs = item
+        t0 = time.perf_counter()
+        c = pymysql.connect(**DB_CONFIG_TUSHARE)
+        try:
+            fn(c, *args, **kwargs)
+        finally:
+            c.close()
+        return label, time.perf_counter() - t0
+
+    if len(specs) == 1:
+        return [_run_one(specs[0])]
+
+    out: list[tuple[str, float]] = []
+    pool_workers = min(workers, len(specs))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
+        futs = [pool.submit(_run_one, s) for s in specs]
+        for fut in concurrent.futures.as_completed(futs):
+            out.append(fut.result())
+    return out
 
 def _derive_financial_periods(base_end_date: str) -> list[str]:
     """按需求生成当期+前三年：当期保留，历史三期固定为 YYYY1231。"""
@@ -987,12 +1241,17 @@ _TOP10_HOLDERS_TOP3_SQL_WITH_CHANGE = (
     'FROM ranked WHERE rk <= 3 '
     'ORDER BY ts_code, rk'
 )
-# 全市场约 5.4k 码：单次 IN 查询约 2.7s（2026-06-17 本机）；原 chunk=450 串行约 14s
+# 全市场约 5.4k 码：有 idx_top10_holders_ts_end_date 时单次 IN 约 0.35–0.5s（2026-06-18 本机）
 FINA_TOP10_HOLDERS_SINGLE_QUERY_MAX = int(os.getenv('FINA_TOP10_HOLDERS_SINGLE_QUERY_MAX', '8000'))
 FINA_TOP10_HOLDERS_CHUNK_SIZE = int(os.getenv('FINA_TOP10_HOLDERS_CHUNK_SIZE', '2000'))
 FINA_TOP10_HOLDERS_PARALLEL_WORKERS = max(
     1, min(4, int(os.getenv('FINA_TOP10_HOLDERS_PARALLEL_WORKERS', '4')))
 )
+# 全市场批量 top3 映射进程内缓存（与 arturn 表 TTL 对齐；预热多期时复用同一份 map）
+FINA_TOP10_HOLDERS_MAP_CACHE_TTL = float(os.getenv('FINA_TOP10_HOLDERS_MAP_CACHE_TTL', '300'))
+FINA_TOP10_HOLDERS_BULK_CACHE_MIN = int(os.getenv('FINA_TOP10_HOLDERS_BULK_CACHE_MIN', '4000'))
+FINA_TOP10_HOLDERS_MAP_CACHE_MAX = 2
+_top10_holders_top3_map_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
 
 
 def _group_top10_holders_top3_rows(raw_rows: list, hasHoldChange: bool = False) -> dict[str, list]:
@@ -1036,17 +1295,33 @@ def _fetch_top10_holders_top3_map(codes: list[str], conn=None) -> dict[str, list
         if ownProbe:
             probeConn.close()
 
+    bulkCache = len(codes) >= FINA_TOP10_HOLDERS_BULK_CACHE_MIN
+    cacheKey = ('top10_top3_bulk', hasHoldChange) if bulkCache else None
+    if cacheKey is not None:
+        cached = _small_ttl_cache_get(_top10_holders_top3_map_cache, cacheKey, time.time())
+        if cached is not None:
+            return cached
+
     if len(codes) <= FINA_TOP10_HOLDERS_SINGLE_QUERY_MAX:
         ownConn = conn is None
         dbConn = conn if conn is not None else pymysql.connect(**DB_CONFIG_TUSHARE)
         try:
-            return _group_top10_holders_top3_rows(
+            by_code = _group_top10_holders_top3_rows(
                 _fetch_top10_holders_top3_sql(codes, dbConn, hasHoldChange),
                 hasHoldChange,
             )
         finally:
             if ownConn:
                 dbConn.close()
+        if cacheKey is not None:
+            _small_ttl_cache_put(
+                _top10_holders_top3_map_cache,
+                cacheKey,
+                by_code,
+                FINA_TOP10_HOLDERS_MAP_CACHE_TTL,
+                FINA_TOP10_HOLDERS_MAP_CACHE_MAX,
+            )
+        return by_code
 
     chunks = [
         codes[i : i + FINA_TOP10_HOLDERS_CHUNK_SIZE]
@@ -1068,6 +1343,14 @@ def _fetch_top10_holders_top3_map(codes: list[str], conn=None) -> dict[str, list
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
         for partial in ex.map(_fetchChunk, chunks):
             by_code.update(partial)
+    if cacheKey is not None:
+        _small_ttl_cache_put(
+            _top10_holders_top3_map_cache,
+            cacheKey,
+            by_code,
+            FINA_TOP10_HOLDERS_MAP_CACHE_TTL,
+            FINA_TOP10_HOLDERS_MAP_CACHE_MAX,
+        )
     return by_code
 
 
@@ -1764,6 +2047,605 @@ def _fina_arturn_attach_fqm_debt_ratios(rows: list[dict], conn, selected_end_dat
                 pass
 
 
+def _fina_arturn_attach_qfq_close_break_first_mode(
+    conn,
+    rows: list[dict],
+    *,
+    break_mode: str,
+    key_prefix: str,
+) -> None:
+    """就地写入 stk_qfq_close_break 首次突破（timing=first）。"""
+    field_suffixes = (
+        'break_date',
+        'break_free_mv_yi',
+        'prior_max_throwback_5d',
+        'post5_ret_pct',
+        'post10_ret_pct',
+        'post20_ret_pct',
+        'post60_ret_pct',
+        'peak_age_days',
+        'prior_max_qfq',
+        'gap_to_peak_pct',
+        'break_pct',
+        'upper_shadow_pct',
+        'pct_chg',
+        'vol_ratio20',
+        'ff_tn5_60_ratio',
+        'pre5_ret_pct',
+        'pre120_ret_pct',
+        'pre120_range_pct',
+        'ma120_bias_pct',
+        'avg_amt_5_yi',
+        'avg_amt_20_yi',
+        'avg_amt_60_yi',
+        'ff_tn5_pct',
+        'ff_tn20_pct',
+        'ff_tn60_pct',
+        'pre120_up7_cnt',
+        'pre120_dn7_cnt',
+    )
+    null_keys = tuple(f'{key_prefix}_{s}' for s in field_suffixes)
+    for row in rows:
+        for k in null_keys:
+            row[k] = None
+    if not rows:
+        return
+    try:
+        if not _tushare_column_exists(conn, 'stk_qfq_close_break', 'ts_code'):
+            return
+    except Exception:
+        return
+
+    codes_uniq: list[str] = []
+    seen: set[str] = set()
+    for r in rows:
+        tc = str(r.get('ts_code') or '').strip()
+        if tc and tc not in seen:
+            seen.add(tc)
+            codes_uniq.append(tc)
+    if not codes_uniq:
+        return
+
+    def _date_iso(v: object) -> str:
+        if v is None:
+            return ''
+        if hasattr(v, 'strftime'):
+            try:
+                return v.strftime('%Y-%m-%d')
+            except Exception:
+                return str(v)[:10]
+        s = str(v).strip()
+        return s[:10] if len(s) >= 10 else s
+
+    def _to_float(v: object) -> float | None:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _to_int(v: object) -> int | None:
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    hasSignalMetrics = _tushare_column_exists(conn, 'stk_qfq_close_break', 'peak_age_days')
+    hasFfTn560 = _tushare_column_exists(conn, 'stk_qfq_close_break', 'ff_turnover_5_60_ratio')
+    hasAmt60 = _tushare_column_exists(conn, 'stk_qfq_close_break', 'avg_amt_60_yi')
+    hasFf60 = _tushare_column_exists(conn, 'stk_qfq_close_break', 'avg_ff_turnover_60_pct')
+    hasPre120ExtremeCnt = _tushare_column_exists(conn, 'stk_qfq_close_break', 'pre120_up7_cnt')
+    hasPostRet = _tushare_column_exists(conn, 'stk_qfq_close_break', 'post5_ret_pct')
+    hasBreakFreeMv = _tushare_column_exists(conn, 'stk_qfq_close_break', 'break_free_mv_yi')
+    hasPriorMaxTb5 = _tushare_column_exists(conn, 'stk_qfq_close_break', 'prior_max_throwback_5d')
+    hasGapToPeak = _tushare_column_exists(conn, 'stk_qfq_close_break', 'gap_to_peak_pct')
+    select_cols = ['ts_code', 'break_date']
+    if hasBreakFreeMv:
+        select_cols.append('break_free_mv_yi')
+    if hasPriorMaxTb5:
+        select_cols.append('prior_max_throwback_5d')
+    if hasPostRet:
+        select_cols.extend(['post5_ret_pct', 'post10_ret_pct', 'post20_ret_pct', 'post60_ret_pct'])
+    if hasSignalMetrics:
+        select_cols.extend([
+            'peak_age_days',
+            'prior_max_qfq',
+        ])
+        if hasGapToPeak:
+            select_cols.append('gap_to_peak_pct')
+        select_cols.extend([
+            'break_pct',
+            'upper_shadow_pct',
+            'pct_chg',
+        ])
+    select_cols.append('vol_ratio20')
+    if hasFfTn560:
+        select_cols.append('ff_turnover_5_60_ratio')
+    select_cols.extend([
+        'pre5_ret_pct',
+        'pre120_ret_pct',
+    ])
+    if hasSignalMetrics:
+        select_cols.extend(['pre120_range_pct', 'ma120_bias_pct'])
+    select_cols.extend([
+        'avg_amt_5_yi',
+        'avg_amt_20_yi',
+    ])
+    if hasAmt60:
+        select_cols.append('avg_amt_60_yi')
+    select_cols.extend(['avg_ff_turnover_5_pct', 'avg_ff_turnover_20_pct'])
+    if hasFf60:
+        select_cols.append('avg_ff_turnover_60_pct')
+    if hasPre120ExtremeCnt:
+        select_cols.extend(['pre120_up7_cnt', 'pre120_dn7_cnt'])
+    col_to_row_key: dict[str, str] = {
+        'break_date': f'{key_prefix}_break_date',
+        'break_free_mv_yi': f'{key_prefix}_break_free_mv_yi',
+        'prior_max_throwback_5d': f'{key_prefix}_prior_max_throwback_5d',
+        'post5_ret_pct': f'{key_prefix}_post5_ret_pct',
+        'post10_ret_pct': f'{key_prefix}_post10_ret_pct',
+        'post20_ret_pct': f'{key_prefix}_post20_ret_pct',
+        'post60_ret_pct': f'{key_prefix}_post60_ret_pct',
+        'peak_age_days': f'{key_prefix}_peak_age_days',
+        'prior_max_qfq': f'{key_prefix}_prior_max_qfq',
+        'gap_to_peak_pct': f'{key_prefix}_gap_to_peak_pct',
+        'break_pct': f'{key_prefix}_break_pct',
+        'upper_shadow_pct': f'{key_prefix}_upper_shadow_pct',
+        'pct_chg': f'{key_prefix}_pct_chg',
+        'vol_ratio20': f'{key_prefix}_vol_ratio20',
+        'ff_turnover_5_60_ratio': f'{key_prefix}_ff_tn5_60_ratio',
+        'pre5_ret_pct': f'{key_prefix}_pre5_ret_pct',
+        'pre120_ret_pct': f'{key_prefix}_pre120_ret_pct',
+        'pre120_range_pct': f'{key_prefix}_pre120_range_pct',
+        'ma120_bias_pct': f'{key_prefix}_ma120_bias_pct',
+        'avg_amt_5_yi': f'{key_prefix}_avg_amt_5_yi',
+        'avg_amt_20_yi': f'{key_prefix}_avg_amt_20_yi',
+        'avg_amt_60_yi': f'{key_prefix}_avg_amt_60_yi',
+        'avg_ff_turnover_5_pct': f'{key_prefix}_ff_tn5_pct',
+        'avg_ff_turnover_20_pct': f'{key_prefix}_ff_tn20_pct',
+        'avg_ff_turnover_60_pct': f'{key_prefix}_ff_tn60_pct',
+        'pre120_up7_cnt': f'{key_prefix}_pre120_up7_cnt',
+        'pre120_dn7_cnt': f'{key_prefix}_pre120_dn7_cnt',
+    }
+    by_code: dict[str, tuple] = {}
+    chunk = 480
+    sql = (
+        'SELECT ' + ', '.join(select_cols)
+        + ' FROM stk_qfq_close_break '
+        "WHERE break_mode = %s AND timing = 'first' AND ts_code IN ({ph})"
+    )
+    try:
+        with conn.cursor() as cur:
+            for i in range(0, len(codes_uniq), chunk):
+                part = codes_uniq[i : i + chunk]
+                ph = ', '.join(['%s'] * len(part))
+                cur.execute(sql.format(ph=ph), [break_mode, *part])
+                for raw in cur.fetchall() or []:
+                    if not raw or len(raw) < 1:
+                        continue
+                    tc = str(raw[0] or '').strip()
+                    if tc:
+                        by_code[tc] = raw
+    except Exception as e:
+        logger.warning(
+            'fina_arturn attach stk_qfq_close_break %s/first 跳过: %s',
+            break_mode,
+            e,
+        )
+        return
+
+    for row in rows:
+        tc = str(row.get('ts_code') or '').strip()
+        raw = by_code.get(tc)
+        if not raw:
+            continue
+        for col_name in select_cols[1:]:
+            row_key = col_to_row_key.get(col_name)
+            if not row_key:
+                continue
+            col_idx = select_cols.index(col_name)
+            val = raw[col_idx] if len(raw) > col_idx else None
+            if col_name == 'break_date':
+                row[row_key] = _date_iso(val)
+            elif col_name in ('pre120_up7_cnt', 'pre120_dn7_cnt', 'peak_age_days', 'prior_max_throwback_5d'):
+                row[row_key] = _to_int(val)
+            else:
+                row[row_key] = _to_float(val)
+
+
+def _fina_arturn_attach_last_break_flag(
+    conn,
+    rows: list[dict],
+    break_mode: str,
+    high_key: str,
+    peak_age_key: str,
+) -> None:
+    """就地写入 last_*_high / last_*_peak_age_days：指定 break_mode 的 last 最新 break_date 行。"""
+    for row in rows:
+        row[high_key] = 0
+        row[peak_age_key] = None
+    if not rows:
+        return
+    try:
+        if not _tushare_column_exists(conn, 'stk_qfq_close_break', 'ts_code'):
+            return
+    except Exception:
+        return
+
+    def _to_int(v: object) -> int | None:
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT MAX(break_date)
+                FROM stk_qfq_close_break
+                WHERE break_mode = %s AND timing = 'last'
+                """,
+                (break_mode,),
+            )
+            mx_row = cur.fetchone()
+            anchor = mx_row[0] if mx_row else None
+            if anchor is None:
+                return
+            cur.execute(
+                """
+                SELECT ts_code, has_break, peak_age_days
+                FROM stk_qfq_close_break
+                WHERE break_mode = %s
+                  AND timing = 'last'
+                  AND break_date = %s
+                """,
+                (break_mode, anchor),
+            )
+            by_code: dict[str, tuple] = {}
+            for r in cur.fetchall() or []:
+                if not r or not r[0]:
+                    continue
+                by_code[str(r[0]).strip()] = r
+        for row in rows:
+            tc = str(row.get('ts_code') or '').strip()
+            if not tc:
+                continue
+            hit = by_code.get(tc)
+            if not hit:
+                continue
+            if int(hit[1] or 0) == 1:
+                row[high_key] = 1
+            row[peak_age_key] = _to_int(hit[2])
+    except Exception as e:
+        logger.warning('fina_arturn attach %s 跳过: %s', high_key, e)
+
+
+def _fina_arturn_attach_last_his_high_flag(conn, rows: list[dict]) -> None:
+    """就地写入 last_his_high / last_his_peak_age_days：his/last 最新 break_date 行。"""
+    _fina_arturn_attach_last_break_flag(
+        conn, rows, 'his', 'last_his_high', 'last_his_peak_age_days',
+    )
+
+
+def _fina_arturn_attach_last_850_high_flag(conn, rows: list[dict]) -> None:
+    """就地写入 last_850_high / last_850_peak_age_days：850/last 最新 break_date 行。"""
+    _fina_arturn_attach_last_break_flag(
+        conn, rows, '850', 'last_850_high', 'last_850_peak_age_days',
+    )
+
+
+def _fina_arturn_attach_qfq_close_break_first_his(conn, rows: list[dict]) -> None:
+    """就地写入 stk_qfq_close_break 历史首次突破（break_mode=his, timing=first）。"""
+    _fina_arturn_attach_qfq_close_break_first_mode(
+        conn, rows, break_mode='his', key_prefix='first_his',
+    )
+
+
+def _fina_arturn_attach_qfq_close_break_first_850(conn, rows: list[dict]) -> None:
+    """就地写入 stk_qfq_close_break 850 首次突破（break_mode=850, timing=first）。"""
+    _fina_arturn_attach_qfq_close_break_first_mode(
+        conn, rows, break_mode='850', key_prefix='first_850',
+    )
+
+
+# 「当前价位置」分母列 → (row key, 口径)；顺序即前端列序（先三档最高、再三档最低）
+# 口径 pct = (当前价/极值−1)×100；mult = 当前价/极值（倍数）。
+# 历史最低走 mult：前复权历史低点对老股票是上市初期几毛钱，百分比会到数万（如 36824%），倍数（369x）才可读。
+FINA_PRICE_RANGE_SPECS: tuple[tuple[str, str, str], ...] = (
+    ('h_high', 'pct_vs_h_high', 'pct'),
+    ('high_850', 'pct_vs_high_850', 'pct'),
+    ('high_250', 'pct_vs_high_250', 'pct'),
+    ('h_low', 'mult_vs_h_low', 'mult'),
+    ('low_850', 'pct_vs_low_850', 'pct'),
+    ('low_250', 'pct_vs_low_250', 'pct'),
+)
+_STK_FACTOR_MA_MAX_D_CACHE: dict = {}
+_STK_FACTOR_MA_MAX_D_TTL = 60.0
+
+
+def _fina_arturn_sfp_max_trade_date(conn):
+    """stk_factor_pro 最新交易日（60s TTL）。该表有 trade_date 前导索引，MAX 走索引近乎零成本。"""
+    import time as _t
+    now = _t.monotonic()
+    hit = _STK_FACTOR_PRO_MAX_D_CACHE.get('max_d')
+    if hit and (now - hit[0]) < _STK_FACTOR_PRO_MAX_D_TTL:
+        return hit[1]
+    max_d = None
+    with conn.cursor() as cur:
+        cur.execute('SELECT MAX(trade_date) FROM stk_factor_pro')
+        mx = cur.fetchone()
+        if mx and mx[0] is not None:
+            max_d = mx[0]
+    if max_d is not None:
+        _STK_FACTOR_PRO_MAX_D_CACHE['max_d'] = (now, max_d)
+    return max_d
+
+
+def _fina_arturn_ma_max_trade_date(conn):
+    """stk_factor_ma 最新交易日（60s TTL）。仅在 ma 落后于 pro（maema 未跑完）时才调用：
+    该表主键为 (ts_code, trade_date)，无 trade_date 前导索引，MAX 需全索引扫描（实测 ~1.8s）。"""
+    import time as _t
+    now = _t.monotonic()
+    hit = _STK_FACTOR_MA_MAX_D_CACHE.get('max_d')
+    if hit and (now - hit[0]) < _STK_FACTOR_MA_MAX_D_TTL:
+        return hit[1]
+    max_d = None
+    with conn.cursor() as cur:
+        cur.execute('SELECT MAX(trade_date) FROM stk_factor_ma')
+        mx = cur.fetchone()
+        if mx and mx[0] is not None:
+            max_d = mx[0]
+    if max_d is not None:
+        _STK_FACTOR_MA_MAX_D_CACHE['max_d'] = (now, max_d)
+    return max_d
+
+
+def _fina_arturn_fetch_price_range_rows(conn, ts_codes: list[str], anchor) -> list:
+    """按锚定交易日取 stk_factor_ma 极值 + stock_wind.rt_k 当前价。
+
+    必须带 ts_code IN：stk_factor_ma 主键 (ts_code, trade_date)，带 IN 走主键（实测 5528 只 0.085s）；
+    若退化为仅按 trade_date 过滤会走 skip scan 扫 187 万行（实测 43.9s）。
+    DATE(trade_time) >= anchor 剔除 rt_k 里退市/长停标的的陈旧快照，避免算出虚假暴跌。
+    """
+    ph = ','.join(['%s'] * len(ts_codes))
+    sql = (
+        'SELECT m.ts_code, k.close, '
+        'm.h_high, m.high_850, m.high_250, m.h_low, m.low_850, m.low_250 '
+        'FROM stk_factor_ma m '
+        'JOIN stock_wind.rt_k k ON k.ts_code = m.ts_code '
+        'WHERE m.trade_date = %s AND DATE(k.trade_time) >= %s '
+        f'AND m.ts_code IN ({ph})'
+    )
+    with conn.cursor() as cur:
+        cur.execute(sql, [anchor, anchor, *ts_codes])
+        return list(cur.fetchall() or [])
+
+
+def _fina_arturn_attach_price_range_pct(conn, rows: list[dict]) -> None:
+    """就地写入 cur_price 与 6 个「当前价距各档高低点%/倍数」列。
+
+    分子：stock_wind.rt_k.close（未复权实时价；盘中为实时、盘后即当日收盘）。
+    分母：stk_factor_ma 锚定日的 h_high/high_850/high_250/h_low/low_850/low_250
+      （前复权盘中极值；250/850 为最近 N 条 rolling，非日历窗）。
+    同基准：ma 的 qfq 以该表最新交易日为锚，该日 close_qfq == 未复权 close，故 rt_k.close
+      可直接与极值相除，勿再乘 close_qfq/pre_close（那会把「当日涨幅」误算进距高点%）。
+    """
+    for row in rows:
+        row['cur_price'] = None
+        for _, key, _mode in FINA_PRICE_RANGE_SPECS:
+            row[key] = None
+    if not rows:
+        return
+    ts_codes = list({str(r['ts_code']).strip() for r in rows if r.get('ts_code')})
+    if not ts_codes:
+        return
+    try:
+        if not _tushare_column_exists(conn, 'stk_factor_ma', 'h_high'):
+            return
+    except Exception:
+        return
+    try:
+        anchor = _fina_arturn_sfp_max_trade_date(conn)
+        if anchor is None:
+            return
+        ma_rows = _fina_arturn_fetch_price_range_rows(conn, ts_codes, anchor)
+        if not ma_rows:
+            # ma 落后于 pro（maema 当日未跑完）：回退到 ma 自身最新日，避免整组列静默全空
+            fallback = _fina_arturn_ma_max_trade_date(conn)
+            if fallback is None or fallback == anchor:
+                return
+            logger.warning(
+                'fina_arturn price_range: stk_factor_ma 落后于 stk_factor_pro（%s < %s），回退至 ma 最新日',
+                fallback, anchor,
+            )
+            ma_rows = _fina_arturn_fetch_price_range_rows(conn, ts_codes, fallback)
+            if not ma_rows:
+                return
+
+        by_code: dict[str, tuple] = {}
+        for r in ma_rows:
+            if not r or not r[0]:
+                continue
+            by_code[str(r[0]).strip()] = r
+
+        for row in rows:
+            tc = str(row.get('ts_code') or '').strip()
+            hit = by_code.get(tc) if tc else None
+            if not hit:
+                continue
+            cur_close = toFloatOrNone(hit[1])
+            if cur_close is None or cur_close <= 0:
+                continue
+            row['cur_price'] = round(cur_close, 2)
+            for idx, (_, key, mode) in enumerate(FINA_PRICE_RANGE_SPECS):
+                denom = toFloatOrNone(hit[2 + idx])
+                if denom is None or denom <= 0:
+                    continue
+                if mode == 'mult':
+                    row[key] = round(cur_close / denom, 2)
+                else:
+                    row[key] = round((cur_close / denom - 1.0) * 100.0, 2)
+    except Exception as e:
+        logger.warning('fina_arturn attach price_range_pct 跳过: %s', e)
+
+
+def _fina_arturn_normalize_ann_date_ymd(raw) -> str | None:
+    """公告日规范为 YYYY-MM-DD；支持 YYYYMMDD / YYYY-MM-DD / date/datetime。"""
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.date().isoformat()
+    if isinstance(raw, date):
+        return raw.isoformat()
+    s = str(raw).strip()
+    if not s:
+        return None
+    digits = s.replace('-', '').replace('/', '')[:8]
+    if len(digits) != 8 or not digits.isdigit():
+        return None
+    return f'{digits[:4]}-{digits[4:6]}-{digits[6:8]}'
+
+
+def _fina_arturn_fetch_pre_ann_close_qfq(
+    conn, pairs: list[tuple[str, str]],
+) -> dict[tuple[str, str], float]:
+    """批量取 (ts_code, ann_ymd) → 公告日前最近交易日 close_qfq。
+
+    按公告日分组：同日股票共用一次窗口查询（ROW_NUMBER），避免 5500 次相关子查询。
+    先限定公告日前 FINA_PRE_ANN_WINDOW_DAYS 天（窗口内有行则最近一行必在窗口内，结果与无下限等价），
+    窗口内无行的少数股票（长停牌/公告早于上市）再无下限补查；无下限时每批需排序全历史约 300 万行。
+    """
+    out: dict[tuple[str, str], float] = {}
+    if not pairs:
+        return out
+    byAnn: dict[str, list[str]] = defaultdict(list)
+    for ts_code, annYmd in pairs:
+        byAnn[annYmd].append(ts_code)
+    with conn.cursor() as cur:
+        for annYmd, codes in byAnn.items():
+            uniq = list(dict.fromkeys(codes))
+            try:
+                lo = (date.fromisoformat(annYmd) - timedelta(days=FINA_PRE_ANN_WINDOW_DAYS)).isoformat()
+            except ValueError:
+                lo = None
+            _fina_arturn_pre_ann_close_qfq_chunks(cur, annYmd, uniq, lo, out)
+            if lo is None:
+                continue
+            rest = [c for c in uniq if (c, annYmd) not in out]
+            if rest:
+                _fina_arturn_pre_ann_close_qfq_chunks(cur, annYmd, rest, None, out)
+    return out
+
+
+FINA_PRE_ANN_WINDOW_DAYS = 60
+
+
+def _fina_arturn_pre_ann_close_qfq_chunks(
+    cur, annYmd: str, codes: list[str], lo: str | None, out: dict[tuple[str, str], float],
+) -> None:
+    """按 800 只一批取 trade_date < annYmd（且 >= lo，若给定）的最近一行 close_qfq，写入 out。"""
+    chunkSize = 800
+    loSql = ' AND trade_date >= %s' if lo else ''
+    for i in range(0, len(codes), chunkSize):
+        chunk = codes[i:i + chunkSize]
+        ph = ','.join(['%s'] * len(chunk))
+        sql = (
+            'SELECT ts_code, close_qfq FROM ('
+            '  SELECT ts_code, close_qfq,'
+            '    ROW_NUMBER() OVER (PARTITION BY ts_code ORDER BY trade_date DESC) AS rn'
+            '  FROM stk_factor_pro'
+            f'  WHERE trade_date < %s{loSql} AND close_qfq IS NOT NULL AND close_qfq > 0'
+            f'    AND ts_code IN ({ph})'
+            ') z WHERE rn = 1'
+        )
+        cur.execute(sql, [annYmd, *([lo] if lo else []), *chunk])
+        for r in cur.fetchall() or ():
+            if not r or not r[0]:
+                continue
+            cq = toFloatOrNone(r[1])
+            if cq is None or cq <= 0:
+                continue
+            out[(str(r[0]).strip(), annYmd)] = float(cq)
+
+
+def _fina_arturn_attach_pct_since_ann(conn, rows: list[dict]) -> None:
+    """就地写入 pct_since_ann：所选报告期主行公告日 a0 前一交易日 close_qfq → rt_k 现价。
+
+    公式：(rt_k.close / close_qfq_pre_ann − 1)×100。
+    分子用未复权实时价；分母为前复权收盘。qfq 以最新交易日为锚时最新日 close_qfq==close，
+    故与现价同基准；切换报告期时 a0 变化，基数日随之变化。
+    """
+    for row in rows:
+        row['pct_since_ann'] = None
+    if not rows:
+        return
+    pairs: list[tuple[str, str]] = []
+    annByCode: dict[str, str] = {}
+    for row in rows:
+        tc = str(row.get('ts_code') or '').strip()
+        if not tc:
+            continue
+        annYmd = _fina_arturn_normalize_ann_date_ymd(row.get('a0'))
+        if not annYmd:
+            continue
+        annByCode[tc] = annYmd
+        pairs.append((tc, annYmd))
+    if not pairs:
+        return
+    try:
+        anchor = _fina_arturn_sfp_max_trade_date(conn)
+        if anchor is None:
+            return
+        codes = list(annByCode.keys())
+        # 现价：优先已由 price_range 写入的 cur_price；并行时可能尚未写入，再查 rt_k
+        curByCode: dict[str, float] = {}
+        for row in rows:
+            tc = str(row.get('ts_code') or '').strip()
+            if tc not in annByCode:
+                continue
+            cp = toFloatOrNone(row.get('cur_price'))
+            if cp is not None and cp > 0:
+                curByCode[tc] = float(cp)
+        missing = [c for c in codes if c not in curByCode]
+        if missing:
+            chunkSize = 800
+            with conn.cursor() as cur:
+                for i in range(0, len(missing), chunkSize):
+                    chunk = missing[i:i + chunkSize]
+                    ph = ','.join(['%s'] * len(chunk))
+                    sql = (
+                        'SELECT ts_code, close FROM stock_wind.rt_k '
+                        f'WHERE DATE(trade_time) >= %s AND ts_code IN ({ph})'
+                    )
+                    cur.execute(sql, [anchor, *chunk])
+                    for r in cur.fetchall() or ():
+                        if not r or not r[0]:
+                            continue
+                        cl = toFloatOrNone(r[1])
+                        if cl is None or cl <= 0:
+                            continue
+                        curByCode[str(r[0]).strip()] = float(cl)
+        baseMap = _fina_arturn_fetch_pre_ann_close_qfq(conn, pairs)
+        for row in rows:
+            tc = str(row.get('ts_code') or '').strip()
+            annYmd = annByCode.get(tc)
+            if not annYmd:
+                continue
+            cur = curByCode.get(tc)
+            base = baseMap.get((tc, annYmd))
+            if cur is None or base is None or base <= 0:
+                continue
+            row['pct_since_ann'] = round((cur / base - 1.0) * 100.0, 2)
+    except Exception as e:
+        logger.warning('fina_arturn attach pct_since_ann 跳过: %s', e)
+
+
 def _fina_arturn_collect_fi_main_candidates(
     conn,
     ts_codes: list[str] | None,
@@ -1778,7 +2660,7 @@ def _fina_arturn_collect_fi_main_candidates(
     ts_code 过滤（base 子查询尚未给出 ts_code 时的降级通道）。
 
     选行逻辑（对齐原 4 组 SQL 的 ORDER BY，以 _fina_pick_*_main 在 Python 侧实现）：
-      fi_turn：`WHERE fi.arturn_days IS NOT NULL` 先过滤，再按 update_flag='1' > report_type=1 > ann_date DESC
+      fi_turn：优先 `arturn_days IS NOT NULL`，否则回退全池（金融股 p 可空、roe 仍可取），再按 update_flag='1' > report_type=1 > ann_date DESC
       fi_gpm：`COALESCE(grossprofit_margin, q_gsprofit_margin) IS NOT NULL` 优先，再 update_flag ...
       fi_ocf_opincome：`ocf_to_opincome IS NOT NULL` 优先，再 update_flag ...
       fi_ocf_or：`ocf_to_or IS NOT NULL` 优先，再 update_flag ...
@@ -2023,7 +2905,7 @@ def _fina_arturn_fast_path(
         "               fi.ann_date DESC"
         "           ) AS rn "
         "    FROM stock_tushare.fina_indicator fi "
-        "    WHERE fi.end_date = %s AND fi.arturn_days IS NOT NULL"
+        "    WHERE fi.end_date = %s"
         "  ) x "
         "  WHERE x.rn = 1"
         ") base "
@@ -2063,7 +2945,7 @@ def _fina_arturn_fast_path(
         cur.execute(base_sql, base_params)
         raw = cur.fetchall() or []
     if not raw:
-        # 当期 arturn_days 全空或 rt_k 为空：走"空结果"分支，不视为失败
+        # 当期 fina_indicator 全空或 rt_k 为空：走"空结果"分支，不视为失败
         return []
     rows: list[dict] = []
     for r in raw:
@@ -2133,7 +3015,7 @@ def _fina_arturn_fast_path(
         # balancesheet 表里 9 期全空是极小概率事件；发生则外层降级
         raise RuntimeError('bs_candidates empty')
 
-    # ---- 填 fi_turn（a0 + roe0-3 + p0-3）：过滤 arturn_days IS NOT NULL，再 update_flag/rt/ann
+    # ---- 填 fi_turn（a0 + roe0-3 + p0-3）：优先 arturn 非空，否则仍取最优行填 roe/a0（p 可空）
     turn_pref = lambda d: 0  # noqa: E731 —— fi_turn 无业务列优先，纯看 update_flag/rt/ann
     # gpm：COALESCE 优先；ocf_opincome / ocf_or：各自列优先
     gpm_pref = lambda d: 0 if (  # noqa: E731
@@ -2149,9 +3031,12 @@ def _fina_arturn_fast_path(
             cs = fi_main.get((tc, pd_))
             if not cs:
                 continue
-            # fi_turn：需要 arturn_days 非空池
+            # fi_turn：优先 arturn_days 非空；金融股等无应收周转时回退全池（p 仍为空）
             pool_turn = [d for d in cs if d.get('arturn_days') is not None]
-            best_turn = _fina_pick_with_pref_fn(pool_turn, turn_pref, has_fi_rt)
+            best_turn = (
+                _fina_pick_with_pref_fn(pool_turn, turn_pref, has_fi_rt)
+                or _fina_pick_with_pref_fn(cs, turn_pref, has_fi_rt)
+            )
             if best_turn:
                 # 只在 periods[0]（当期）填 a0
                 if pd_ == p0_target:
@@ -3507,7 +4392,8 @@ def _query_arturn_end_dates(limit_n: int = 80) -> list[str]:
 def _query_fina_arturn_table(selected_end_date: str) -> dict:
     """ROE（扣非）+ 应收账款周转天数 + 毛利率 + 经营现金流 + 两项单季同比 + 合同负债 + 固定资产。
 
-    ROE/周转天：与 fi_turn 同源，仅 end_date 上 arturn_days 非空的版本行，同列带出 roe_dt。
+    入池：selected_end_date 上 fina_indicator 有行即可（不要求 arturn_days；银行等金融股可进表）。
+    ROE/周转天：与 fi_turn 同源；选行优先 arturn_days 非空，否则仍取最优版本行（周转天可空、ROE 仍可带出）。
     毛利率：独立选行，不要求 arturn_days；优先 COALESCE(grossprofit_margin, q_gsprofit_margin) 非空。
     经营现金流净额/经营活动净收益、经营现金流净额/营业收入：各自独立选行，优先对应字段非空；其中 ocf_to_or 四列不在 SQL 中预 ROUND，接口为库内小数×100、保留 2 位百分数。
     选行优先级（fina_indicator / balancesheet 一致）：update_flag=1 > report_type=1（合并报表）> ann_date 最新。
@@ -3651,7 +4537,7 @@ def _query_fina_arturn_table(selected_end_date: str) -> dict:
         "FROM ("
         "  SELECT DISTINCT x.ts_code "
         "  FROM ("
-        "    SELECT fi.ts_code, fi.end_date, fi.arturn_days, "
+        "    SELECT fi.ts_code, fi.end_date, "
         "           ROW_NUMBER() OVER ("
         "             PARTITION BY fi.ts_code, fi.end_date "
         "             ORDER BY "
@@ -3660,24 +4546,25 @@ def _query_fina_arturn_table(selected_end_date: str) -> dict:
         "               fi.ann_date DESC"
         "           ) AS rn "
         "    FROM stock_tushare.fina_indicator fi "
-        "    WHERE fi.end_date = %s AND fi.arturn_days IS NOT NULL"
+        "    WHERE fi.end_date = %s"
         "  ) x "
         "  WHERE x.rn = 1"
         ") base "
         "INNER JOIN (SELECT DISTINCT ts_code FROM stock_wind.rt_k) rt_k_codes ON rt_k_codes.ts_code = base.ts_code "
-        "INNER JOIN ("
+        "LEFT JOIN ("
         "  SELECT y.ts_code, y.end_date, y.ann_date, y.arturn_days, y.roe_dt "
         "  FROM ("
         "    SELECT fi.ts_code, fi.end_date, fi.ann_date, fi.arturn_days, fi.roe_dt, "
         "           ROW_NUMBER() OVER ("
         "             PARTITION BY fi.ts_code, fi.end_date "
         "             ORDER BY "
+        "               CASE WHEN fi.arturn_days IS NOT NULL THEN 0 ELSE 1 END, "
         "               CASE WHEN fi.update_flag = '1' THEN 0 ELSE 1 END, "
         + fi_rt15 +
         "               fi.ann_date DESC"
         "           ) AS rn "
         "    FROM stock_tushare.fina_indicator fi "
-        "    WHERE fi.end_date IN (%s, %s, %s, %s) AND fi.arturn_days IS NOT NULL"
+        "    WHERE fi.end_date IN (%s, %s, %s, %s)"
         "  ) y "
         "  WHERE y.rn = 1"
         ") fi_turn "
@@ -3788,7 +4675,7 @@ def _query_fina_arturn_table(selected_end_date: str) -> dict:
         "  WHERE x.rn = 1"
         ") sb ON sb.ts_code = base.ts_code "
         "GROUP BY base.ts_code, rt_name.name, rt_sw_map.sw_name "
-        "ORDER BY p0 ASC, base.ts_code ASC"
+        "ORDER BY (p0 IS NULL), p0 ASC, base.ts_code ASC"
     )
     params_list = [
         periods[0],
@@ -3938,81 +4825,157 @@ def _query_fina_arturn_table(selected_end_date: str) -> dict:
             has_q_dt_roe=has_q_dt_roe,
         ) or None
         _stage_times.append(('collect_fi_cands', time.perf_counter() - _t_stage))
+        _pa_workers = FINA_ARTURN_ATTACH_PARALLEL_WORKERS
+        # v 依赖行内 r/u（quarter_yoy），不可与 quarter_yoy 同批并行，否则易读到未写入的 None
+        _stage_times.extend(_fina_arturn_parallel_attaches([
+            (
+                'quarter_yoy',
+                _fina_arturn_attach_quarter_yoy,
+                (rows, contractPeriods, has_q_gr_yoy, has_q_op_yoy, has_fi_rt),
+                {'fi_cands': fi_cands},
+            ),
+            (
+                'quarter_revenue',
+                _fina_arturn_attach_quarter_revenue_yi,
+                (rows, contractPeriods, has_inc_rt),
+                {},
+            ),
+            (
+                'quarter_cashflow',
+                _fina_arturn_attach_quarter_cashflow_act_yi,
+                (rows, contractPeriods, has_n_cashflow_act, has_cf_rt),
+                {},
+            ),
+        ], max_workers=_pa_workers))
         _t_stage = time.perf_counter()
-        _fina_arturn_attach_quarter_yoy(
-            conn, rows, contractPeriods, has_q_gr_yoy, has_q_op_yoy, has_fi_rt, fi_cands=fi_cands
+        _fina_arturn_attach_quarter_op_yoy_excess_gr_yoy(
+            conn, rows, contractPeriods, has_inc_rt,
         )
-        _stage_times.append(('quarter_yoy', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_quarter_op_yoy_excess_gr_yoy(conn, rows, contractPeriods, has_inc_rt)
         _stage_times.append(('op_yoy_excess_gr', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_quarter_revenue_yi(conn, rows, contractPeriods, has_inc_rt)
-        _stage_times.append(('quarter_revenue', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_quarter_cashflow_act_yi(
-            conn, rows, contractPeriods, has_n_cashflow_act, has_cf_rt
-        )
-        _stage_times.append(('quarter_cashflow', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_q_opincome_yi(
-            conn, rows, contractPeriods, has_q_opincome, has_fi_rt, fi_cands=fi_cands
-        )
-        _stage_times.append(('q_opincome', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_q_dtprofit_yi(
-            conn, rows, contractPeriods, has_q_dtprofit, has_fi_rt, fi_cands=fi_cands
-        )
-        _stage_times.append(('q_dtprofit', time.perf_counter() - _t_stage))
+        _stage_times.extend(_fina_arturn_parallel_attaches([
+            (
+                'q_opincome',
+                _fina_arturn_attach_q_opincome_yi,
+                (rows, contractPeriods, has_q_opincome, has_fi_rt),
+                {'fi_cands': fi_cands},
+            ),
+            (
+                'q_dtprofit',
+                _fina_arturn_attach_q_dtprofit_yi,
+                (rows, contractPeriods, has_q_dtprofit, has_fi_rt),
+                {'fi_cands': fi_cands},
+            ),
+            (
+                'q_ocf_pct',
+                _fina_arturn_attach_quarter_q_ocf_pct,
+                (rows, contractPeriods, has_q_ocf_to_sales, has_q_ocf_to_or, has_fi_rt),
+                {'fi_cands': fi_cands},
+            ),
+            (
+                'quarter_margins',
+                _fina_arturn_attach_quarter_margins,
+                (rows, contractPeriods, has_q_gsprofit_margin, has_q_netprofit_margin, has_q_dt_roe, has_fi_rt),
+                {'fi_cands': fi_cands},
+            ),
+        ], max_workers=_pa_workers))
         _t_stage = time.perf_counter()
         if _tushare_column_exists(conn, 'fina_quarter_metrics', 'q_fcf_star'):
             _fina_arturn_attach_q_fcf_star_yi(conn, rows, contractPeriods)
         _stage_times.append(('q_fcf_star', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_quarter_q_ocf_pct(
-            conn, rows, contractPeriods, has_q_ocf_to_sales, has_q_ocf_to_or, has_fi_rt,
-            fi_cands=fi_cands,
-        )
-        _stage_times.append(('q_ocf_pct', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_quarter_margins(
-            conn, rows, contractPeriods, has_q_gsprofit_margin, has_q_netprofit_margin, has_q_dt_roe, has_fi_rt,
-            fi_cands=fi_cands,
-        )
-        _stage_times.append(('quarter_margins', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_ar_receivable_pct(conn, rows, periods[0])
-        _stage_times.append(('ar_receivable_pct', time.perf_counter() - _t_stage))
+        _stage_times.extend(_fina_arturn_parallel_attaches([
+            (
+                'ar_receivable_pct',
+                _fina_arturn_attach_ar_receivable_pct,
+                (rows, periods[0]),
+                {},
+            ),
+            (
+                'inventories',
+                _fina_arturn_attach_inventory_metrics,
+                (rows, contractPeriods, has_bs_rt),
+                {},
+            ),
+            (
+                'top10_holders_top3',
+                _fina_arturn_attach_top10_holders_top3,
+                (rows,),
+                {},
+            ),
+            (
+                'stk_holdernumber_q',
+                _fina_arturn_attach_stk_holdernumber_quarters,
+                (rows, contractPeriods),
+                {},
+            ),
+        ], max_workers=_pa_workers))
+        _stage_times.extend(_fina_arturn_parallel_attaches([
+            (
+                'last_his_high',
+                _fina_arturn_attach_last_his_high_flag,
+                (rows,),
+                {},
+            ),
+            (
+                'last_850_high',
+                _fina_arturn_attach_last_850_high_flag,
+                (rows,),
+                {},
+            ),
+            (
+                'qfq_close_break_first_his',
+                _fina_arturn_attach_qfq_close_break_first_his,
+                (rows,),
+                {},
+            ),
+            (
+                'qfq_close_break_first_850',
+                _fina_arturn_attach_qfq_close_break_first_850,
+                (rows,),
+                {},
+            ),
+            (
+                'price_range_pct',
+                _fina_arturn_attach_price_range_pct,
+                (rows,),
+                {},
+            ),
+            (
+                'pct_since_ann',
+                _fina_arturn_attach_pct_since_ann,
+                (rows,),
+                {},
+            ),
+            (
+                'stock_company_fields',
+                _fina_arturn_attach_stock_company_fields,
+                (rows,),
+                {},
+            ),
+            (
+                'stock_basic_act',
+                _fina_arturn_attach_stock_basic_act,
+                (rows,),
+                {},
+            ),
+            (
+                'fqm_debt_ratios',
+                lambda conn, r, anchor: _fina_arturn_attach_fqm_debt_ratios(r, conn, anchor),
+                (rows, periods[0]),
+                {},
+            ),
+        ], max_workers=_pa_workers))
         _t_stage = time.perf_counter()
         _fina_arturn_attach_stk_factor_mv_pe(rows, conn_ext=conn)
         _stage_times.append(('stk_factor_mv_pe', time.perf_counter() - _t_stage))
         _t_stage = time.perf_counter()
-        _fina_arturn_attach_free_float_ratio_pct(rows)
-        _stage_times.append(('free_float_ratio_pct', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
         _fina_arturn_attach_money_cap_ratio(rows, conn, periods[0])
         _stage_times.append(('money_cap_ratio', time.perf_counter() - _t_stage))
         _t_stage = time.perf_counter()
-        _fina_arturn_attach_fqm_debt_ratios(rows, conn, periods[0])
-        _stage_times.append(('fqm_debt_ratios', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_inventory_metrics(conn, rows, contractPeriods, has_bs_rt)
-        _stage_times.append(('inventories', time.perf_counter() - _t_stage))
+        _fina_arturn_attach_free_float_ratio_pct(rows)
+        _stage_times.append(('free_float_ratio_pct', time.perf_counter() - _t_stage))
         _t_stage = time.perf_counter()
         _fina_arturn_attach_contract_k_high(rows)
         _stage_times.append(('contract_k_high', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_stock_basic_act(conn, rows)
-        _stage_times.append(('stock_basic_act', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_stock_company_fields(conn, rows)
-        _stage_times.append(('stock_company_fields', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_top10_holders_top3(conn, rows)
-        _stage_times.append(('top10_holders_top3', time.perf_counter() - _t_stage))
-        _t_stage = time.perf_counter()
-        _fina_arturn_attach_stk_holdernumber_quarters(conn, rows, contractPeriods)
-        _stage_times.append(('stk_holdernumber_q', time.perf_counter() - _t_stage))
         _t_stage = time.perf_counter()
         _fina_arturn_attach_hn_qoq_low(rows)
         _stage_times.append(('hn_qoq_low', time.perf_counter() - _t_stage))
@@ -4034,11 +4997,13 @@ def _query_fina_arturn_table(selected_end_date: str) -> dict:
                 len(rows),
                 ' '.join(f'{name}={dt:.3f}s' for name, dt in _stage_times),
             )
+        dataVersion = _fina_arturn_build_data_version(selected_end_date, len(rows))
         return {
             'rows': rows,
             'periods': periods,
             'contract_periods': contractPeriods,
             'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'data_version': dataVersion,
         }
     except Exception as e:
         logger.exception("查询 fina 多财务指标表失败: %s", e)
@@ -4799,6 +5764,31 @@ def _fina_fixed_assets_modal_extra_metrics(conn, ts_code: str, anchor_yyyymmdd: 
     return out
 
 
+# fina_mainbz 分类汇总行：仅作占比分母，不进 Top3
+_MAINBZ_SUMMARY_ITEMS = frozenset({'产品', '行业', '地区'})
+_MAINBZ_SUMMARY_BY_TYPE = {'P': '产品', 'I': '行业', 'D': '地区'}
+# 已知结构父项种子（即使源侧暂时缺「父：子」子行也排除）
+_MAINBZ_STRUCTURAL_PARENT_ITEMS = frozenset({'持续经营业务', '终止经营业务', '终止经营'})
+# 粗口径占位名：仅当同批还有「非其他业务」实质分项时排除（杜绝只剩其他业务）
+_MAINBZ_COARSE_ITEMS = frozenset({'主营业务', '主营业务收入'})
+# 「其他/其它业务」残差分项：不能作为踢掉主营业务的理由，Top 排序也降权
+# 覆盖：其他业务、其他业务收入、其他收入、其他业务(行业) 等
+_MAINBZ_OTHER_BUSINESS_RE = re.compile(
+    r'^(其他|其它)(业务)?(收入)?$|'
+    r'^(其他|其它)业务(收入)?([（(]|$)|'
+    r'^(其他|其它)收入([（(]|$)'
+)
+# 层级分隔：仅全角/半角冒号，避免英文连字符误伤
+_MAINBZ_HIER_SEPS = ('：', ':')
+# 名称像合计/小计（非「合计特别调整」单独处理）
+_MAINBZ_AGG_NAME_RE = re.compile(
+    r'^(合计|总计|小计|汇总|全部|总额)$|'
+    r'.+(合计|小计|总计|汇总)$'
+)
+# 合并抵销/分部间抵销等，不进 Top3（可为负）
+_MAINBZ_ELIM_RE = re.compile(r'(抵销|抵消|分部间|内部抵|合并抵|板块间|版块间)')
+
+
 def _aggregate_fina_mainbz_by_item(parsed_rows: list[dict]) -> list[dict]:
     """同名 bz_item 多行时按收入/成本/利润分别求和，避免 item_metrics 后行覆盖前行且与 Top3 口径不一致。"""
     buckets: dict[str, dict] = {}
@@ -4821,60 +5811,458 @@ def _aggregate_fina_mainbz_by_item(parsed_rows: list[dict]) -> list[dict]:
     ]
 
 
+def _collect_mainbz_hierarchy_parents(names: list[str]) -> set[str]:
+    """智能识别层级父项：若存在以「父名：」开头的其它分项，则父名为结构合计行。"""
+    parents: set[str] = set(_MAINBZ_STRUCTURAL_PARENT_ITEMS)
+    uniq = [n for n in dict.fromkeys(names) if n]
+    for n in uniq:
+        for sep in _MAINBZ_HIER_SEPS:
+            pref = n + sep
+            if any(o != n and o.startswith(pref) and len(o) > len(pref) for o in uniq):
+                parents.add(n)
+                break
+    return parents
+
+
+def _strip_mainbz_hierarchy_prefix(
+    name: str,
+    parentNames: set[str] | None = None,
+) -> str:
+    """去掉「父：子」层级前缀（父名来自本批智能识别或种子表）。"""
+    s = str(name or '').strip()
+    if not s:
+        return ''
+    parents = parentNames if parentNames is not None else _MAINBZ_STRUCTURAL_PARENT_ITEMS
+    # 最长父名优先，避免短串误截
+    for parent in sorted(parents, key=len, reverse=True):
+        if not parent:
+            continue
+        for sep in _MAINBZ_HIER_SEPS:
+            pref = parent + sep
+            if s.startswith(pref) and len(s) > len(pref):
+                return s[len(pref):].strip()
+    return s
+
+
+def _mainbz_display_name_score(name: str, parentNames: set[str] | None = None) -> float:
+    """展示名优选：扁平短名优于「父：子」层级名，优于带(产品)/(行业)冗余后缀。"""
+    s = str(name or '').strip()
+    if not s:
+        return -1e9
+    score = 0.0
+    parents = parentNames if parentNames is not None else _MAINBZ_STRUCTURAL_PARENT_ITEMS
+    for sep in _MAINBZ_HIER_SEPS:
+        if sep in s:
+            left = s.split(sep, 1)[0].strip()
+            if left in parents or left in _MAINBZ_STRUCTURAL_PARENT_ITEMS:
+                score -= 20.0
+            else:
+                score -= 8.0
+            break
+    if re.search(r'[（(](产品|行业|地区)[）)]\s*$', s):
+        score -= 5.0
+    score -= len(s) * 0.01
+    return score
+
+
+def _normalize_mainbz_item_name(
+    name: str,
+    parentNames: set[str] | None = None,
+) -> str:
+    """近义比对用归一化：去层级前缀、括号说明、统一常见后缀/同义片段。"""
+    s = _strip_mainbz_hierarchy_prefix(name, parentNames)
+    if not s:
+        return ''
+    s = re.sub(r'[（(][^（）()]*[）)]', '', s)
+    s = s.replace('电力电子转换', '电力转换')
+    s = s.replace('建设开发', '开发').replace('投资开发', '开发')
+    for suf in ('主营业务', '收入', '业务', '行业', '地区'):
+        if len(s) > len(suf) and s.endswith(suf):
+            s = s[: -len(suf)]
+    return s.strip()
+
+
+def _is_mainbz_elim_item(item: str) -> bool:
+    """合并/分部间抵销类行。"""
+    return bool(item) and bool(_MAINBZ_ELIM_RE.search(item))
+
+
+def _is_mainbz_other_business_item(item: str) -> bool:
+    """其他/其它业务残差行（含其他业务收入/其他收入/(行业)后缀等）。"""
+    s = str(item or '').strip()
+    if not s:
+        return False
+    bare = re.sub(r'[（(][^（）()]*[）)]', '', s).strip()
+    if bare in (
+        '其他业务', '其它业务', '其他', '其它',
+        '其他业务收入', '其它业务收入', '其他收入', '其它收入',
+    ):
+        return True
+    return bool(_MAINBZ_OTHER_BUSINESS_RE.match(s) or _MAINBZ_OTHER_BUSINESS_RE.match(bare))
+
+
+def _is_mainbz_special_adjust_item(item: str) -> bool:
+    """合计特别调整等非业务分项。"""
+    s = str(item or '').strip()
+    return bool(s) and ('合计' in s and '调整' in s)
+
+
+def _unique_mainbz_sales_clusters(salesList: list[float], relTol: float = 0.02) -> list[float]:
+    """按金额去重簇：并行口径同额重复（32.5级水泥 vs 建材…-35级水泥）只计一次。"""
+    clusters: list[float] = []
+    for s in salesList:
+        if any(_mainbz_metric_close(s, c, relTol=relTol) for c in clusters):
+            continue
+        clusters.append(float(s))
+    return clusters
+
+
+def _is_mainbz_sum_of_siblings(item: str, row: dict, all_rows: list[dict]) -> bool:
+    """金额≈其余≥2个实质分项之和 → 无冒号的结构父项（如持续经营业务=化学+测试+生物）。"""
+    sales = row.get('bz_sales')
+    if sales is None or float(sales) <= 0:
+        return False
+    otherSales: list[float] = []
+    for r in all_rows:
+        name = str(r.get('bz_item') or '').strip()
+        if not name or name == item:
+            continue
+        if name in _MAINBZ_SUMMARY_ITEMS or _is_mainbz_elim_item(name):
+            continue
+        # 其他业务/特别调整是残差，不参与「是否为父项」的加总判定
+        if _is_mainbz_other_business_item(name) or _is_mainbz_special_adjust_item(name):
+            continue
+        s = r.get('bz_sales')
+        if s is None or float(s) <= 0:
+            continue
+        # 同额交替标签（新疆/疆内、居民生活用电/民用电工）不计入「子项」
+        if _mainbz_metric_close(sales, s, relTol=0.02):
+            continue
+        otherSales.append(float(s))
+    # 并行重复披露先按金额簇去重，避免虚高加总误杀最大主业
+    otherSales = _unique_mainbz_sales_clusters(otherSales, relTol=0.02)
+    if len(otherSales) < 2:
+        return False
+    return _mainbz_metric_close(float(sales), sum(otherSales), relTol=0.02)
+
+
+def _has_mainbz_other_material(
+    item: str,
+    row: dict,
+    all_rows: list[dict],
+) -> bool:
+    """同批是否存在可替代粗口径的实质分项。
+    排除：其他业务/收入、合计特别调整、合计类名、另一粗口径占位——避免主营被踢后只剩残差。"""
+    sales = row.get('bz_sales')
+    for r in all_rows:
+        name = str(r.get('bz_item') or '').strip()
+        if not name or name == item:
+            continue
+        if name in _MAINBZ_SUMMARY_ITEMS or _is_mainbz_elim_item(name):
+            continue
+        if _is_mainbz_other_business_item(name) or _is_mainbz_special_adjust_item(name):
+            continue
+        if _MAINBZ_AGG_NAME_RE.match(name):
+            continue
+        bare = re.sub(r'[（(][^（）()]*[）)]', '', name).strip()
+        if bare in _MAINBZ_COARSE_ITEMS:
+            continue
+        s = r.get('bz_sales')
+        if s is None or float(s) <= 0:
+            continue
+        if sales is not None and _mainbz_items_near_synonym(item, name, sales, s):
+            continue
+        return True
+    return False
+
+
+def _is_mainbz_non_leaf_segment(
+    item: str,
+    row: dict,
+    all_rows: list[dict],
+    parents: set[str],
+    summarySales: float | None = None,
+) -> bool:
+    """判断是否应排除出 Top3：层级父项、合计/抵销、粗口径占位、子项加总父项。"""
+    _ = summarySales  # 保留参数兼容调用方；不再用「≈分类汇总」杀主业（主业常≥98%）
+    if not item:
+        return True
+    if item in _MAINBZ_SUMMARY_ITEMS or item in parents:
+        return True
+    if _is_mainbz_special_adjust_item(item):
+        return True
+    if _MAINBZ_AGG_NAME_RE.match(item):
+        return True
+    if _is_mainbz_elim_item(item):
+        return True
+    # 粗口径「主营业务」：仅当另有实质分项时剔除
+    bare = re.sub(r'[（(][^（）()]*[）)]', '', item).strip()
+    if bare in _MAINBZ_COARSE_ITEMS and _has_mainbz_other_material(item, row, all_rows):
+        return True
+    # 金额≈其余分项之和 → 结构父项（不要求名称含「合计」）
+    if _is_mainbz_sum_of_siblings(item, row, all_rows):
+        return True
+    return False
+
+
+def _drop_mainbz_non_leaf_segments(
+    parsed_rows: list[dict],
+    summarySales: float | None = None,
+) -> list[dict]:
+    """过滤非叶子/伪合计行；供 Top3 与分项占比使用。"""
+    names = [str(x.get('bz_item') or '').strip() for x in parsed_rows]
+    parents = _collect_mainbz_hierarchy_parents(names)
+    out: list[dict] = []
+    for x in parsed_rows:
+        item = str(x.get('bz_item') or '').strip()
+        if _is_mainbz_non_leaf_segment(item, x, parsed_rows, parents, summarySales):
+            continue
+        out.append(x)
+    return out
+
+
+def _mainbz_metric_close(a, b, relTol: float = 0.10) -> bool:
+    """金额是否接近（用于同口径近义去重；默认相对偏差≤10%）。"""
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    fa = abs(float(a))
+    fb = abs(float(b))
+    scale = max(fa, fb, 1.0)
+    return abs(fa - fb) / scale <= relTol
+
+
+def _mainbz_items_near_synonym(
+    nameA: str,
+    nameB: str,
+    salesA=None,
+    salesB=None,
+    parentNames: set[str] | None = None,
+) -> bool:
+    """判断两个 bz_item 是否为同口径近义写法。
+    短串包含（如「海外」⊂「…及海外」）仅在收入几乎相等时启用，避免误合并。"""
+    na = _normalize_mainbz_item_name(nameA, parentNames)
+    nb = _normalize_mainbz_item_name(nameB, parentNames)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    shorter, longer = (na, nb) if len(na) <= len(nb) else (nb, na)
+    if len(shorter) >= 4 and shorter in longer:
+        return True
+    # 金额几乎相同（≤1%）时允许短串包含，覆盖地区「海外/…及海外」类写法
+    if (
+        len(shorter) >= 2
+        and shorter in longer
+        and _mainbz_metric_close(salesA, salesB, relTol=0.01)
+    ):
+        return True
+    ratio = SequenceMatcher(None, na, nb).ratio()
+    if ratio >= 0.72:
+        return True
+    pref = 0
+    for ca, cb in zip(na, nb):
+        if ca != cb:
+            break
+        pref += 1
+    return pref >= 3 and ratio >= 0.65
+
+
+def _mainbz_amount_fingerprint_equal(a: dict, b: dict) -> bool:
+    """收入/成本/利润三元组几乎完全一致：视为同口径重复落库（名称可完全不同）。"""
+    hasAny = False
+    for key in ('bz_sales', 'bz_cost', 'bz_profit'):
+        va, vb = a.get(key), b.get(key)
+        if va is None and vb is None:
+            continue
+        if va is None or vb is None:
+            return False
+        hasAny = True
+        if abs(float(va) - float(vb)) > 0.05:  # 分币级容差
+            return False
+    return hasAny
+
+
+def _dedupe_mainbz_near_synonyms(parsed_rows: list[dict]) -> list[dict]:
+    """近义分项去重：名称近义且金额接近，或金额三元组一致时只保留一条（不求和以免双计）。"""
+    names = [str(x.get('bz_item') or '').strip() for x in parsed_rows]
+    parents = _collect_mainbz_hierarchy_parents(names)
+    ordered = sorted(
+        parsed_rows,
+        key=lambda x: (
+            float(x['bz_sales']) if x.get('bz_sales') is not None else -1.0,
+            _mainbz_display_name_score(str(x.get('bz_item') or ''), parents),
+        ),
+        reverse=True,
+    )
+    kept: list[dict] = []
+    for row in ordered:
+        item = str(row.get('bz_item') or '').strip()
+        if not item:
+            continue
+        isDup = False
+        for k in kept:
+            sameFp = _mainbz_amount_fingerprint_equal(row, k)
+            nameNear = _mainbz_items_near_synonym(
+                item,
+                str(k.get('bz_item') or ''),
+                salesA=row.get('bz_sales'),
+                salesB=k.get('bz_sales'),
+                parentNames=parents,
+            )
+            if not sameFp and not (
+                nameNear and _mainbz_metric_close(row.get('bz_sales'), k.get('bz_sales'))
+            ):
+                continue
+            isDup = True
+            # 展示名取更「扁平/干净」者；金额沿用已保留行
+            curName = str(k.get('bz_item') or '')
+            if _mainbz_display_name_score(item, parents) > _mainbz_display_name_score(
+                curName, parents
+            ):
+                k['bz_item'] = item
+            aliases = k.setdefault('aliases', [])
+            if item not in aliases:
+                aliases.append(item)
+            break
+        if not isDup:
+            kept.append({
+                'bz_item': item,
+                'bz_sales': row.get('bz_sales'),
+                'bz_cost': row.get('bz_cost'),
+                'bz_profit': row.get('bz_profit'),
+                'aliases': [item],
+            })
+    return kept
+
+
+def _fina_mainbz_section_totals(
+    summary_row: dict | None,
+    parsed_rows: list[dict],
+) -> tuple[float, float, float]:
+    """占比分母：优先用分类汇总行（产品/行业/地区）；否则用去重后分项合计。"""
+    totSales = 0.0
+    totCost = 0.0
+    totProfit = 0.0
+    hasSummarySales = summary_row is not None and summary_row.get('bz_sales') is not None
+    hasSummaryCost = summary_row is not None and summary_row.get('bz_cost') is not None
+    hasSummaryProfit = summary_row is not None and summary_row.get('bz_profit') is not None
+    if hasSummarySales:
+        totSales = float(summary_row['bz_sales'])
+    if hasSummaryCost:
+        totCost = float(summary_row['bz_cost'])
+    if hasSummaryProfit:
+        totProfit = float(summary_row['bz_profit'])
+    if hasSummarySales and hasSummaryCost and hasSummaryProfit:
+        return totSales, totCost, totProfit
+    sumSales = 0.0
+    sumCost = 0.0
+    sumProfit = 0.0
+    for x in parsed_rows:
+        if x.get('bz_sales') is not None:
+            sumSales += float(x['bz_sales'])
+        if x.get('bz_cost') is not None:
+            sumCost += float(x['bz_cost'])
+        if x.get('bz_profit') is not None:
+            sumProfit += float(x['bz_profit'])
+    if not hasSummarySales:
+        totSales = sumSales
+    if not hasSummaryCost:
+        totCost = sumCost
+    if not hasSummaryProfit:
+        totProfit = sumProfit
+    return totSales, totCost, totProfit
+
+
+def _fina_mainbz_empty_snapshot() -> dict:
+    """主营构成双表/同比基期共用的空快照骨架（各 section 独立列表，避免浅拷贝串改）。"""
+    def _empty_sec() -> dict:
+        return {
+            'end_date': '',
+            'revenue_top3': [],
+            'cost_top3': [],
+            'profit_top3': [],
+            'item_metrics': {},
+        }
+    return {
+        'end_date': '',
+        'sections': {
+            'P': _empty_sec(),
+            'I': _empty_sec(),
+            'D': _empty_sec(),
+        },
+    }
+
+
 def _fina_fixed_assets_modal_mainbz_top3(conn, ts_code: str, selected_end_date: str) -> dict:
     """固定资产弹窗补充：主营构成 Top3（产品P/行业I/地区D）。
-    口径：先取 <= selected_end_date 的最新年报 end_date（12-31）为「当前」快照，再取次新年报为「上一期」快照。
-    各 bz_code 独立建 item_metrics（键为 strip 后的 bz_item）。前端同比在同 P/I/D 内按名称字典对齐两期，
-    与两期各自收入 Top3 的名次/排序无关；缺一期或缺字段则 --。"""
+    左右表：<= selected_end_date 且存在产品(P)分项的最近两个 end_date（含半年报/季报）；
+    例：半年度披露后为 current=2026-06-30、previous=2025-12-31。
+    同比三列（收入/利润/毛利变化）：对照 current 的上年同期同月日（yoy_base，如 2025-06-30），
+    同 P/I/D 内按 bz_item / metrics_key（归一化名）匹配；缺同期或缺同名则前端显示 --。
+    Top3 排除「产品/行业/地区」汇总行；近义写法且金额接近时去重。
+    收入%/成本%/利润% 分母：优先该分类汇总行，否则为去重后分项合计。"""
     out = {
-        'current': {
-            'end_date': '',
-            'sections': {
-                'P': {'end_date': '', 'revenue_top3': [], 'cost_top3': [], 'profit_top3': [], 'item_metrics': {}},
-                'I': {'end_date': '', 'revenue_top3': [], 'cost_top3': [], 'profit_top3': [], 'item_metrics': {}},
-                'D': {'end_date': '', 'revenue_top3': [], 'cost_top3': [], 'profit_top3': [], 'item_metrics': {}},
-            },
-        },
-        'previous': {
-            'end_date': '',
-            'sections': {
-                'P': {'end_date': '', 'revenue_top3': [], 'cost_top3': [], 'profit_top3': [], 'item_metrics': {}},
-                'I': {'end_date': '', 'revenue_top3': [], 'cost_top3': [], 'profit_top3': [], 'item_metrics': {}},
-                'D': {'end_date': '', 'revenue_top3': [], 'cost_top3': [], 'profit_top3': [], 'item_metrics': {}},
-            },
-        },
+        'current': _fina_mainbz_empty_snapshot(),
+        'previous': _fina_mainbz_empty_snapshot(),
+        # 仅供左侧同比列，不单独出表
+        'yoy_base': _fina_mainbz_empty_snapshot(),
     }
     ts = str(ts_code or '').strip()
     ed = _normalize_end_date_yyyymmdd(selected_end_date)
     if not ts or not ed:
         return out
     try:
-        def _build_top3(key: str, total: float, parsed_rows: list[dict]) -> list[dict]:
+        def _build_top3(
+            key: str,
+            total: float,
+            parsed_rows: list[dict],
+            parentNames: set[str] | None = None,
+        ) -> list[dict]:
             vals = [x for x in parsed_rows if x.get(key) is not None]
-            vals.sort(key=lambda x: float(x.get(key) or 0.0), reverse=True)
+            # 有非「其他业务」分项时，其他业务永不排 Top1（主营构成展示优先主业）
+            hasNonOther = any(
+                float(x.get(key) or 0.0) > 0
+                and not _is_mainbz_other_business_item(str(x.get('bz_item') or ''))
+                for x in vals
+            )
+            vals.sort(
+                key=lambda x: (
+                    1
+                    if (
+                        hasNonOther
+                        and _is_mainbz_other_business_item(str(x.get('bz_item') or ''))
+                    )
+                    else 0,
+                    -float(x.get(key) or 0.0),
+                )
+            )
             out_rows: list[dict] = []
             for x in vals[:3]:
                 v = float(x.get(key) or 0.0)
                 yi = round(v / 100_000_000.0, 2)
                 pct = None if total in (0.0, -0.0) else round((v / total) * 100.0, 2)
+                itemName = str(x.get('bz_item') or '')
                 out_rows.append({
-                    'bz_item': x.get('bz_item') or '',
+                    'bz_item': itemName,
+                    'metrics_key': _normalize_mainbz_item_name(itemName, parentNames),
                     'amount_yi': yi,
                     'pct': pct,
                 })
             return out_rows
 
         with conn.cursor() as cur:
+            # 最近两期有产品主营构成的报告期（年报/半年报/季报均可）
             cur.execute(
                 "SELECT DISTINCT end_date FROM stock_tushare.fina_mainbz "
                 "WHERE ts_code=%s AND bz_code='P' AND end_date<=%s "
-                "AND MONTH(end_date)=12 AND DAY(end_date)=31 "
                 "ORDER BY end_date DESC LIMIT 2",
                 (ts, ed),
             )
-            annual_dates_raw = cur.fetchall() or []
-        annual_dates = [r[0] for r in annual_dates_raw if r and r[0] is not None]
-        if not annual_dates:
+            period_dates_raw = cur.fetchall() or []
+        period_dates = [r[0] for r in period_dates_raw if r and r[0] is not None]
+        if not period_dates:
             return out
 
         def _fill_snapshot(target_end_date, holder: dict) -> None:
@@ -4903,37 +6291,70 @@ def _fina_fixed_assets_modal_mainbz_top3(conn, ts_code: str, selected_end_date: 
                 if not rows:
                     continue
 
-                parsed_rows_raw: list[dict] = []
+                summary_label = _MAINBZ_SUMMARY_BY_TYPE.get(bz_code, '')
+                summary_row: dict | None = None
+                body_rows_raw: list[dict] = []
                 for r in rows:
                     item = str(r[0] or '').strip()
+                    if not item:
+                        continue
                     sales = _to_float_or_none(r[1])
                     cost = _to_float_or_none(r[2])
                     profit = _to_float_or_none(r[3])
-                    parsed_rows_raw.append({
+                    row_d = {
                         'bz_item': item,
                         'bz_sales': sales,
                         'bz_cost': cost,
                         'bz_profit': profit,
-                    })
-                parsed_rows = _aggregate_fina_mainbz_by_item(parsed_rows_raw)
-                tot_sales = 0.0
-                tot_cost = 0.0
-                tot_profit = 0.0
-                for x in parsed_rows:
-                    if x.get('bz_sales') is not None:
-                        tot_sales += float(x['bz_sales'])
-                    if x.get('bz_cost') is not None:
-                        tot_cost += float(x['bz_cost'])
-                    if x.get('bz_profit') is not None:
-                        tot_profit += float(x['bz_profit'])
+                    }
+                    if item in _MAINBZ_SUMMARY_ITEMS:
+                        # 仅采纳本分类对应汇总行作分母；其它字面汇总项直接丢弃
+                        if item == summary_label:
+                            if summary_row is None:
+                                summary_row = row_d
+                            else:
+                                old_s = summary_row.get('bz_sales')
+                                if sales is not None and (
+                                    old_s is None or abs(float(sales)) >= abs(float(old_s))
+                                ):
+                                    summary_row = row_d
+                        continue
+                    body_rows_raw.append(row_d)
 
-                sec['revenue_top3'] = _build_top3('bz_sales', tot_sales, parsed_rows)
-                sec['cost_top3'] = _build_top3('bz_cost', tot_cost, parsed_rows)
-                sec['profit_top3'] = _build_top3('bz_profit', tot_profit, parsed_rows)
+                summary_sales = (
+                    float(summary_row['bz_sales'])
+                    if summary_row is not None and summary_row.get('bz_sales') is not None
+                    else None
+                )
+                # 智能剔除层级父项/合计类/伪合计 → 近义去重
+                leaf_rows = _drop_mainbz_non_leaf_segments(
+                    _aggregate_fina_mainbz_by_item(body_rows_raw),
+                    summarySales=summary_sales,
+                )
+                parents = _collect_mainbz_hierarchy_parents(
+                    [str(x.get('bz_item') or '').strip() for x in body_rows_raw]
+                )
+                parsed_rows = _dedupe_mainbz_near_synonyms(leaf_rows)
+                if not parsed_rows and summary_row is None:
+                    continue
+
+                tot_sales, tot_cost, tot_profit = _fina_mainbz_section_totals(
+                    summary_row, parsed_rows
+                )
+
+                sec['revenue_top3'] = _build_top3(
+                    'bz_sales', tot_sales, parsed_rows, parents
+                )
+                sec['cost_top3'] = _build_top3(
+                    'bz_cost', tot_cost, parsed_rows, parents
+                )
+                sec['profit_top3'] = _build_top3(
+                    'bz_profit', tot_profit, parsed_rows, parents
+                )
                 sec['tot_revenue_yi'] = round(tot_sales / 100_000_000.0, 2)
                 sec['tot_cost_yi'] = round(tot_cost / 100_000_000.0, 2)
                 sec['tot_profit_yi'] = round(tot_profit / 100_000_000.0, 2)
-                # 为前端展示与同比共用同一套「分项」口径（与聚合后 Top3 一致）
+                # 为前端展示与同比共用同一套「分项」口径（与聚合/去重后 Top3 一致）
                 item_metrics: dict[str, dict] = {}
                 for x in parsed_rows:
                     item = str(x.get('bz_item') or '').strip()
@@ -4948,17 +6369,43 @@ def _fina_fixed_assets_modal_mainbz_top3(conn, ts_code: str, selected_end_date: 
                     gross_margin = None
                     if sales_raw not in (None, 0, 0.0) and profit_raw is not None:
                         gross_margin = round((float(profit_raw) / float(sales_raw)) * 100.0, 2)
-                    item_metrics[item] = {
+                    metrics = {
                         'revenue_yi': sales_yi,
                         'cost_yi': cost_yi,
                         'profit_yi': profit_yi,
                         'gross_margin': gross_margin,
                     }
+                    item_metrics[item] = metrics
+                    for alias in (x.get('aliases') or []):
+                        a = str(alias or '').strip()
+                        if a:
+                            item_metrics[a] = metrics
+                    norm_key = _normalize_mainbz_item_name(item, parents)
+                    if norm_key and norm_key not in item_metrics:
+                        item_metrics[norm_key] = metrics
                 sec['item_metrics'] = item_metrics
 
-        _fill_snapshot(annual_dates[0], out['current'])
-        if len(annual_dates) > 1:
-            _fill_snapshot(annual_dates[1], out['previous'])
+        _fill_snapshot(period_dates[0], out['current'])
+        if len(period_dates) > 1:
+            _fill_snapshot(period_dates[1], out['previous'])
+
+        # 上年同期：与 current.end_date 同月日、年份-1；库中无该期产品分项则 yoy_base 保持空
+        cur_end = period_dates[0]
+        if hasattr(cur_end, 'year'):
+            yoy_date = date(int(cur_end.year) - 1, int(cur_end.month), int(cur_end.day))
+        else:
+            cur_s = str(cur_end)[:10]
+            cur_obj = datetime.strptime(cur_s, '%Y-%m-%d').date()
+            yoy_date = date(cur_obj.year - 1, cur_obj.month, cur_obj.day)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM stock_tushare.fina_mainbz "
+                "WHERE ts_code=%s AND bz_code='P' AND end_date=%s LIMIT 1",
+                (ts, yoy_date),
+            )
+            hasYoy = cur.fetchone() is not None
+        if hasYoy:
+            _fill_snapshot(yoy_date, out['yoy_base'])
 
         # 兼容旧前端结构：保留 current 的平铺别名
         out['end_date'] = out['current'].get('end_date', '')
@@ -5445,4 +6892,19 @@ def _query_fina_fixed_assets_revenue_series(ts_code: str, selected_end_date: str
 
 
 
-# 代码更新时间：2026-06-17 20:46
+# 代码更新时间：2026-07-31 09:28 入池放宽：该期有 fina_indicator 即可（不要求 arturn；His新高可覆盖银行）
+# 代码更新时间：2026-08-04 15:03 新增 _fina_arturn_attach_price_range_pct（stk_factor_ma 前复权极值 + rt_k 当前价，pre_close 除权折算）；缓存口径 sb_act_9
+# 代码更新时间：2026-08-04 15:18 历史最低改倍数口径 mult_vs_h_low（百分比达数万不可读）；缓存口径 sb_act_10
+# 代码更新时间：2026-08-05 06:00 距高低点%去掉错误的 close_qfq/pre_close 折算（曾把当日涨幅算成距250高）；缓存 sb_act_11
+# 代码更新时间：2026-08-05 06:35 新增 pct_since_ann（自公告%：a0 前一交易日 close_qfq→rt_k）；缓存 sb_act_12
+# 代码更新时间：2026-08-06 22:54 TTL 300→1800；getOrBuildFinaArturnTable 同报告期冷建去重；保活间隔 600s
+# 代码更新时间：2026-08-08 23:33 主营构成：过滤持续经营业务父项、层级前缀归一、扁平展示名优选
+# 代码更新时间：2026-08-08 23:39 主营构成智能识别非叶子：层级父项/合计名/伪合计，避免硬编码漏网
+# 代码更新时间：2026-08-08 23:51 主营构成：废≈汇总误杀；改子项加总/抵销/粗口径；1000家复验
+# 代码更新时间：2026-08-08 23:55 杜绝「主业误杀只剩其他业务」：粗口径/加总去重/Top降权
+# 代码更新时间：2026-08-09 00:00 深核四类问题：扩其他收入/剔特别调整作实质项；全市场门禁PASS
+# 代码更新时间：2026-09-03 08:52 宽表 HTTP 预编码 gzip（ensureFinaArturnWireGzip）
+# 代码更新时间：2026-09-07 15:01 isFinaArturnBuilding：宽表冷建期间供 top_moves 让路
+# 代码更新时间：2026-10-04 17:42 休市沿用旧缓存不冷建；wire 按 last_update 校验
+# 代码更新时间：2026-10-04 21:42 自公告% 基数查询：公告日前 60 天窗口 + 窗口外无下限补查（输出逐项等价，冷建 pct_since_ann ~35s→~1-6s）
+# 代码更新时间：2026-10-04 22:45 wire gzip 按口径加锁，并发首请求只编码一次

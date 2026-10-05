@@ -15,22 +15,29 @@ def rtMonitorSw():
 
 @swBp.route('/api/sw_industry_limit_detail', methods=['GET'], strict_slashes=False)
 def apiSwIndustryLimitDetail():
-    from rt_monitor.monolith import api_sw_industry_limit_detail
+    from rt_monitor.services.sw_industry import apiSwIndustryLimitDetail as handler
 
-    return api_sw_industry_limit_detail()
+    return handler()
+
+
+@swBp.route('/api/sw_industry_pct_t_detail', methods=['GET'], strict_slashes=False)
+def apiSwIndustryPctTDetail():
+    from rt_monitor.services.sw_industry import apiSwIndustryPctTDetail as handler
+
+    return handler()
 
 
 @swBp.route('/api/sw_industry_stats', methods=['GET'], strict_slashes=False)
 def apiSwIndustryStats():
-    from rt_monitor.monolith import api_sw_industry_stats
+    from rt_monitor.services.sw_industry import apiSwIndustryStats as handler
 
-    return api_sw_industry_stats()
+    return handler()
 
 
 @swBp.route('/api/sw_index_amt_pctile_series', methods=['GET'], strict_slashes=False)
 def apiSwIndexAmtPctileSeries():
-    from rt_monitor.monolith import api_sw_index_amt_pctile_series
+    from rt_monitor.services.sw_industry import apiSwIndexAmtPctileSeries as handler
 
-    return api_sw_index_amt_pctile_series()
+    return handler()
 
-# 代码更新时间：2026-06-17 19:35
+# 代码更新时间：2026-08-06 10:15
